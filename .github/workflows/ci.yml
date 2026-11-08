@@ -36,6 +36,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: git diff --check "$BASE_SHA...$HEAD_SHA"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.2'
+      - name: Check Knowledge lockfile, lint and unit tests
+        run: |
+          uv sync --project apps/knowledge --locked
+          uv run --project apps/knowledge --no-sync ruff check apps/knowledge
+          uv run --project apps/knowledge --no-sync ruff format --check apps/knowledge
+          uv run --project apps/knowledge --no-sync pytest apps/knowledge/tests -q
 
   images:
     name: Build ${{ matrix.service }}

@@ -8,11 +8,122 @@
 
 ### 설치
 
+Knowledge 서비스는 Python 3.12, uv, FastAPI로 구현했습니다. Docker Engine과
+Docker Compose가 있으면 아래 명령으로 실행할 수 있습니다. 이미지 빌드 context는 저장소 루트입니다.
+
+```bash
+cp .env.dev.example .env.dev
+# 아래 설명에 따라 .env.dev의 비밀번호와 홈서버 접속 설정을 입력합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up --build -d
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge init-db
+```
+
+`compose.yaml`은 prod용 기본 구성으로 Knowledge 서비스를 정의합니다. `compose.dev.yaml`을 함께 사용하면
+dev용 프로젝트 전용 PostgreSQL + pgvector도 실행합니다. DB 포트는 호스트에 공개하지 않고,
+데이터는 `knowledge-postgres` 볼륨에 보관합니다. 기존 홈서버 Ollama·MLflow는 기동하거나 변경하지 않습니다.
+prod는 `.env`의 `DATABASE_URL`로 외부 PostgreSQL에 연결하며 `compose.yaml`만 사용합니다.
+`init-db`는 전용 DB에 vector 확장과 연결 검증용 테이블을 생성하며, 재실행할 수 있습니다.
+외부 DB에서는 해당 권한이 필요합니다.
+
+컨테이너를 종료해도 DB 볼륨은 유지됩니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
+```
+
+맥북에서는 Colima의 Docker Engine에서 실행을 검증합니다. Docker Desktop 설치는 필수가 아닙니다.
+
 ### 환경 변수 설정
+
+실제 설정은 Git에서 제외한 prod용 `.env`와 dev용 `.env.dev`에 둡니다. 예시의 주소와 비밀번호는 교체해야 합니다.
+
+| 변수 | 용도 |
+| --- | --- |
+| `APP_ENV` | `dev` 또는 `prod`; Compose 기본 구성은 `prod`, dev override는 `dev`로 지정하며 접속 주소를 자동 선택하지 않음 |
+| `KNOWLEDGE_ENV_FILE` | 컨테이너에 전달할 환경 파일; prod는 `.env`, dev는 `.env.dev` |
+| `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
+| `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 로컬 DB 초기화 설정; `DATABASE_URL`과 일치시켜야 함 |
+| `EMBEDDING_BACKEND` | 현재 `ollama` 지원 |
+| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Ollama 주소와 설치된 모델 이름; 기본 모델 `bge-m3` |
+| `EMBEDDING_API_KEY` | 필요할 때만 Bearer 인증에 사용 |
+| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; 기본 `1024` |
+| `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
+| `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
+| `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT_NAME` | MLflow 서버와 이 프로젝트의 연결 검증용 실험명 |
+| `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_TRACKING_TOKEN` | 서버가 요구하는 방식의 선택적 인증 |
+| `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
+| `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
+
+`DATABASE_URL`의 비밀번호에 예약 문자가 있으면 URL 인코딩해야 합니다.
+로컬 DB의 초기화 환경 변수는 빈 볼륨에 처음 기동할 때 적용됩니다.
+DB 생성 후 `.env.dev`의 비밀번호만 바꾸면 기존 DB 비밀번호는 바뀌지 않습니다.
+컨테이너의 `localhost`는 해당 컨테이너이므로, 홈서버에 도달 가능한 주소를 사용합니다.
+
+prod(엘리스클라우드 배포용)는 `compose.yaml`과 `.env`를 사용하며 파일명에 `prod`를 붙이지 않습니다.
+dev는 `compose.dev.yaml`을 덧씌우고 `.env.dev`를 사용합니다.
+prod 설정은 `.env.example`에서 별도로 복사합니다.
+이 예시는 Ollama 프로토콜용이며 실제 엘리스 추론 API 어댑터·배포는 아직 구현하지 않았습니다.
+
+```bash
+cp .env.example .env
+# 제출 환경 접속 주소와 인증정보를 입력한 뒤 실행합니다.
+docker compose up --build -d
+docker compose exec knowledge python -m elice_knowledge init-db
+```
+
+개발 주소로 자동 fallback하지 않습니다. 환경 파일·홈서버 주소·키를 이미지나 보고서에 포함하지 않습니다.
 
 ### 문서 수집과 색인
 
 ### 서버 실행과 질문 예시
+
+현재 제공하는 API는 서비스 상태 확인입니다. QA API는 아직 구현하지 않았습니다.
+
+```bash
+curl http://127.0.0.1:8080/health/live
+curl http://127.0.0.1:8080/health/ready
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge smoke
+```
+
+- `GET /health/live`: 프로세스 응답 여부를 확인하고 HTTP 200을 반환합니다. Docker healthcheck도 이 경로를 사용합니다.
+- `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest, MLflow API 접근을
+  각각 검사합니다. 준비되면 HTTP 200, 실패하면 HTTP 503이며 의존성별 상태를 반환합니다.
+  DB 쓰기·임베딩 생성·Run 생성은 하지 않습니다. MLflow를 끄면 `disabled`로 표시합니다.
+- `python -m elice_knowledge smoke`: 고정 한국어 문장의 임베딩을 생성하고 pgvector에
+  저장·유사도 조회한 뒤 MLflow Run에 연결 검증 지표를 기록합니다. 실패 시 종료 코드는 1입니다.
+  MLflow를 켠 상태에서 기록에 실패하면 성공으로 처리하지 않습니다. 이미 저장된 DB 샘플은 남습니다.
+
+상태 응답은 `status`와 `dependencies`를 포함합니다. 각 의존성은 `status`, `detail`을 반환합니다.
+구체적인 스키마는 [로컬 API 문서](http://127.0.0.1:8080/docs)에서 확인할 수 있습니다.
+실패 응답에는 인증정보나 내부 접속 주소를 포함하지 않습니다.
+
+Smoke 성공 출력에는 `sample_id`, `profile_id`, `dimensions`, `nearest_distance`,
+`mlflow_run_id`가 포함됩니다. MLflow UI에서 사용한 환경 파일의 실험명을 찾아 해당 Run을 확인할 수 있습니다.
+이 지표는 연결 검증용이며 RAG 품질 평가 결과가 아닙니다. 재실행할 때마다 샘플과 Run이 추가됩니다.
+
+컨테이너 상태와 로그는 다음 명령으로 볼 수 있습니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml ps
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml logs --tail=100 knowledge
+```
+
+개발용 검사는 홈서버 접속 없이 실행할 수 있습니다.
+
+```bash
+uv sync --project apps/knowledge --locked
+uv run --project apps/knowledge ruff check apps/knowledge
+uv run --project apps/knowledge ruff format --check apps/knowledge
+uv run --project apps/knowledge pytest apps/knowledge/tests -q
+```
+
+2026-11-09 기준 맥북 Colima(`linux/arm64`)의 dev 구성에서 이미지 빌드와 두 컨테이너의
+기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
+샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
+MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
+단위 테스트 21개, 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 실행은 아직 검증하지 않았습니다.
 
 ### 평가 실행
 
@@ -42,12 +153,13 @@
 | Embedding 모델 | BGE-M3 |
 | 개발용 Embedding 추론 | 홈서버 Ollama |
 | 실험·평가 관리 | MLflow Dataset, Evaluation Run, Prompt와 AI endpoint 설정 |
+| Knowledge 서비스 | Python 3.12 + uv + FastAPI |
 
 ## 3. 시스템 아키텍처
 
 ### 서비스와 데이터 흐름
 
-아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 아직 서비스 구현 전이며,
+아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 인프라 연결용 서비스 골격을 구현했으며,
 Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
 
 ```mermaid
@@ -154,6 +266,12 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 ## 5. 핵심 설계 결정과 Trade-off
 
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
+
+현재 구현은 Knowledge 서비스의 기동과 외부 인프라 연결 검증 범위입니다.
+블로그 수집·청킹·검색·QA, Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
+연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
+임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
+주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
 
 ## 7. 개선 실험과 결과
 
