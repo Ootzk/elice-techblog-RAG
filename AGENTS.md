@@ -36,7 +36,7 @@
 ## v0.1.0 — 홈서버 인프라에 연결되는 최소 서비스 골격
 
 - `apps/knowledge/`에 서비스 패키지·의존성·Dockerfile을 구성한다.
-  사용할 언어 버전·패키지 관리 도구·API 프레임워크는 구현 전 결정한다.
+  사용자 승인으로 Python 3.12·uv·FastAPI를 사용한다.
 - DB·Embedding·MLflow의 접속 설정을 개발·제출 환경별로 분리하고 `.env.example`을 제공한다.
   제출용 접속 설정 구조는 준비하되 실제 엘리스클라우드 배포는 후속 버전에서 진행한다.
 - PostgreSQL 연결과 pgvector 확장 사용을 확인하고 샘플 벡터를 저장·조회한다.
@@ -60,7 +60,12 @@
   서비스와 평가가 사용하는 검색·생성 로직은 공유해 실제 서비스와 다른 파이프라인을 평가하지 않도록 한다.
 - 루트에는 README·AGENTS·Compose 등 저장소 공통 실행·운영 설정을 둔다.
   PostgreSQL 등 공식 이미지를 사용하는 인프라는 Compose에 정의하고, 전용 설정이 필요할 때 파일을 추가한다.
-- 서비스나 도구를 구현할 때 필요한 폴더와 설정만 생성한다. 현재는 애플리케이션 코드와 Compose가 없다.
+- 서비스나 도구를 구현할 때 필요한 폴더와 설정만 생성한다.
+  현재 Knowledge 서비스 골격과 기본 Compose, 선택적 로컬 pgvector DB 구성이 있다.
+- 환경은 dev와 prod로 구분한다. `compose.yaml`은 엘리스클라우드 배포용 prod 기본 구성,
+  `compose.dev.yaml`은 개발용 override다. prod 파일명에는 접미사를 붙이지 않는다.
+  환경 설정은 prod `.env`·`.env.example`, dev `.env.dev`·`.env.dev.example`로 구분한다.
+  개발 명령은 `--env-file .env.dev -f compose.yaml -f compose.dev.yaml`을 명시한다.
 
 ## 과제의 최소 완료 조건
 
@@ -213,7 +218,7 @@
   release → main은 merge commit이어야 하며 직접 push·squash·rebase 병합은 릴리스 발행을 거부한다.
 - `apps/*/Dockerfile`, `services/*/Dockerfile`이 있는 서비스만 이미지 대상으로 자동 발견한다.
   모든 Dockerfile의 build context는 저장소 루트이며 서비스 폴더명은 중복되지 않아야 한다.
-  현재는 Dockerfile이 없으므로 소스 릴리스만 발행한다.
+  현재 Knowledge Dockerfile이 이미지 발행 대상이다.
 - 서비스 이미지는 `ghcr.io/<owner>/<repo>-<service>`에 버전·전체 SHA·latest 태그로 발행한다.
   기본 빌드 플랫폼은 `linux/amd64`이며 실제 배포 대상이 정해지면 검증 후 조정한다.
   공통 PostgreSQL 등 공식 이미지는 이 저장소의 자체 이미지로 다시 발행하지 않는다.
