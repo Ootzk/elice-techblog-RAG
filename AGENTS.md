@@ -138,7 +138,9 @@
   기존 릴리스 태그를 다시 쓰지 않고 수정은 다음 PATCH release로 진행한다.
 - 이슈 제목은 기능/문제를 설명하고 버전 접두사를 붙이지 않는다. 목표 버전은 milestone로 관리한다.
 - 커밋과 squash 제목은 `feat: ...`, `fix: ...`, `docs: ...`, `chore: ...`처럼 변경 목적을 드러낸다.
-- Semantic Versioning을 사용한다. 패키지 구성 시 `pyproject.toml`의 프로젝트 버전이 기준이다.
+- Semantic Versioning을 사용한다. 서비스별로 Python은 `pyproject.toml`, JavaScript는
+  `package.json` 등 해당 기술의 패키지 메타데이터에서 버전을 관리한다.
+  함께 릴리스하는 자체 패키지는 대상 release 버전에 맞춘다.
   패키지는 `X.Y.Z`, 브랜치·milestone·태그·릴리스는 `vX.Y.Z`로 표기한다.
 - `0.x`에서는 기능 묶음과 호환되지 않는 변경에 MINOR, 호환 가능한 수정에 PATCH를 올린다.
   `1.0.0`부터는 호환되지 않는 공개 계약 변경에 MAJOR, 호환 가능한 기능 추가에 MINOR,
@@ -147,8 +149,42 @@
   Corpus·Gold Set·모델·프롬프트 버전은 앱 버전과 별도로 실험에 기록한다.
 - 커밋 전 변경과 검증 결과를 제시하고 사용자 승인을 받는다. 이미 승인된 범위는 재승인받지 않는다.
 - push·PR 병합·태그·GitHub Release 생성은 사용자가 승인한 범위에서 수행한다.
-- CI와 브랜치 보호는 필요한 검사가 정해질 때 구성한다.
+- CI/CD 운영은 아래 규칙을 따른다. 원격 브랜치 보호 적용 여부와 워크플로 파일 구현 여부를 구분한다.
 - 운영 흐름의 참고 출처는 [Homepage의 Git Workflow](https://github.com/Ootzk/Homepage/blob/main/AGENTS.md)다.
+
+## CI/CD와 릴리스 자동화
+
+- Homepage처럼 애플리케이션 서비스는 `apps/<service>/`, 평가 등 개발 도구는 `tools/<tool>/`로 나눈다.
+  각 폴더가 자체 언어·의존성·패키지 설정을 소유한다. 루트를 Python 프로젝트로 가정하지 않는다.
+  서비스 생성 전에 빈 패키지 설정이나 폴더를 미리 추가하지 않는다.
+- 릴리스 자동화는 `release/vX.Y.Z`의 버전을 사용하고, 현재 존재하는 `apps/*`, `tools/*`의
+  `pyproject.toml`과 `package.json` 버전이 일치하는지 확인한다.
+- PR CI는 feature → release, release → main 방향과 버전 정합성을 검사한다.
+  release PR 제목은 `Release vX.Y.Z`로 한다.
+- feature PR은 저장소 검사, release PR은 추가로 서비스 이미지 빌드를 수행한다.
+  앱의 테스트·lockfile 검사 등은 각 구현이 추가될 때 CI에 연결한다.
+- `.github/scripts/release.py`는 CI의 브랜치·패키지 버전 확인과 릴리스 발행을 담당한다.
+  CI 도구에 쓰는 Python 3.12는 애플리케이션의 언어나 Python 버전을 결정하지 않는다.
+- main push 후 해당 커밋과 정확히 대응하는 병합된 release PR을 확인한다.
+  release → main은 merge commit이어야 하며 직접 push·squash·rebase 병합은 릴리스 발행을 거부한다.
+- `apps/*/Dockerfile`, `services/*/Dockerfile`이 있는 서비스만 이미지 대상으로 자동 발견한다.
+  모든 Dockerfile의 build context는 저장소 루트이며 서비스 폴더명은 중복되지 않아야 한다.
+  현재는 Dockerfile이 없으므로 소스 릴리스만 발행한다.
+- 서비스 이미지는 `ghcr.io/<owner>/<repo>-<service>`에 버전·전체 SHA·latest 태그로 발행한다.
+  기본 빌드 플랫폼은 `linux/amd64`이며 실제 배포 대상이 정해지면 검증 후 조정한다.
+  공통 PostgreSQL 등 공식 이미지는 이 저장소의 자체 이미지로 다시 발행하지 않는다.
+- 모든 서비스 이미지 발행이 성공한 후 main의 해당 병합 SHA에 태그와 GitHub Release를 만든다.
+  릴리스 본문은 해당 PR의 본문을 사용하며 이미지 경로도 포함한다.
+  기존 태그·릴리스가 있거나 API 확인이 실패하면 발행을 진행하지 않는다.
+- 실패 시 Actions의 재실행 기능을 사용한다. 수동 Release 실행도 main의 정상 release 병합 커밋만 허용한다.
+  이미지 발행은 서비스별로 수행되므로 일부 성공 후 실패할 수 있다. 배포에는 성공한 릴리스의 버전 태그를 사용한다.
+- GitHub에서 squash와 merge commit을 모두 활성화하고 main·release 브랜치에 PR 필수 및
+  필수 검사 `Ready to merge`를 설정한다. main에 linear history를 강제하면 release merge commit과 충돌한다.
+  직접 push·force push·삭제 제한을 포함한 원격 ruleset은 GitHub 관리자 설정에서 적용해야 한다.
+- GHCR 발행은 `GITHUB_TOKEN`의 packages 쓰기, Release 생성은 contents 쓰기와 PR 읽기 권한을 사용한다.
+  배포용 자격증명을 PR 검사에 전달하지 않는다. 외부에서 이미지를 받을 때는 GHCR 접근 권한도 확인한다.
+- 현재 자동화 범위는 이미지 발행과 GitHub Release까지다. 엘리스클라우드 런타임 배포는
+  배포 대상·접속 방식·환경 설정이 결정된 뒤 연결하고 홈서버 공유 인프라는 변경하지 않는다.
 
 ## 작업과 검증
 

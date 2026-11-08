@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, 'release/**']
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.contract.outputs.matrix }}
+      has_images: ${{ steps.contract.outputs.has_images }}
+      release_pr: ${{ steps.contract.outputs.release_pr }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check branch direction and package versions
+        id: contract
+        run: python .github/scripts/release.py pr
+      - name: Check whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+  images:
+    name: Build ${{ matrix.service }}
+    needs: checks
+    if: needs.checks.outputs.release_pr == 'true' && needs.checks.outputs.has_images == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.checks.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: false
+
+  ready:
+    name: Ready to merge
+    needs: [checks, images]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful checks and release image builds
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          IMAGES_RESULT: ${{ needs.images.result }}
+        run: |
+          test "$CHECKS_RESULT" = success
+          test "$IMAGES_RESULT" = success || test "$IMAGES_RESULT" = skipped
