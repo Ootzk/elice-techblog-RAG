@@ -192,7 +192,9 @@
 - 공개 계약은 QA API request/response와 Ingest/Eval CLI 및 출력 형식이다. 구체적인 계약은 구현 시 문서화한다.
   Corpus·Gold Set·모델·프롬프트 버전은 앱 버전과 별도로 실험에 기록한다.
 - 커밋 전 변경과 검증 결과를 제시하고 사용자 승인을 받는다. 이미 승인된 범위는 재승인받지 않는다.
-- push·PR 병합·태그·GitHub Release 생성은 사용자가 승인한 범위에서 수행한다.
+- 요청받은 push와 PR 생성은 수행하되, PR 승인과 병합은 항상 사용자가 직접 진행한다.
+  에이전트는 PR을 승인·병합하거나 자동 병합을 활성화하지 않는다.
+  태그·GitHub Release는 승인된 릴리스 자동화 또는 사용자가 요청한 범위에서 생성한다.
 - CI/CD 운영은 아래 규칙을 따른다. 원격 브랜치 보호 적용 여부와 워크플로 파일 구현 여부를 구분한다.
 - 운영 흐름의 참고 출처는 [Homepage의 Git Workflow](https://github.com/Ootzk/Homepage/blob/main/AGENTS.md)다.
 
