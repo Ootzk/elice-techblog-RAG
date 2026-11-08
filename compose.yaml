@@ -1,0 +1,17 @@
+name: elice-techblog-rag
+
+# Production base for Elice Cloud; dev adds compose.dev.yaml.
+services:
+  knowledge:
+    build:
+      context: .
+      dockerfile: apps/knowledge/Dockerfile
+    env_file:
+      - path: ${KNOWLEDGE_ENV_FILE:-.env}
+        required: true
+    environment:
+      APP_ENV: prod
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_PORT:-8080}:8080"
+    init: true
+    restart: unless-stopped
