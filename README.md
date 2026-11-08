@@ -1,5 +1,7 @@
 # elice-techblog-RAG
 
+[![GitHub Release](https://img.shields.io/github/v/release/Ootzk/elice-techblog-RAG)](https://github.com/Ootzk/elice-techblog-RAG/releases/latest)
+
 > 엘리스 - AI Engineer (Platform) 포지션 미니 프로젝트: 엘리스 테크블로그 컨텐츠(한국어)를 이용한 RAG 시스템 구축 및 자체 Eval Harness 설계
 
 ## 1. 실행 방법과 환경 변수
