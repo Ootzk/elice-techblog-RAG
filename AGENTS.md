@@ -4,6 +4,9 @@
 
 - 한국어 엘리스 테크블로그 기반 RAG QA와 Eval Harness를 구현한다.
 - 현재 결정은 `docs/`와 사용자 지시를 기준으로 한다. 기술 스택을 추정해 확정하지 않는다.
+- 구성 요소와 배포 요구사항은 [docs/architecture.md](docs/architecture.md)를 따른다.
+- Embedding 추론·Vector DB·Knowledge/RAG·Eval/MLOps를 선택적으로 실행·연결하며,
+  엘리스클라우드에서 데모 가능한 구성을 목표로 한다.
 - Corpus URL에는 `/ko`를 명시하고 최종 언어를 검증한다.
 - API 키, `.env`, 수집 원문, 생성 인덱스, 비공개 과제 PDF를 커밋하지 않는다.
 

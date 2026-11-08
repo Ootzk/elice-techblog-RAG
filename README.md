@@ -6,7 +6,11 @@ Citation RAG QA 서비스와 자체 Eval Harness.
 현재는 프로젝트 준비 단계이며, 서비스 구현과 기술 스택은 아직 확정하지 않았다.
 버전은 패키지 구성 시 `pyproject.toml`에서 관리한다.
 
+Embedding 추론, Vector DB, Knowledge·RAG, Eval Harness와 MLOps 구성 요소를
+선택적으로 실행·연결하고, 최종적으로 엘리스클라우드에서 데모할 수 있도록 구성한다.
+
 - [Corpus 사전 점검](docs/corpus-feasibility.md)
+- [시스템 요구사항과 구성 방향](docs/architecture.md)
 - [버전 및 Git 운영 규칙](docs/git-workflow.md)
 - [에이전트 지침](AGENTS.md)
 
