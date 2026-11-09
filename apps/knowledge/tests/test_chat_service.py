@@ -707,3 +707,45 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
         job = conn.execute("SELECT status FROM qa_jobs WHERE id=%s", (job_id,)).fetchone()
     assert job["status"] == "completed"
     assert case["scores"]["qa-gold-chatgpt"] == 0.0
+
+
+@pytest.mark.parametrize("changed_field", ["code_identity", "provider_identity"])
+def test_existing_chat_refreshes_stale_profile_after_deployment(
+    service, monkeypatch, changed_field
+):
+    client = browser(service)
+    conversation = new_conversation(client)
+    fresh_key = "c" * 64
+    with service.connection() as conn:
+        config = conn.execute("SELECT config FROM qa_profiles WHERE key=%s", (PROFILE,)).fetchone()[
+            "config"
+        ]
+        conn.execute(
+            "INSERT INTO qa_profiles(key,config) VALUES (%s,%s)", (fresh_key, Jsonb(config))
+        )
+        stale = {**config, changed_field: "old-deployment"}
+        conn.execute("UPDATE qa_profiles SET config=%s WHERE key=%s", (Jsonb(stale), PROFILE))
+    monkeypatch.setattr(ServiceStore, "active_profile", lambda self: fresh_key)
+    monkeypatch.setattr(
+        "elice_knowledge.execution.run_qa",
+        lambda settings, request, prompts: QAResponse(
+            status="answered",
+            answer="배포 후 답변",
+            index_key=request.index_key,
+            generation_model="test-model",
+        ),
+    )
+    turn = submit(client, conversation)
+    assert turn.status_code == 202
+    assert process_one(service)
+    assert (
+        client.get("/api/turns/" + turn.json()["id"]).json()["result"]["answer"] == "배포 후 답변"
+    )
+    with service.connection() as conn:
+        conv = conn.execute(
+            "SELECT profile_key FROM chat_conversations WHERE id=%s", (conversation,)
+        ).fetchone()
+    assert conv["profile_key"] == fresh_key
+    # Frozen evaluation profiles must continue to reject changed execution conditions.
+    with pytest.raises(ServiceError, match="qa_profile_.*_changed"):
+        service.profile(PROFILE)

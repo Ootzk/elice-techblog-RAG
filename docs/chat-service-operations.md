@@ -228,6 +228,10 @@ CLI 기본 동작은 metadata만 읽으며 생성하지 않는다. 접수 후 �
 | `GET /api/evaluations/{id}` | 상태·집계·MLflow Run ID |
 | `GET /api/evaluations/{id}/cases?limit=50&offset=0` | 사례별 실행·검색 결과·점수·오류 |
 
+일반 대화는 코드·생성 endpoint 변경으로 기존 QA 프로필이 만료되면 다음 질문 처리 시 현재 활성 프로필로 갱신한다.
+기존 대화 이력과 이전 실행의 프로필은 보존하며 실패한 질문을 자동 재실행하지 않는다.
+Dataset 평가는 프로필을 갱신하지 않고 실행 조건 불일치를 오류로 처리한다.
+
 대화·평가·ask CLI는 `execution.execute`를 공유하고 `qa_runs`에 입력·출력·지연을 저장한다.
 MLflow에는 Dataset ID/해시·QA/scorer 프로필·사례별 출력·집계 JSON과 지표를 남긴다.
 MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공으로 표시하지 않는다.
