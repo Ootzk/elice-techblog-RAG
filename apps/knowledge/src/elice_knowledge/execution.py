@@ -2,7 +2,8 @@
 
 import time
 
-from elice_knowledge.qa import QARequest, run_qa
+from elice_knowledge.agent import run_qa
+from elice_knowledge.qa import QARequest
 from elice_knowledge.service_store import PROFILE_FIELDS, ServiceError
 
 

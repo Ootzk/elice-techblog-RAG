@@ -11,7 +11,7 @@ from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, pro
 from elice_knowledge.execution import execute
 from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
-from elice_knowledge.retrieval import run_index, run_search
+from elice_knowledge.retrieval import run_index, run_keyword_search, run_search
 from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
 
@@ -48,7 +48,15 @@ def main():
     search.add_argument("query")
     search.add_argument("--index-key", required=True)
     search.add_argument("--top-k", type=int, default=5)
-    ask = subparsers.add_parser("ask", help="Answer from a selected index using Elice Serverless")
+    search.add_argument(
+        "--mode",
+        choices=["meaning", "keyword"],
+        default="meaning",
+        help="meaning: BGE-M3 dense search; keyword: Kiwi BM25 search (no embedding call)",
+    )
+    ask = subparsers.add_parser(
+        "ask", help="Answer with the agentic RAG workflow over a selected index"
+    )
     ask.add_argument("question")
     ask.add_argument("--index-key", required=True)
     ask.add_argument("--top-k", type=int, default=5)
@@ -82,9 +90,10 @@ def main():
             return
         if args.command == "search":
             stage = "search"
+            searcher = run_keyword_search if args.mode == "keyword" else run_search
             print(
                 json.dumps(
-                    run_search(settings, args.index_key, args.query, args.top_k), ensure_ascii=False
+                    searcher(settings, args.index_key, args.query, args.top_k), ensure_ascii=False
                 )
             )
             return

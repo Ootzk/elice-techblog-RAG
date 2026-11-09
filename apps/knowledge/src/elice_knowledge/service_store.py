@@ -88,6 +88,7 @@ PROFILE_FIELDS = [
     "qa_max_context_tokens",
     "qa_history_pairs",
     "qa_history_tokens",
+    "qa_agent_max_tool_calls",
 ]
 
 
@@ -99,6 +100,9 @@ def code_identity():
                 name: token_hash((base / name).read_text())
                 for name in [
                     "qa.py",
+                    "agent.py",
+                    "tools.py",
+                    "sparse.py",
                     "generation.py",
                     "retrieval.py",
                     "embedding.py",
@@ -110,6 +114,10 @@ def code_identity():
                 for name in [
                     "llama-index-core",
                     "llama-index-vector-stores-postgres",
+                    "langgraph",
+                    "bm25s",
+                    "kiwipiepy",
+                    "kiwipiepy_model",
                     "httpx",
                     "tiktoken",
                 ]

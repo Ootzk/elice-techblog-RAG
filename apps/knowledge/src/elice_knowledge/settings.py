@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
     qa_history_pairs: int = Field(default=3, ge=0, le=10)
     qa_history_tokens: int = Field(default=2048, ge=128, le=8192)
+    qa_agent_max_tool_calls: int = Field(default=4, ge=1, le=8)
+    mcp_api_token: SecretStr | None = None
     qa_worker_concurrency: int = Field(default=1, ge=1, le=8)
     qa_build_revision: str = "development"
     qa_build_dirty: bool = True
@@ -57,13 +59,20 @@ class Settings(BaseSettings):
     def blank_generation_value(cls, value):
         return (value.strip() or None) if isinstance(value, str) else value
 
-    @field_validator("admin_access_code", "auth_session_secret")
+    @field_validator("mcp_api_token", mode="before")
+    @classmethod
+    def blank_mcp_token(cls, value):
+        return (value.strip() or None) if isinstance(value, str) else value
+
+    @field_validator("admin_access_code", "auth_session_secret", "mcp_api_token")
     @classmethod
     def authentication_secrets(cls, value, info):
         if value is not None and len(value.get_secret_value()) < (
             32 if info.field_name == "auth_session_secret" else 20
         ):
-            raise ValueError("Use at least 32 characters for session secret and 20 for admin code")
+            raise ValueError(
+                "Use at least 32 characters for session secret and 20 for admin/MCP tokens"
+            )
         return value
 
     @property

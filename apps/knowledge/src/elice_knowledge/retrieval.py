@@ -3,12 +3,13 @@
 import asyncio
 import json
 import sys
+from dataclasses import dataclass
 from importlib.metadata import version
 from urllib.parse import quote
 
 import httpx
 from llama_index.core import VectorStoreIndex
-from llama_index.core.schema import MetadataMode
+from llama_index.core.schema import MetadataMode, TextNode
 from llama_index.core.vector_stores import FilterOperator, MetadataFilter, MetadataFilters
 from llama_index.vector_stores.postgres import PGVectorStore
 from psycopg import sql
@@ -198,9 +199,12 @@ class RetrievalStore:
             "reused": len(stored),
         }
 
-    def search(self, index_key: str, query: str, backend: Embedder, top_k=5):
-        if not query.strip() or not 1 <= top_k <= 50:
-            raise ValueError("Require a non-empty query and top_k between 1 and 50")
+    def open_index(self, index_key: str, backend: Embedder | None = None) -> "OpenIndex":
+        """Resolve a published index once and verify it is complete.
+
+        Dense and keyword search share this snapshot/policy view, so one QA run
+        reads the chunk set once even when the agent searches several times.
+        """
         with connect(self.settings) as conn:
             row = conn.execute(
                 "SELECT i.snapshot_id,i.policy_key,i.profile_key,p.profile,i.chunk_count "
@@ -212,46 +216,101 @@ class RetrievalStore:
         if row is None:
             raise ValueError("Unknown or incomplete index")
         snapshot_id, policy_key, pid, profile, count = row
-        _check_profile(backend, profile)
+        if backend is not None:
+            _check_profile(backend, profile)
         _, versions, nodes = self.load_chunks(snapshot_id, policy_key)
-        vectors = self.vectors(pid, profile)
+        if len(nodes) != count:
+            raise ValueError("Stored chunk set does not match the published index")
+        return OpenIndex(index_key, snapshot_id, policy_key, pid, profile, versions, nodes)
+
+    def dense_search(self, index: "OpenIndex", query: str, backend: Embedder, top_k=5):
+        _check_query(query, top_k)
+        _check_profile(backend, index.profile)
+        vectors = self.vectors(index.profile_key, index.profile)
         try:
-            present = vectors.get_nodes(node_ids=[node.id_ for node in nodes])
-            if len(present) != count:
-                raise ValueError("Stored vector index is incomplete; rerun index")
+            if not index.vectors_verified:
+                present = vectors.get_nodes(node_ids=[node.id_ for node in index.nodes])
+                if len(present) != len(index.nodes):
+                    raise ValueError("Stored vector index is incomplete; rerun index")
+                index.vectors_verified = True
             adapter = KnowledgeEmbedding(backend, batch_size=self.settings.embedding_batch_size)
-            index = VectorStoreIndex.from_vector_store(vectors, embed_model=adapter)
-            retriever = index.as_retriever(
+            retriever = VectorStoreIndex.from_vector_store(
+                vectors, embed_model=adapter
+            ).as_retriever(
                 similarity_top_k=top_k,
                 filters=MetadataFilters(
                     filters=[
-                        MetadataFilter(key="policy_key", value=policy_key),
+                        MetadataFilter(key="policy_key", value=index.policy_key),
                         MetadataFilter(
-                            key="version_id", value=versions, operator=FilterOperator.IN
+                            key="version_id", value=index.versions, operator=FilterOperator.IN
                         ),
                     ]
                 ),
             )
             matches = retriever.retrieve(query.strip())
-            _check_profile(backend, profile)
+            _check_profile(backend, index.profile)
         finally:
             asyncio.run(vectors.close())
-        results = []
-        for match in matches:
-            md = match.node.metadata
-            url = md["url"] + ("#" + quote(md["anchor"], safe="") if md.get("anchor") else "")
-            results.append(
-                {
-                    "chunk_id": match.node.id_,
-                    "score": match.score,
-                    "url": url,
-                    "title": md["title"],
-                    "heading_path": md["heading_path"],
-                    "version_id": md["version_id"],
-                    "text": match.node.text,
-                }
-            )
-        return {"status": "ok", "index_key": index_key, "query": query.strip(), "results": results}
+        return search_output(index, query, [(m.node, m.score) for m in matches])
+
+    def search(self, index_key: str, query: str, backend: Embedder, top_k=5):
+        _check_query(query, top_k)
+        return self.dense_search(self.open_index(index_key, backend), query, backend, top_k)
+
+
+@dataclass
+class OpenIndex:
+    index_key: str
+    snapshot_id: str
+    policy_key: str
+    profile_key: str
+    profile: dict
+    versions: list[str]
+    nodes: list[TextNode]
+    vectors_verified: bool = False
+
+
+def _check_query(query: str, top_k: int):
+    if not query.strip() or not 1 <= top_k <= 50:
+        raise ValueError("Require a non-empty query and top_k between 1 and 50")
+
+
+def search_result(node: TextNode, score: float | None) -> dict:
+    md = node.metadata
+    url = md["url"] + ("#" + quote(md["anchor"], safe="") if md.get("anchor") else "")
+    return {
+        "chunk_id": node.id_,
+        "score": score,
+        "url": url,
+        "title": md["title"],
+        "heading_path": md["heading_path"],
+        "version_id": md["version_id"],
+        "text": node.text,
+    }
+
+
+def search_output(index: OpenIndex, query: str, matches) -> dict:
+    return {
+        "status": "ok",
+        "index_key": index.index_key,
+        "query": query.strip(),
+        "results": [search_result(node, score) for node, score in matches],
+    }
+
+
+def latest_index_key(settings: Settings) -> str | None:
+    """The configured pinned index, or the most recently published one."""
+    with connect(settings) as conn:
+        if settings.qa_active_index_key:
+            row = conn.execute(
+                "SELECT key FROM corpus_vector_indexes WHERE key=%s",
+                (settings.qa_active_index_key,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT key FROM corpus_vector_indexes ORDER BY created_at DESC,key LIMIT 1"
+            ).fetchone()
+    return row[0] if row else None
 
 
 def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = None):
@@ -269,3 +328,10 @@ def run_search(settings: Settings, index_key: str, query: str, top_k=5):
         return RetrievalStore(settings).search(
             index_key, query, OllamaEmbedder(settings, client), top_k
         )
+
+
+def run_keyword_search(settings: Settings, index_key: str, query: str, top_k=5):
+    from elice_knowledge.sparse import keyword_search
+
+    _check_query(query, top_k)
+    return keyword_search(RetrievalStore(settings).open_index(index_key), query, top_k)

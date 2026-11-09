@@ -1,10 +1,9 @@
 import json
-from types import SimpleNamespace
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 from test_generation import completion, generation_settings
 
 from elice_knowledge.generation import (
@@ -19,7 +18,6 @@ from elice_knowledge.qa import (
     QARequest,
     QARetrievalError,
     answer_from_sources,
-    run_qa,
 )
 from elice_knowledge.settings import Settings
 
@@ -119,18 +117,6 @@ def test_invalid_json_contract_is_an_upstream_error():
         ask_with_output({"answerable": True, "unexpected": "field"})
 
 
-def test_configuration_is_checked_before_retrieval(monkeypatch):
-    monkeypatch.setattr(
-        "elice_knowledge.qa.run_search", lambda *a: pytest.fail("No retrieval before configuration")
-    )
-    response = TestClient(create_app(Settings(evaluation_api_token="test-admin"))).post(
-        "/qa",
-        headers={"Authorization": "Bearer test-admin"},
-        json={"question": "질문", "index_key": INDEX},
-    )
-    assert response.status_code == 503 and response.json() == {"error": "generation_not_configured"}
-
-
 def test_qa_api_returns_typed_answer(monkeypatch):
     expected, _ = ask_with_output(ANSWER)
     monkeypatch.setattr("elice_knowledge.main.run_qa", lambda *a: expected)
@@ -141,49 +127,6 @@ def test_qa_api_returns_typed_answer(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json()["citations"][0]["url"] == SOURCE["url"]
-
-
-def test_full_qa_api_pipeline_uses_selected_index_and_elice_contract(monkeypatch):
-    def search(settings, index_key, question, top_k):
-        assert index_key == INDEX and question == "GPU 가상화란?" and top_k == 3
-        return {"results": [SOURCE]}
-
-    def generate(request):
-        payload = json.loads(request.content)
-        assert payload["model"] == "selected-model"
-        assert SOURCE["text"] in payload["messages"][1]["content"]
-        return httpx.Response(200, json=completion(json.dumps(ANSWER, ensure_ascii=False)))
-
-    monkeypatch.setattr("elice_knowledge.qa.run_search", search)
-    monkeypatch.setattr(
-        "elice_knowledge.qa.httpx",
-        SimpleNamespace(
-            Client=lambda: httpx.Client(transport=httpx.MockTransport(generate)),
-        ),
-    )
-    response = TestClient(
-        create_app(
-            generation_settings().model_copy(
-                update={"evaluation_api_token": SecretStr("test-admin")}
-            )
-        )
-    ).post(
-        "/qa",
-        headers={"Authorization": "Bearer test-admin"},
-        json={"question": "GPU 가상화란?", "index_key": INDEX, "top_k": 3},
-    )
-    assert response.status_code == 200 and response.json()["status"] == "answered"
-    assert response.json()["citations"][0]["version_id"] == SOURCE["version_id"]
-
-
-def test_retrieval_failure_is_sanitized_before_any_generation(monkeypatch):
-    def failed(*args):
-        raise RuntimeError("private-endpoint private-password")
-
-    monkeypatch.setattr("elice_knowledge.qa.run_search", failed)
-    with pytest.raises(QARetrievalError) as error:
-        run_qa(generation_settings(), QARequest(question="질문", index_key=INDEX))
-    assert "private-" not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -221,106 +164,3 @@ def test_qa_api_errors_never_expose_upstream_details(monkeypatch, error, status,
 def test_invalid_qa_request_is_rejected(values):
     with pytest.raises(ValidationError):
         QARequest(**{"question": "질문", "index_key": INDEX, **values})
-
-
-def test_followup_rewrites_query_and_retrieves_fresh_evidence(monkeypatch):
-    payloads = []
-
-    def generate(request):
-        payload = json.loads(request.content)
-        payloads.append(payload)
-        output = (
-            {"standalone_query": "GPU 가상화 작동 방식", "needs_clarification": False}
-            if len(payloads) == 1
-            else ANSWER
-        )
-        return httpx.Response(
-            200, json=completion(json.dumps(output, ensure_ascii=False), model="selected-model")
-        )
-
-    def search(settings, key, question, top_k):
-        assert question == "GPU 가상화 작동 방식"
-        return {"results": [SOURCE]}
-
-    monkeypatch.setattr("elice_knowledge.qa.run_search", search)
-    monkeypatch.setattr(
-        "elice_knowledge.qa.httpx",
-        SimpleNamespace(Client=lambda: httpx.Client(transport=httpx.MockTransport(generate))),
-    )
-    request = QARequest(
-        question="그건 어떻게 작동하나요?",
-        index_key=INDEX,
-        history=[
-            {"role": "user", "content": "GPU 가상화는?"},
-            {"role": "assistant", "content": "이전 답변은 근거가 아닙니다."},
-        ],
-    )
-    result = run_qa(generation_settings(), request)
-    assert len(payloads) == 2 and result.status == "answered"
-    assert result.retrieval_query == "GPU 가상화 작동 방식"
-    assert result.retrieved_sources == [SOURCE]
-    assert SOURCE["text"] in payloads[1]["messages"][1]["content"]
-    assert result.usage["total_tokens"] == 2 * completion("")["usage"]["total_tokens"]
-
-
-def test_ambiguous_followup_requests_clarification_without_retrieval(monkeypatch):
-    monkeypatch.setattr(
-        "elice_knowledge.qa.run_search", lambda *a: pytest.fail("No retrieval for ambiguity")
-    )
-
-    def generate(request):
-        return httpx.Response(
-            200,
-            json=completion(
-                json.dumps(
-                    {
-                        "standalone_query": "",
-                        "needs_clarification": True,
-                    }
-                ),
-                model="selected-model",
-            ),
-        )
-
-    monkeypatch.setattr(
-        "elice_knowledge.qa.httpx",
-        SimpleNamespace(Client=lambda: httpx.Client(transport=httpx.MockTransport(generate))),
-    )
-    result = run_qa(
-        generation_settings(),
-        QARequest(
-            question="그건?",
-            index_key=INDEX,
-            history=[
-                {"role": "user", "content": "여러 주제"},
-                {"role": "assistant", "content": "여러 대상"},
-            ],
-        ),
-    )
-    assert result.status == "needs_clarification" and result.citations == []
-
-
-def test_history_budget_removes_complete_pairs_before_paid_rewrite(monkeypatch):
-    calls = []
-
-    def generate(request):
-        calls.append(json.loads(request.content))
-        return httpx.Response(200, json=completion(json.dumps(ANSWER, ensure_ascii=False)))
-
-    monkeypatch.setattr("elice_knowledge.qa.run_search", lambda *a: {"results": [SOURCE]})
-    monkeypatch.setattr(
-        "elice_knowledge.qa.httpx",
-        SimpleNamespace(Client=lambda: httpx.Client(transport=httpx.MockTransport(generate))),
-    )
-    result = run_qa(
-        generation_settings().model_copy(update={"qa_history_tokens": 128}),
-        QARequest(
-            question="GPU 가상화는?",
-            index_key=INDEX,
-            history=[
-                {"role": "user", "content": "과거 " * 300},
-                {"role": "assistant", "content": "답변 " * 300},
-            ],
-        ),
-    )
-    assert len(calls) == 1 and result.history_omitted_count == 2
