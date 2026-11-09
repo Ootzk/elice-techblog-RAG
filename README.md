@@ -522,7 +522,7 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/regi
 평가 CLI인 `tools/evaluation/evaluate.py`는 기본적으로 계획만 표시하고 `--submit`을 지정해야 작업을 접수합니다.
 등록 CLI는 `--dry-run`이 없으면 MLflow Dataset을 갱신하지만 모델 호출이나 평가를 실행하지는 않습니다.
 현재 Gold의 검색 근거 Recall과 답변 가능 여부를 채점합니다.
-dev에서는 Gold·Iron 실행 시 전용 Judge 세 개가 함께 채점합니다. 전체 기준 평가는 아직 실행하지 않았습니다.
+dev에서는 모델 3개가 Gold의 네 품질 차원과 Iron의 행동 기준을 각각 채점합니다. 전체 기준 평가는 아직 실행하지 않았습니다.
 
 ---
 
@@ -706,7 +706,15 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 두 지표는 검색 실패와 응답 가능성 판단을 나눠 관찰하기 위한 출발점입니다. 모두 높더라도 답변이 틀릴 수 있으므로
 모범 답안의 필수 요점·금지 주장·문서 간 종합은 별도 의미 판정이 필요합니다.
-Gold·Iron의 수용 기준을 판정하는 Boolean Judge를 모델별로 등록했습니다. 일반 대화는 별도 online rubric으로 근거 충실도·응답 적절성을 평가하며 dev Trace를 100% 대상으로 합니다. QA Trace에는 LangGraph 노드·분기, 검색 도구·검색 결과, 모델 메시지·토큰 사용량, 최종 근거와 인용 검증 span을 함께 기록합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. Judge 일관성과 사람 판단과의 정합성·Cohen’s kappa는 아직 검증하지 않았습니다.
+Gold는 **정확성(correctness)·완전성(completeness)·근거 충실도(groundedness)·질문 적합성(relevance)**를 분리합니다.
+정확성은 기준 사실과의 모순·핵심 허구를, 완전성은 `required_points` 누락을 판정합니다. 누락만으로 정확성을 실패 처리하지 않습니다.
+근거 충실도는 최종 생성에 실제 전달한 `generation_sources`만 사용하며 Gold 답안·누적 검색 후보·이전 assistant 발언을 근거로 쓰지 않습니다.
+질문 적합성은 요청 대응 여부만 판정하고 사실 정확성과 구분합니다. Iron은 기대 행동·실패 조건의 Boolean 판정을 유지합니다.
+차원별 Judge는 `yes`·`no`·`not_applicable`을 반환하고, 통과율은 적용 가능한 정상 판정만 분모로 삼습니다.
+근거 부족 문항의 정확성·완전성은 N/A로 처리하고 답변/유보 여부는 `answerability_correct`로 봅니다.
+사실 주장이 없는 거절·명확화 응답의 groundedness도 자동 통과가 아닌 N/A로 다룹니다.
+오류는 N/A나 실패 답변으로 섞지 않으며 평가 실행을 실패로 표시합니다. 차원별 통과율과 채점·N/A·오류 건수를 기록하고 가중 총점은 만들지 않습니다.
+일반 대화는 근거 충실도·질문 적합성만 dev Trace의 100%에서 평가합니다. QA Trace에는 LangGraph 노드·분기, 검색 도구·검색 결과, 모델 메시지·토큰 사용량, 최종 근거와 인용 검증 span을 함께 기록합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. 저장 답변 재채점·블라인드 사람 검수 파일·차원별 일치율 및 Cohen’s kappa 분석을 구현했습니다. 실제 사람 라벨을 이용한 정합성 검증과 충분한 표본의 반복 일관성 실험은 아직 수행하지 않았습니다.
 호출 오류·타임아웃은 정상 유보와 구분해 실패율·평가 완료율로 보고합니다.
 
 효율성은 질문당 입력·캐시 입력·출력·전체 토큰과 LLM/도구 호출 수, QA 실행 시간으로 봅니다.
@@ -731,8 +739,9 @@ MLflow Run에는 Dataset·QA/scorer 프로필과 사례별 출력·점수·오�
 모델 별칭과 고정된 평가 조건만으로 비결정적 생성의 완전한 재현성을 보장하지 않습니다.
 
 Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. 두 데이터셋 모두
-`evaluate.py --dataset-id '<dataset-id>' --submit`으로 전체 문항을 한 번에 접수할 수 있으나,
-실제 기준 Run과 제출용 요약 보고서·Before/After 비교는 아직 만들지 않았습니다.
+`evaluate.py --dataset-id '<dataset-id>' --submit --report artifacts/evaluation/report.json`으로 전체 문항을 실행하고 완료 상태·Metric Score·사례별 결과를 JSON 보고서로 저장합니다.
+Run에는 기대 조건·실제 답변·최종 문맥·QA 프로필을 고정한 `evaluation-bundle.json`도 남겨 생성 없이 재채점할 수 있습니다.
+전수 기준 Run과 Before/After 비교는 아직 만들지 않았습니다.
 
 회귀 검증을 CI에 연결할 때는 JSONL 검증과 scorer 테스트를 기본 검사로 두고, 모델을 호출하는 평가는
 승인된 수동 실행이나 정해진 실행 시점으로 분리할 수 있습니다. 같은 Dataset 고정본·Corpus·scorer로
