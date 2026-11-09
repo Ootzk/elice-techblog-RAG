@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from importlib.metadata import version
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -42,7 +43,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with mcp_sessions.run():
             yield
 
-    app = FastAPI(title="Elice Knowledge", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Elice Knowledge", version=version("elice-knowledge"), lifespan=lifespan)
     # An exact ASGI route (not a Mount) so /mcp answers without a slash redirect;
     # registered before the web catch-all route.
     app.add_route(MCP_PATH, mcp_app)

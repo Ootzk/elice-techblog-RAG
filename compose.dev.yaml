@@ -2,6 +2,9 @@
 # Shared homeserver infrastructure is never started/stopped by this Compose project.
 services:
   knowledge:
+    build:
+      context: .
+      dockerfile: apps/knowledge/Dockerfile
     environment:
       APP_ENV: dev
       EVALUATION_JUDGES_ENABLED: "true"

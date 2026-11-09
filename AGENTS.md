@@ -260,10 +260,12 @@
 
 - 서비스·도구별 코드와 설정 위치는 위 코드 배치 규칙을 따른다.
 - 릴리스 자동화는 `release/vX.Y.Z`의 버전을 사용하고, 현재 존재하는 `apps/*`, `tools/*`의
-  `pyproject.toml`과 `package.json` 버전이 일치하는지 확인한다.
+  `pyproject.toml`과 `package.json` 및 대응 lockfile의 자체 패키지 버전이 일치하는지 확인한다.
 - PR CI는 feature → release, release → main 방향과 버전 정합성을 검사한다.
   release PR 제목은 `Release vX.Y.Z`로 한다.
-- feature PR은 저장소 검사, release PR은 추가로 서비스 이미지 빌드를 수행한다.
+- feature PR은 의존성 설치·DB 기동 없는 기본 검사와 변경 경로에 해당하는 앱 검사만 수행한다.
+  문서·평가 데이터만 변경하면 앱 검사는 생략하며, 공통 설정·미분류 경로는 양쪽 앱을 검사한다.
+  release PR은 경로와 관계없이 전체 앱 검사와 서비스 이미지 빌드를 수행한다.
   앱의 테스트·lockfile 검사 등은 각 구현이 추가될 때 CI에 연결한다.
 - `.github/scripts/release.py`는 CI의 브랜치·패키지 버전 확인과 릴리스 발행을 담당한다.
   CI 도구에 쓰는 Python 3.12는 애플리케이션의 언어나 Python 버전을 결정하지 않는다.
@@ -285,6 +287,8 @@
   직접 push·force push·삭제 제한을 포함한 원격 ruleset은 GitHub 관리자 설정에서 적용해야 한다.
 - GHCR 발행은 `GITHUB_TOKEN`의 packages 쓰기, Release 생성은 contents 쓰기와 PR 읽기 권한을 사용한다.
   배포용 자격증명을 PR 검사에 전달하지 않는다. 외부에서 이미지를 받을 때는 GHCR 접근 권한도 확인한다.
+- prod Compose는 `KNOWLEDGE_IMAGE`로 발행된 이미지를 사용하며 로컬 build는 dev override에서만 정의한다.
+- 릴리스·버전 갱신과 원격 설정의 검증 상태는 `docs/release.md`에 기록한다.
 - 현재 자동화 범위는 이미지 발행과 GitHub Release까지다. 엘리스클라우드 런타임 배포는
   배포 대상·접속 방식·환경 설정이 결정된 뒤 연결하고 홈서버 공유 인프라는 변경하지 않는다.
 

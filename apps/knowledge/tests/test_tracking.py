@@ -18,7 +18,8 @@ def tracking(monkeypatch):
     return tracking
 
 
-def test_sample_run_is_labeled_as_connectivity_and_records_vector_provenance(tracking):
+def test_sample_run_is_labeled_as_connectivity_and_records_vector_provenance(tracking, monkeypatch):
+    monkeypatch.setattr("elice_knowledge.tracking.version", lambda name: "0.2.1")
     result = {
         "sample_id": "sample",
         "profile_id": "profile",
@@ -28,6 +29,7 @@ def test_sample_run_is_labeled_as_connectivity_and_records_vector_provenance(tra
     run_id = record_connectivity(Settings(_env_file=None), result, {"digest": "model-digest"})
     assert run_id == "run-123"
     assert tracking.create_run.call_args.kwargs["tags"]["purpose"] == "connectivity-only"
+    assert tracking.create_run.call_args.kwargs["tags"]["app.version"] == "0.2.1"
     tracking.log_param.assert_any_call(run_id, "embedding_model_digest", "model-digest")
     tracking.set_terminated.assert_called_once_with(run_id, "FINISHED")
 

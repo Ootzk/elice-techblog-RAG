@@ -21,6 +21,7 @@ flowchart LR
 
 `.env.dev`에는 기존 DB·임베딩·MLflow·생성 설정과 아래 값을 넣는다.
 배포는 `.env`와 `compose.yaml`을 사용하고 HTTPS reverse proxy 뒤에 배치한다.
+발행 이미지 pull·DB 초기화·기동 순서와 버전 갱신은 [릴리스 문서](release.md)를 따른다.
 
 ```dotenv
 ADMIN_ACCESS_CODE=<최초 관리자 로그인 코드, 최소 20자>
