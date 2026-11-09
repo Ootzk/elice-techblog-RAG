@@ -498,9 +498,8 @@ MLflow Dataset 입력을 고정해 대화 서비스와 같은 QA 실행 경로�
 구현한 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
 Open WebUI 프런트엔드 일부를 추출해 관리자/방문자 코드 인증·코드별 대화 복구·관리자 코드 관리·출처 표시를 구현했습니다.
 [실행 방법과 Dataset 평가](docs/chat-service-operations.md)를 함께 참고하세요.
-해당 UI와 대화·평가 API는 설계 단계이며 아직 구현하지 않았습니다.
 
-아래는 전체 목표의 논리 구조입니다. 현재 문서 수집·청킹·벡터 검색·QA와 대화/평가 API를 구현했습니다.
+아래는 전체 목표의 논리 구조입니다. 현재 문서 수집·청킹·BM25/벡터 검색·agentic QA·MCP 검색 도구와 대화/평가 API를 구현했습니다.
 배포 구성은 Knowledge 이미지의 API와 worker를 나누고 정적 대화 화면을 API에서 제공합니다.
 
 ```mermaid
@@ -575,7 +574,7 @@ flowchart TB
 Knowledge는 문서와 수집 상태를 관계형 데이터로 관리하고, 청크 벡터도 같은 PostgreSQL의
 pgvector에 저장합니다. 문서를 색인할 때와 질문을 검색할 때는 같은 Embedding 프로필을 사용합니다.
 생성은 엘리스클라우드 Serverless의 OpenAI 호환 endpoint로 연결하며 구체적인 모델은 설정 시 선택합니다.
-프런트엔드는 Open WebUI 소스를 추출·수정하는 방향으로 정했으며 아직 구현하지 않았습니다.
+프런트엔드는 Open WebUI 소스를 추출·수정한 대화 화면이며 Knowledge API가 정적 파일로 제공합니다.
 QA는 LangGraph agent가 BM25·Dense 검색 도구를 골라 근거를 모으는 구조이며, 같은 도구를 `/mcp`로도 공개합니다.
 Judge 모델은 아직 정하지 않았습니다.
 
