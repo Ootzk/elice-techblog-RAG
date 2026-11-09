@@ -2,7 +2,8 @@
 
 2026-11-09 기준 설계와 구현 계약이다. 대화 UI·코드 인증·대화 저장·worker와
 Dataset 평가 API/CLI를 구현했다. 실행 방법과 검증 한계는
-[운영 문서](chat-service-operations.md)를 따른다. Gold Set 작성과 의미적 Judge 평가는 후속 작업이다.
+[운영 문서](chat-service-operations.md)를 따른다. Gold 22문항·Iron 8문항의 작성·검수·MLflow 등록은 완료했고,
+실제 기준 평가와 의미적 Judge·Iron 행동 채점은 후속 작업이다.
 
 ## 확정한 방향
 
@@ -203,9 +204,12 @@ worker 장애로 lease가 만료된 실행은 interrupted로 기록하고 유료
 
 ## Dataset 평가 계약
 
-MLflow Evaluation Dataset이 질문·기대 근거·수용 기준의 기준 저장소다.
+저장소의 Gold·Iron JSONL이 질문·기대 근거·수용 기준의 편집 원본이며,
+명시적인 등록 CLI로 MLflow Evaluation Dataset에 게시한다. Gold·Iron Dataset은 각각 하나씩 유지하고
+재등록 시 해당 Dataset을 갱신한다. MLflow UI 편집이나 자동 양방향 동기화는 사용하지 않는다.
 평가 접수 시 Dataset ID·선택 record ID·내용 해시와 실제 레코드를 고정해 실행 중 변경을 차단한다.
-저장소에 내보내는 Gold Set은 같은 ID·해시를 기록하고 별도 사본을 독립적으로 수정하지 않는다.
+Dataset 태그에 원본 파일 경로·SHA-256, 레코드 태그에 저장소 문항 ID·메타데이터를 기록한다.
+서버별 Dataset ID는 등록 CLI 출력으로 확인하며 저장소 manifest에 환경별 ID를 넣지 않는다.
 운영 대화를 자동으로 Gold Set에 편입하지 않는다. 운영·평가 활동을 구분해 기록하고
 자격증명·서버 접속 정보는 trace와 보고서에서 제외한다.
 
@@ -213,6 +217,9 @@ MLflow Evaluation Dataset이 질문·기대 근거·수용 기준의 기준 저�
 
 - `inputs`: question, history
 - `expectations`: answerable, 원문 URL·인용 구간, 답변 수용 기준
+
+위 평가 계약은 Gold Set에 적용한다. Iron Set은 `expected_behavior`·`failure_conditions`를 포함한
+별도 기대 행동 계약으로 등록할 수 있으나, 현재 `evidence-v1` 평가 API의 실행·채점 대상은 아니다.
 
 expectations는 QA 실행 입력이나 생성 프롬프트에 전달하지 않고 scorer에서만 사용한다.
 기대 근거는 정책 변경 때 ID가 달라지는 청크 ID 하나에 의존하지 않고 원문 버전·URL·인용 구간으로 정의한다.
@@ -241,10 +248,13 @@ failed/interrupted는 정상적인 답변 유보와 구분하고 실패율·평�
 MLflow 기록에 실패한 평가는 성공으로 표시하지 않는다.
 운영 대화의 선택적 trace export 장애는 사용자 답변을 막지 않으며 두 정책을 구분한다.
 
-지표 후보는 기대 인용 구간을 기준으로 한 검색 Recall@k, 답변 정확성·근거 충실도,
-답변 불가 문항의 유보 성능, 지연·토큰 사용량이다. 인용 형식 검사는 이미 강제하므로 단독 품질 지표로 삼지 않는다.
-Judge 모델·rubric·집계 방식과 최소 20개 Gold Set의 작성·검토는 평가 구현 단계에서 구체화한다.
-자동 Judge를 사용하기 전에 사람 판단과의 정합성을 확인한다.
+현재 scorer는 기대 인용 구간의 검색 회수율과 답변 가능 여부 일치를 계산한다.
+agentic QA에서는 누적 검색 결과를 대상으로 회수율을 계산하므로, 단일 검색 k개와 같은 조건으로 해석하지 않는다.
+답변 정확성·근거 충실도와 Iron의 행동 판정은 의미적 평가 대상이며 아직 구현하지 않았다.
+인용 형식 검사는 이미 강제하므로 단독 품질 지표로 삼지 않는다.
+Judge 모델·rubric·집계 방식은 후속 작업이며 자동 Judge 사용 전 사람 판단과의 정합성을 확인해야 한다.
+데이터셋 구축 방법·편향·한계와 지표별 맹점은 루트 README의 평가 체계와
+[Gold](../tools/evaluation/gold_set/README.md)·[Iron](../tools/evaluation/iron_set/README.md) 설명을 따른다.
 
 ## 구현 순서와 완료 기준
 

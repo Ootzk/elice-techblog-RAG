@@ -126,7 +126,37 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 `POST /qa`는 관리자용 즉시 실행 경로다. 일반 대화는 반드시 `/api/conversations/.../turns` 큐를 사용한다.
 HTTP 계약은 `/docs`에서 확인한다.
 
-MLflow Dataset의 각 레코드는 다음 형식을 사용한다.
+### 저장소 Dataset 등록
+
+질문·기대 답안은 저장소의 [Gold Set](../tools/evaluation/gold_set/README.md)과
+[Iron Set](../tools/evaluation/iron_set/README.md) JSONL에서 수정한다.
+저장소 루트에서 Knowledge의 Python 환경으로 등록 CLI를 실행한다.
+
+```bash
+# 로컬 파일만 검증한다. MLflow 접속·생성 호출은 하지 않는다.
+uv run --project apps/knowledge python tools/evaluation/register.py --dry-run
+# .env.dev의 MLflow 접속 설정과 QA_MLFLOW_EXPERIMENT_NAME을 사용해 두 세트를 등록한다.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py
+# 한 세트만 등록할 수도 있다.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py --dataset gold
+```
+
+`elice-techblog-gold`·`elice-techblog-iron` Dataset을 각각 하나씩 생성하고 출력으로 ID를 반환한다.
+동일 이름이 이미 있으면 같은 Dataset을 갱신한다. 변경된 레코드는 교체하고 삭제된 질문은 제거하며,
+내용이 같은 레코드는 유지한다. MLflow UI의 별도 편집 내용도 재등록할 때 저장소 내용을 기준으로 맞춘다.
+등록은 모델 호출이나 평가 실행을 포함하지 않는다. 등록 도중 오류가 나면 원인을 해결한 뒤 재실행한다.
+
+원본 파일 경로·SHA-256은 Dataset 태그, `gold-001` 같은 문항 ID와 메타데이터는 레코드 태그에 저장한다.
+등록 파일 해시는 출처 추적용이며, 아래 평가 접수 해시는 MLflow 레코드를 읽어 계산하는 별도 값이다.
+서버 접속은 `MLFLOW_TRACKING_URI`와 MLflow 인증 환경 변수를 사용한다.
+홈서버와 제출 서버에는 같은 명령으로 각각 등록하며 Dataset ID는 각 서버의 출력을 사용한다.
+
+Iron은 등록·조회만 지원한다. 현재 평가 API는 Gold의 `answerable`·`evidence` 계약을 요구하므로
+Iron의 Dataset ID로 평가를 요청하면 거부된다. Iron 실행·의미 채점은 별도 구현 대상이다.
+
+### Gold Set 평가
+
+MLflow Gold Dataset의 각 레코드는 다음 형식을 사용한다.
 
 ```json
 {
@@ -176,15 +206,21 @@ MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공�
 - `evidence_recall_at_k`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
 - `answerability_correct`: answered 여부가 기대 answerable과 일치하는지.
 
+agentic QA의 `evidence_recall_at_k`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
+기대 근거가 없는 문항은 이 회수율의 채점 대상에서 제외한다. `answerability_correct`는 답변 내용이
+틀려도 answered 상태만 맞으면 통과할 수 있으므로 의미적 정확성과 혼동하지 않는다.
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.
 이 지표는 의미적 답변 정확성·충실도를 검증하지 않는다.
-검토된 Gold Set 최소 20개, Judge/rubric 및 사람 판단과의 정합성 검증은 후속 작업이다.
-유료 평가와 실제 생성 호출은 아직 이번 구현 검증에 포함하지 않았다.
+Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했다.
+실제 Gold 기준 평가, Judge/rubric 및 사람 판단과의 정합성 검증, Iron 실행·채점은 후속 작업이다.
+등록 CLI는 생성이나 평가를 호출하지 않는다.
 
 ## 검증 한계
 
 브라우저 연결이 없어 실제 화면 클릭·모바일 배치는 확인하지 못했다.
-테스트 150개(PostgreSQL 통합 36개), 린트·포맷·정적 빌드와 Docker HTTP 검증을 통과했다.
+대화 UI의 정적 빌드·Docker HTTP 검증과 Dataset 등록의 파일 검증·원격 내용 대조·재등록을 확인했다.
+등록 CLI의 단위 테스트는 신규 등록·변경·삭제·중복 방지와 잘못된 입력 거부를 다룬다.
+PostgreSQL 통합 테스트는 전용 테스트 DB가 설정된 환경에서 별도로 실행해야 한다.
 기존 Corpus 27개·스냅샷 1개·청킹 결과 54개·벡터 인덱스 1개를 유지했다.
 런타임 npm 의존성 보안 검사는 별도로 확인하며, 개발 도구에 low severity advisory 4개가 남아 있다. `npm audit --omit=dev`는 0개다.
 정적 배포 이미지에는 Node/npm 개발 도구를 포함하지 않는다.

@@ -1,0 +1,69 @@
+{
+  "status": "human_reviewed",
+  "curated_on": "2026-11-10",
+  "curated_by": "GPT",
+  "record_count": 22,
+  "answerable_count": 18,
+  "unanswerable_count": 4,
+  "question_type_counts": {
+    "워크로드 비교": 1,
+    "수치 비교": 1,
+    "실험 해석": 1,
+    "모델 역할·선택": 1,
+    "수치·적용 범위": 1,
+    "장애 진단": 1,
+    "문서 간 비교": 1,
+    "표 해석·전제 교정": 1,
+    "개념 구분": 1,
+    "배포 절차·승인 경계": 1,
+    "구조 설명": 1,
+    "성능 진단": 1,
+    "개발 절차": 1,
+    "사실·실험 결과": 1,
+    "시리즈 종합": 3,
+    "후속 대화": 1,
+    "근거 부족": 4
+  },
+  "series_synthesis_ids": [
+    "gold-015",
+    "gold-016",
+    "gold-017"
+  ],
+  "multi_document_ids": [
+    "gold-007",
+    "gold-015",
+    "gold-016",
+    "gold-017"
+  ],
+  "provided_history_ids": [
+    "gold-018"
+  ],
+  "corpus_snapshot_id": "18d24230ba50577b26858c2d062fa180cc22445ccf6c64e1ccfcd0f5e8a76356",
+  "reference_index": {
+    "key": "98d1d6bb252131f6157d629bf4abdc70dae5c85a63e77455ac0be0d49ce56e31",
+    "snapshot_id": "18d24230ba50577b26858c2d062fa180cc22445ccf6c64e1ccfcd0f5e8a76356",
+    "policy_key": "5ebd32a616041f0c2aa3fa9ddbc91490f179db2666a5d850ca2589fd14d600df",
+    "chunk_count": 454
+  },
+  "files": {
+    "gold.jsonl": {
+      "sha256": "6fe82fddd4c2683e2e22f29f343157a881a54d0b0e309183d036624e179a7eb1"
+    },
+    "README.md": {
+      "sha256": "fa33f66006f03c764cb0c4445f3d38005116920d44be030c14db69fc3d1010cb"
+    }
+  },
+  "validation": {
+    "source": "PostgreSQL read-only snapshot and policy chunks; no live-web lookup or answer-generation calls",
+    "input_schema": "QARequest",
+    "evidence": "every positive quote is a whitespace-normalized literal substring of a frozen policy chunk",
+    "absence_cases": "27-document context search and relevant article inspection; not lexical absence alone",
+    "semantic_review": "human_reviewed",
+    "scorer_limitation": "evidence-v1 does not grade required_points, unacceptable_claims or cross-document synthesis",
+    "question_style": "user scenarios without article-title or benchmark-configuration lookup hints; nonessential numeric details are optional",
+    "registration_tool": "tools/evaluation/register.py"
+  },
+  "reviewed_on": "2026-11-10",
+  "human_reviewed_count": 22,
+  "pending_human_review_count": 0
+}
