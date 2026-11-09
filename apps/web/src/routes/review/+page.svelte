@@ -5,6 +5,7 @@
 	import ResponseMessage from '#lib/components/chat/Messages/ResponseMessage.svelte';
 	import Reference from '#lib/components/review/Reference.svelte';
 	import Evidence from '#lib/components/review/Evidence.svelte';
+	import ServiceNav from '#lib/components/common/ServiceNav.svelte';
 
 	type Label = '' | 'pass' | 'fail' | 'not_applicable';
 	type Score = { label: Label; rationale: string };
@@ -416,15 +417,18 @@
 					>Human Review</strong
 				><span class="hidden text-sm text-gray-400 sm:inline">내 계정으로 검수하기</span>
 			</div>
-			<div class="flex items-center gap-4 text-sm">
+			<div class="ml-auto flex flex-wrap items-center justify-end gap-4 text-sm">
 				<span class="rounded-full bg-gray-100 px-3 py-1"
 					>{session?.identity.label ?? '접속 확인 중'}</span
-				><a
-					href="/"
-					class="text-gray-500 underline"
-					on:click|preventDefault={() => perform(async () => location.assign('/'))}
-					>대화로 돌아가기</a
 				>
+				<ServiceNav
+					active="review"
+					admin={session?.identity.role === 'admin'}
+					disabled={busy}
+					navigate={(href) => {
+						void perform(async () => location.assign(href));
+					}}
+				/>
 			</div>
 		</div>
 	</header>

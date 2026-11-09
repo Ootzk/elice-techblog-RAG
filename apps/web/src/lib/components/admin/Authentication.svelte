@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api, ApiError, errorText, setCsrf, type Session } from '#lib/api.js';
+	import ServiceNav from '#lib/components/common/ServiceNav.svelte';
 	type Code = {
 		id: string;
 		label: string;
@@ -175,12 +176,7 @@
 				><img src="/open-webui-logo.png" alt="" class="size-7" />Open WebUI
 				<span class="font-normal text-gray-400 text-sm ml-2">관리자</span></a
 			>
-			<div class="flex gap-4">
-				<a href="/review" class="text-sm text-gray-500 hover:underline">사람 검수</a><a
-					href="/"
-					class="text-sm text-gray-500 hover:underline">← 대화로 돌아가기</a
-				>
-			</div>
+			<ServiceNav active="admin" admin={allowed} />
 		</div>
 	</header>
 	<main class="max-w-6xl mx-auto px-5 py-9">
