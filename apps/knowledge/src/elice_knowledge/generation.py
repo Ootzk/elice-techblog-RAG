@@ -15,6 +15,7 @@ from llama_index.core.llms.callbacks import llm_chat_callback, llm_completion_ca
 from pydantic import PrivateAttr
 
 from elice_knowledge.settings import Settings
+from elice_knowledge.tracing import child_span, finish_span
 
 
 class GenerationError(RuntimeError):
@@ -55,6 +56,36 @@ class EliceServerlessLLM(CustomLLM):
 
     @llm_chat_callback()
     def chat(self, messages: Sequence[ChatMessage], **kwargs) -> ChatResponse:
+        with child_span(
+            "generation.chat",
+            "LLM",
+            {"messages": [{"role": m.role.value, "content": m.content} for m in messages]},
+            {
+                "mlflow.llm.model": self._settings.generation_model,
+                "mlflow.llm.provider": "elice-serverless",
+            },
+        ) as span:
+            response = self._chat(messages, **kwargs)
+            usage = response.additional_kwargs["usage"]
+            finish_span(
+                span,
+                {"messages": [{"role": "assistant", "content": response.message.content}]},
+                {
+                    "mlflow.llm.model": response.additional_kwargs["model"],
+                    "mlflow.chat.tokenUsage": {
+                        target: usage[source]
+                        for source, target in [
+                            ("prompt_tokens", "input_tokens"),
+                            ("completion_tokens", "output_tokens"),
+                            ("total_tokens", "total_tokens"),
+                        ]
+                        if source in usage
+                    },
+                },
+            )
+            return response
+
+    def _chat(self, messages: Sequence[ChatMessage], **kwargs) -> ChatResponse:
         settings = self._settings
         payload = {
             "model": settings.generation_model,

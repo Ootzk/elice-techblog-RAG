@@ -706,7 +706,7 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 두 지표는 검색 실패와 응답 가능성 판단을 나눠 관찰하기 위한 출발점입니다. 모두 높더라도 답변이 틀릴 수 있으므로
 모범 답안의 필수 요점·금지 주장·문서 간 종합은 별도 의미 판정이 필요합니다.
-Gold·Iron의 수용 기준을 판정하는 Boolean Judge를 모델별로 등록했습니다. 일반 대화는 별도 online rubric으로 근거 충실도·응답 적절성을 평가하며 dev Trace를 100% 대상으로 합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. Judge 일관성과 사람 판단과의 정합성·Cohen’s kappa는 아직 검증하지 않았습니다.
+Gold·Iron의 수용 기준을 판정하는 Boolean Judge를 모델별로 등록했습니다. 일반 대화는 별도 online rubric으로 근거 충실도·응답 적절성을 평가하며 dev Trace를 100% 대상으로 합니다. QA Trace에는 LangGraph 노드·분기, 검색 도구·검색 결과, 모델 메시지·토큰 사용량, 최종 근거와 인용 검증 span을 함께 기록합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. Judge 일관성과 사람 판단과의 정합성·Cohen’s kappa는 아직 검증하지 않았습니다.
 호출 오류·타임아웃은 정상 유보와 구분해 실패율·평가 완료율로 보고합니다.
 
 ### 재현성과 회귀 검증

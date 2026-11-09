@@ -177,8 +177,21 @@ Run의 `judge-versions.json`, `judge-results.json`에 버전·문항 ID·판정�
 Evaluation runs에서 상세 결과를 확인한다. 사례 API의 scores에도 Boolean 판정을 0/1로 제공한다.
 
 online Judge는 `environment=dev`이면서 `evaluation_mode=online`인 Trace를 100% 자동 평가한다.
-일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 단일 루트 Trace를 기록한다.
-노드별 autologging은 추가하지 않았으며, 설정 객체나 인증정보는 내보내지 않는다.
+일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 `techblog-qa` 루트 Trace를 기록한다.
+LangGraph 노드와 분기는 `mlflow.langchain.autolog(run_tracer_inline=True)`로 자동 추적한다.
+LlamaIndex autologging은 중복 방지를 위해 끄고, 직접 구현한 경계만 다음 span으로 보완한다.
+
+| Span | 유형 | 기록 내용 |
+| --- | --- | --- |
+| `plan`·`act`·`answer`·`clarify`, 조건 분기 | 자동 그래프 추적 | 노드 입출력·시간·오류, planner의 선택과 사용한 도구 수 |
+| `generation.chat` | LLM | 실제 메시지·응답·모델·토큰 사용량. 부모 노드로 planner/최종 생성을 구분 |
+| `keyword_search`·`meaning_search` | TOOL | 도구 인자·반환값·실패 상태 |
+| `retrieval.keyword_search`·`retrieval.meaning_search` | RETRIEVER | 실제 검색어·top_k·청크 본문·출처·점수 |
+| `retrieval.final_context` | RETRIEVER | 토큰 예산을 적용한 뒤 최종 생성에 전달한 근거 |
+| `planner.parse` | PARSER | planner JSON과 파싱한 결정 |
+| `answer.parse_and_validate` | PARSER | 생성 결과 파싱·인용문 검증, 응답 상태와 검증 결과 |
+
+설정 객체·HTTP 인증 헤더·endpoint 주소는 내보내지 않는다. 검색 내부 오류는 오류 코드만 기록한다.
 Trace 저장 실패는 대화를 중단하지 않는다. MLflow 추적을 끄면 Trace도 기록하지 않는다.
 데이터셋 QA는 `evaluation_mode=offline`으로 기록해 online Judge와 중복 채점하지 않는다.
 MLflow 서버는 비동기로 채점하며 기본적으로 Trace 시작 후 약 5분 뒤 대상이 되므로 즉시 점수가 보이지 않을 수 있다.
@@ -253,9 +266,10 @@ Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아�
 ## 검증 한계
 
 Judge 연동은 Gold·Iron의 고정 모범 답안 샘플 각 1개에 모델 3개가 판정·이유를 남기는지 확인했다.
-실제 QA 샘플 1개는 질문·답변·검색 근거의 Trace 저장과 online Judge 3개의 서버 자동 판정을 확인했다.
+실제 QA 샘플로 질문·답변·검색 근거의 Trace 저장과 online Judge 3개의 서버 자동 판정을 확인했다.
+span 보강 후 별도 실제 질문에서는 답변 생성과 36개 span의 서버 저장·부모 자식 연결·LLM 토큰 집계를 확인했다.
 이는 연결·rubric 실행 검증이며 전수 기준 평가나 Judge 신뢰도 측정 결과가 아니다.
-격리된 임시 PostgreSQL DB를 포함한 Python 테스트 205개, lint와 개발 이미지 빌드·기동을 확인했다.
+격리된 임시 PostgreSQL DB를 포함한 Python 테스트 211개, lint와 개발 이미지 빌드·기동을 확인했다.
 
 브라우저 연결이 없어 실제 화면 클릭·모바일 배치는 확인하지 못했다.
 대화 UI의 정적 빌드·Docker HTTP 검증과 Dataset 등록의 파일 검증·원격 내용 대조·재등록을 확인했다.

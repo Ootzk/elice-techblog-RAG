@@ -11,6 +11,7 @@ from elice_knowledge.embedding import OllamaEmbedder
 from elice_knowledge.retrieval import OpenIndex, RetrievalStore
 from elice_knowledge.settings import Settings
 from elice_knowledge.sparse import keyword_search
+from elice_knowledge.tracing import child_span, documents, finish_span
 
 ToolName = Literal["keyword_search", "meaning_search"]
 TOOL_NAMES: tuple[ToolName, ...] = ("keyword_search", "meaning_search")
@@ -145,12 +146,19 @@ class KnowledgeTools:
         request = parse_arguments(name, arguments)
         top_k = min(request.top_k, self.max_top_k)
         try:
-            index = self._open()
-            if name == "keyword_search":
-                result = keyword_search(index, request.query, top_k)
-            else:
-                backend = OllamaEmbedder(self.settings, self.client)
-                result = self.store.dense_search(index, request.query, backend, top_k)
+            with child_span(
+                f"retrieval.{name}",
+                "RETRIEVER",
+                {"query": request.query, "top_k": top_k, "index_key": self.index_key},
+                {"elice.retrieval.role": "search", "elice.retrieval.backend": name},
+            ) as span:
+                index = self._open()
+                if name == "keyword_search":
+                    result = keyword_search(index, request.query, top_k)
+                else:
+                    backend = OllamaEmbedder(self.settings, self.client)
+                    result = self.store.dense_search(index, request.query, backend, top_k)
+                finish_span(span, documents(result["results"]))
         except Exception:
             # Upstream errors can carry SQL, endpoints or credentials.
             raise ToolUnavailable(f"{name} is temporarily unavailable") from None
@@ -160,7 +168,20 @@ class KnowledgeTools:
 
     def timed_invoke(self, name: str, arguments: dict | None):
         started = time.monotonic()
-        try:
-            return self.invoke(name, arguments), None, (time.monotonic() - started) * 1000
-        except (ToolInputError, ToolUnavailable) as exc:
-            return None, exc, (time.monotonic() - started) * 1000
+        with child_span(name, "TOOL", {"arguments": arguments}) as span:
+            try:
+                output = self.invoke(name, arguments)
+                finish_span(span, output.model_dump())
+                return output, None, (time.monotonic() - started) * 1000
+            except (ToolInputError, ToolUnavailable) as exc:
+                finish_span(
+                    span,
+                    {"error": getattr(exc, "code", type(exc).__name__)},
+                    {"elice.tool.failed": True},
+                )
+                if span is not None:
+                    try:
+                        span.set_status("ERROR")
+                    except Exception:
+                        pass
+                return None, exc, (time.monotonic() - started) * 1000

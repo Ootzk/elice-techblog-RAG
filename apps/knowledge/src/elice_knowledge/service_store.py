@@ -112,6 +112,7 @@ def code_identity():
                     "retrieval.py",
                     "embedding.py",
                     "execution.py",
+                    "tracing.py",
                 ]
             },
             "dependencies": {

@@ -14,7 +14,10 @@ from elice_knowledge.service_store import PROFILE_FIELDS, ServiceError
 def qa_trace(settings, request, profile_key, mode):
     """A single application boundary; no credentials or Settings are exported."""
     if not settings.mlflow_enabled or not settings.mlflow_tracking_uri:
-        yield None
+        import mlflow
+
+        with mlflow.tracing.context(enabled=False):
+            yield None
         return
     import mlflow
     from mlflow.entities import MlflowExperimentLocation
