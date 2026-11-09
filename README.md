@@ -67,6 +67,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
 | `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192`. planner와 답변 단계에 각각 적용 |
 | `QA_AGENT_MAX_TOOL_CALLS` | 질문 하나에서 agent가 호출할 수 있는 검색 도구 횟수(1~8); 기본 `4` |
+| `PROMPT_ALIAS` | 새 QA 프로필이 MLflow Prompt Registry에서 읽을 alias; 기본 `production`, dev 예시는 `development` |
 | `MCP_API_TOKEN` | `/mcp` 검색 도구 엔드포인트의 Bearer 토큰(20자 이상); 비우면 엔드포인트가 404 |
 
 `DATABASE_URL`의 비밀번호에 예약 문자가 있으면 URL 인코딩해야 합니다.
@@ -326,7 +327,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 
 요청은 `question`(1~4000자, 공백만 입력 불가), `index_key`(64자리 해시), `top_k`(1~20, 기본 5)입니다.
 `top_k`는 검색 도구 한 번이 반환할 수 있는 최대 청크 수입니다(도구 자체 상한 10).
-응답은 `status`·`answer`·`index_key`·`citations`·`reason`·`prompt_version`·`generation_model`·`usage`를 포함합니다.
+응답은 `status`·`answer`·`index_key`·`citations`·`reason`·`prompts`·`generation_model`·`usage`를 포함합니다.
+`prompts`는 사용한 프롬프트별 출처(`registry`·`bundled`)·URI·버전·내용 해시입니다.
 `agent_steps`에는 단계별 행동·도구 인자·결과 출처 번호·오류·지연·토큰 사용량을, `retrieved_sources`에는
 agent가 모은 청크 전체를 기록합니다. `agent_stop_reason`은 planner의 답변·되묻기 결정 또는
 도구 호출 한도(`tool_budget`)·planner 프롬프트 예산(`planner_context_budget`) 도달을 구분합니다.
@@ -356,8 +358,8 @@ planner는 질문·대화 이력·도구 계약·지금까지의 관찰을 보�
 모든 검색이 인프라 오류로 실패해 근거가 없으면 HTTP 503(`retrieval_unavailable`)입니다.
 planner가 `answer`와 함께 출처 번호를 고르면 그 청크만, 아니면 모은 청크 전체를 원문 그대로 답변 단계에 넘깁니다.
 
-답변 단계는 LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고 `PromptTemplate`·`PydanticOutputParser`로
-질문·검색 문서·JSON 출력 형식을 구성합니다. 모델에는 검색 문서를 데이터로 취급하고
+답변 단계는 LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고, 아래의 버전 관리 프롬프트와
+`PydanticOutputParser`로 질문·검색 문서·JSON 출력 형식을 구성합니다. 모델에는 검색 문서를 데이터로 취급하고
 문서 안의 규칙 변경 지시를 따르지 않도록 요청합니다. 예산을 넘는 청크는 통째로 제외하며 표·코드를 잘라 넣지 않습니다.
 이 예산은 모델의 실제 토크나이저·컨텍스트 한도를 보장하지 않으므로 모델 선택 후 호출 정보와 함께 확인해야 합니다.
 
@@ -367,6 +369,39 @@ planner가 `answer`와 함께 출처 번호를 고르면 그 청크만, 아니�
 원문에 인용문이 있어도 다른 주장을 생성할 수 있으므로 실제 모델의 답변 정확성과 유보 성능은 Gold Set에서 평가해야 합니다.
 잘린 생성 결과나 잘못된 JSON은 HTTP 502, 생성 timeout은 504, 검색 불가·생성 미설정은 503입니다.
 인용 검증과 무관하게 API 오류를 성공 답변으로 바꾸지는 않습니다. 현재는 비스트리밍·단일 질문 방식입니다.
+
+### 프롬프트 버전 관리
+
+planner(`elice-agentic-planner`)와 답변 단계(`elice-grounded-answer`) 프롬프트는
+[저장소 템플릿](apps/knowledge/src/elice_knowledge/data/prompts)을 원본으로 두고 MLflow Prompt Registry에 게시합니다.
+각 프롬프트는 `system`·`user` 두 메시지의 chat 템플릿이며 `{{payload}}`·`{{output_schema}}`(planner는 `{{max_calls}}` 포함)
+변수를 정확히 가져야 합니다. 변수·역할이 다른 템플릿은 거부합니다. 질문·출처를 담는 JSON 구조와 출력 스키마는 코드가 소유합니다.
+
+새 대화·`ask`·평가용 QA 프로필을 만들 때 `PROMPT_ALIAS`의 버전을 한 번 읽어 버전·내용 해시·템플릿 원문까지 프로필에 고정합니다.
+진행 중인 대화와 평가는 MLflow를 다시 조회하지 않으며, alias를 옮기면 새 프로필부터 적용됩니다.
+MLflow가 꺼져 있거나 연결되지 않거나 프롬프트가 등록되지 않았으면 저장소 템플릿을 쓰고, 프로필에 `bundled`와 이유를 기록합니다.
+Dataset 평가는 모든 프롬프트가 Registry에서 확정된 프로필만 접수하며(`evaluation_requires_registry_prompts`, HTTP 409),
+Run에 프롬프트 URI·해시 파라미터와 `mlflow.linkedPrompts` 연결을 남깁니다.
+서버마다 버전 번호가 달라도 내용 해시(`elice.prompt.digest` 태그)로 같은 프롬프트인지 확인합니다.
+
+```bash
+# 저장소 템플릿을 현재 MLFLOW_TRACKING_URI 서버에 게시하고 alias를 지정합니다. 내용이 같으면 새 버전을 만들지 않습니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge prompt register --alias development --message '변경 내용'
+# 새 프로필이 사용할 프롬프트(출처·버전·해시)를 확인합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge prompt show
+# 평가로 채택한 버전에 alias를 지정합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge prompt alias elice-agentic-planner 2 --alias production
+```
+
+실험할 때는 MLflow UI나 `register`로 새 버전을 만들고, 공유 alias를 옮기지 않은 채 버전을 지정한 실험용 프로필로 비교합니다.
+지정한 버전을 읽지 못하면 저장소 템플릿으로 대체하지 않고 실패합니다.
+
+```bash
+python3 tools/evaluation/evaluate.py --dataset-id '<dataset-id>' --prompt elice-agentic-planner=2 --submit
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ask '질문' --index-key '<index_key>' --prompt elice-agentic-planner=2
+```
+
+채택한 문구는 저장소 템플릿에 커밋한 뒤 제출용 MLflow에 `register --alias production`으로 게시해, 저장소 기본값과 production이 같은 내용을 유지하게 합니다.
 
 ### MCP 검색 도구
 
@@ -449,6 +484,11 @@ Citation 검증이 끝까지 동작하는 것을 확인했습니다. 기본 도�
 
 세 질문 중 두 번은 planner가 스스로 답변을 결정하지 않고 도구 호출 한도까지 검색했고, `keyword_search`를 주로 골랐습니다.
 이 확인 뒤 planner에 보이는 `top_k` 상한을 요청 값으로 맞췄습니다. 이는 동작 확인이며 Gold Set 품질 평가가 아닙니다.
+프롬프트 버전 관리 추가 후 테스트 198개(PostgreSQL 통합 테스트 40개 포함)가 통과했습니다.
+홈서버 MLflow 3.18에 두 프롬프트를 `development` v1로 게시하고, 재게시 시 새 버전이 생기지 않으며
+내용 해시가 저장소 템플릿과 같은 것을 확인했습니다. dev 컨테이너에서 alias·버전 지정 조회,
+미등록 alias와 연결 불가 시 저장소 템플릿 사용·사유 기록, 없는 버전 지정의 실패(503),
+실험용 프로필 API와 Run의 `mlflow.linkedPrompts` 연결을 확인했습니다. 프롬프트를 바꾼 실제 유료 평가는 아직 실행하지 않았습니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.

@@ -83,7 +83,7 @@
   BM25는 인덱스 키가 가리키는 스냅샷·정책 청크로 프로세스 메모리에 만들고 별도 테이블에 저장하지 않는다.
   Kiwi 사용자 사전은 `apps/knowledge/src/elice_knowledge/data/bm25_user_words.tsv`로 관리하고 코드에 하드코딩하지 않는다.
   사전·토큰화 규칙·BM25 매개변수 변경은 내용 해시와 코드 식별자로 구분한다.
-- 개발 중에는 `PROMPT_VERSION`·`BM25_VERSION`·`CHUNKER_VERSION` 등 내부 버전 문자열을 올리지 않고,
+- 개발 중에는 `BM25_VERSION`·`CHUNKER_VERSION` 등 내부 버전 문자열을 올리지 않고,
   이전 구현과의 호환·마이그레이션 코드를 남기지 않는다. 버전 증가는 평가 기준을 고정하기로 결정한 뒤에 한다.
   검토된 Gold Set 평가·의미적 Judge와 엘리스클라우드 배포는 후속 작업이다.
 
@@ -187,6 +187,11 @@
 - 제출용 MLflow에는 평가 Dataset, 사용할 AI endpoint와 인증 설정, Prompt의 내용·버전 및
   필요한 alias를 구성한다. 서버별 ID가 달라도 동일한 데이터·Prompt·모델 설정인지 확인할 수 있게 한다.
   Prompt·endpoint 설정과 실제 추론·평가 실행 코드를 함께 연결하고, 실행 방법을 제공한다.
+- QA 프롬프트의 원본은 `apps/knowledge/src/elice_knowledge/data/prompts`의 저장소 템플릿이고,
+  `prompt register`로 각 MLflow 서버에 게시한다. 서버 간 직접 복사는 하지 않는다.
+  QA 프로필 생성 시 `PROMPT_ALIAS`를 버전·해시·원문으로 고정하고, MLflow를 사용할 수 없으면 저장소 템플릿을 쓰되 출처를 기록한다.
+  실험은 버전을 지정한 프로필로 하며 지정 버전은 대체하지 않는다. 평가는 Registry 프롬프트 프로필만 접수한다.
+  채택한 문구는 저장소 템플릿에 반영해 production과 내용을 일치시킨다. 프롬프트 문구를 코드 상수로 두지 않는다.
 - 제출 환경에서 Dataset·Prompt 조회, endpoint 호출과 소규모 평가가 연결되는지 검증한다.
   이는 홈서버에서 수행한 주요 실험과 구분해 기록한다.
 - 제출용 MLflow는 SQL backend를 사용한다. PostgreSQL의 MLflow 메타데이터는
