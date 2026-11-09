@@ -1,14 +1,16 @@
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from elice_knowledge.database import check_database
 from elice_knowledge.embedding import OllamaEmbedder
 from elice_knowledge.generation import GenerationError, GenerationNotConfigured, GenerationTimeout
 from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError, run_qa
+from elice_knowledge.service_api import mount_service
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import check_tracking
 
@@ -26,6 +28,18 @@ class Readiness(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     app = FastAPI(title="Elice Knowledge", version="0.1.0")
+
+    admin = mount_service(app, settings)
+
+    @app.middleware("http")
+    async def response_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["X-Frame-Options"] = "DENY"
+        if request.url.path.startswith(("/api/", "/qa")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/health/live")
     def live() -> dict[str, str]:
@@ -69,6 +83,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post(
         "/qa",
         response_model=QAResponse,
+        dependencies=[Depends(admin)],
         responses={
             502: {"description": "Generation failed or returned invalid output"},
             503: {"description": "Generation is not configured or retrieval is unavailable"},
@@ -86,5 +101,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse(status_code=502, content={"error": exc.code})
         except QARetrievalError:
             return JSONResponse(status_code=503, content={"error": "retrieval_unavailable"})
+
+    if settings.web_dist_dir.is_dir():
+        assets = settings.web_dist_dir / "_app"
+        if assets.is_dir():
+            app.mount("/_app", StaticFiles(directory=assets), name="web-assets")
+
+        @app.get("/{path:path}", include_in_schema=False)
+        def web(path: str):
+            if path.startswith(("api/", "health/")) or path == "qa":
+                raise HTTPException(status_code=404)
+            candidate = (settings.web_dist_dir / path).resolve()
+            if candidate.is_relative_to(settings.web_dist_dir.resolve()) and candidate.is_file():
+                return FileResponse(candidate)
+            if not path or path.startswith("c/"):
+                return FileResponse(settings.web_dist_dir / "index.html")
+            raise HTTPException(status_code=404)
 
     return app

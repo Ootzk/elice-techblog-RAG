@@ -9,6 +9,7 @@ from elice_knowledge.chunk_store import initialize_chunks
 from elice_knowledge.corpus_store import CorpusStore, initialize_corpus
 from elice_knowledge.documents import VersionDocuments
 from elice_knowledge.retrieval import initialize_retrieval
+from elice_knowledge.service_store import initialize_service
 from elice_knowledge.settings import Settings
 
 
@@ -27,12 +28,14 @@ def store(monkeypatch):
     monkeypatch.setattr("elice_knowledge.corpus_store.connect", isolated_connect)
     monkeypatch.setattr("elice_knowledge.chunk_store.connect", isolated_connect)
     monkeypatch.setattr("elice_knowledge.retrieval.connect", isolated_connect)
+    monkeypatch.setattr("elice_knowledge.service_store.connect", isolated_connect)
     version_documents = None
     try:
         with isolated_connect(None) as conn:
             initialize_corpus(conn)
             initialize_chunks(conn)
             initialize_retrieval(conn)
+            initialize_service(conn)
         settings = Settings(database_url=dsn)
         version_documents = VersionDocuments.postgres(settings, schema_name=schema)
         yield CorpusStore(settings, version_documents), isolated_connect

@@ -8,16 +8,19 @@ from elice_knowledge.chunk_store import run_chunking
 from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
 from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, profile_id
+from elice_knowledge.execution import execute
 from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
-from elice_knowledge.qa import QARequest, run_qa
 from elice_knowledge.retrieval import run_index, run_search
+from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
 
 
 def main():
     parser = argparse.ArgumentParser(description="Knowledge ingestion and infrastructure checks")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    worker = subparsers.add_parser("worker", help="Run durable chat/evaluation worker")
+    worker.add_argument("--once", action="store_true")
     subparsers.add_parser("init-db", help="Initialize connectivity and corpus tables")
     subparsers.add_parser("smoke", help="Check embedding, vector storage and MLflow")
     ingest = subparsers.add_parser("ingest", help="Collect and version Korean techblog articles")
@@ -49,17 +52,19 @@ def main():
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command == "worker":
+            from elice_knowledge.worker import run_worker
+
+            run_worker(settings, once=args.once)
+            return
         if args.command == "ask":
             stage = "qa"
-            result = run_qa(
-                settings,
-                QARequest(
-                    question=args.question,
-                    index_key=args.index_key,
-                    top_k=args.top_k,
-                ),
-            )
-            print(result.model_dump_json())
+            store = ServiceStore(settings)
+            key = store.active_profile(args.index_key, args.top_k)
+            output = execute(store, key, args.question)
+            if output["error"]:
+                raise ServiceError(output["error"])
+            print(json.dumps({**output["result"], "run_id": output["run_id"]}, ensure_ascii=False))
             return
         if args.command == "index":
             stage = "indexing"
@@ -119,7 +124,7 @@ def main():
     except Exception as exc:
         # Keep credentials/addresses out of CLI logs as well as HTTP responses.
         result = {"status": "error", "stage": stage, "error_type": type(exc).__name__}
-        if isinstance(exc, GenerationError):
+        if isinstance(exc, (GenerationError, ServiceError)):
             result["reason"] = exc.code
         if isinstance(exc, EmbeddingInputTooLong):
             result["reason"] = (

@@ -37,6 +37,20 @@ class Settings(BaseSettings):
         "max_completion_tokens"
     )
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
+    chat_access_code: SecretStr | None = None
+    evaluation_api_token: SecretStr | None = None
+    qa_active_index_key: str | None = None
+    chat_session_hours: int = Field(default=168, ge=1, le=720)
+    chat_requests_per_hour: int = Field(default=30, ge=1, le=1000)
+    chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
+    qa_history_pairs: int = Field(default=3, ge=0, le=10)
+    qa_history_tokens: int = Field(default=2048, ge=128, le=8192)
+    qa_worker_concurrency: int = Field(default=1, ge=1, le=8)
+    qa_build_revision: str = "development"
+    qa_build_dirty: bool = True
+    worker_lease_seconds: int = Field(default=300, ge=30, le=1800)
+    web_dist_dir: Path = Path("/app/web")
+    qa_mlflow_experiment_name: str = "elice-techblog-rag-evaluation"
 
     @field_validator("generation_base_url", "generation_api_key", "generation_model", mode="before")
     @classmethod

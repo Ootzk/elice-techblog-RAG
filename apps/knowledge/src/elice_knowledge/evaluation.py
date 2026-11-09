@@ -1,0 +1,205 @@
+"""Freeze MLflow Dataset inputs, execute shared QA, and record deterministic scores."""
+
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from psycopg.types.json import Jsonb
+
+from elice_knowledge.corpus import digest
+from elice_knowledge.execution import execute
+from elice_knowledge.qa import QARequest
+from elice_knowledge.service_store import ServiceError
+from elice_knowledge.tracking import client as tracking_client
+
+SCORER = {
+    "name": "evidence-v1",
+    "evidence": "url-and-normalized-verbatim-quote",
+    "answerability": "answered-status-vs-expected",
+    "version": 1,
+}
+SCORER_KEY = digest(SCORER)
+
+
+def dataset_snapshot(settings, dataset_id):
+    import mlflow
+
+    if not settings.mlflow_enabled or not settings.mlflow_tracking_uri:
+        raise ServiceError("evaluation_tracking_not_configured", 503)
+    # EvaluationDataset.records lazily uses MLflow's active tracking store.
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri.get_secret_value())
+    dataset = tracking_client(settings).get_dataset(dataset_id)
+    records = []
+    for record in dataset.records:
+        # Only inputs are validated as QA input. Expectations never enter QA.
+        request = QARequest(index_key="0" * 64, **record.inputs)
+        expected = record.expectations or {}
+        if type(expected.get("answerable")) is not bool:
+            raise ServiceError("dataset_requires_answerable_expectation", 422)
+        evidence = expected.get("evidence", [])
+        if (
+            not isinstance(evidence, list)
+            or any(
+                not isinstance(e, dict) or not e.get("url") or not str(e.get("quote", "")).strip()
+                for e in evidence
+            )
+            or (expected["answerable"] and not evidence)
+        ):
+            raise ServiceError("dataset_requires_evidence_quotes", 422)
+        records.append(
+            {
+                "id": str(record.dataset_record_id),
+                "inputs": {
+                    "question": request.question,
+                    "history": [m.model_dump() for m in request.history],
+                },
+                "expectations": expected,
+            }
+        )
+    records.sort(key=lambda item: item["id"])
+    if not records:
+        raise ServiceError("empty_dataset", 422)
+    if len({r["id"] for r in records}) != len(records):
+        raise ServiceError("duplicate_dataset_record", 422)
+    return {
+        "dataset_id": dataset_id,
+        "name": dataset.name,
+        "digest": digest(records),
+        "records": records,
+    }
+
+
+def enqueue_evaluation(store, request):
+    store.profile(request.qa_profile_key)
+    if request.scorer_profile_key != SCORER_KEY:
+        raise ServiceError("unknown_scorer_profile", 422)
+    snapshot = dataset_snapshot(store.settings, request.dataset_id)
+    if request.dataset_digest != snapshot["digest"]:
+        raise ServiceError("dataset_digest_changed", 409)
+    records = snapshot["records"]
+    if request.record_ids is not None:
+        wanted = set(request.record_ids)
+        if not wanted or not wanted.issubset({r["id"] for r in records}):
+            raise ServiceError("invalid_record_selection", 422)
+        records = [r for r in records if r["id"] in wanted]
+    if len(records) > 200:
+        raise ServiceError("evaluation_too_large", 422)
+    job_id = uuid4()
+    with store.connection() as conn:
+        conn.execute(
+            "INSERT INTO qa_jobs(id,kind,subject_id,payload) VALUES (%s,'evaluation',%s,%s)",
+            (
+                job_id,
+                job_id,
+                Jsonb({"profile_key": request.qa_profile_key, "scorer_key": SCORER_KEY}),
+            ),
+        )
+        conn.execute(
+            """INSERT INTO evaluation_runs(id,dataset_id,dataset_digest,profile_key,records)
+            VALUES (%s,%s,%s,%s,%s)""",
+            (
+                job_id,
+                request.dataset_id,
+                request.dataset_digest,
+                request.qa_profile_key,
+                Jsonb(records),
+            ),
+        )
+    return str(job_id)
+
+
+def score(result, expectations):
+    answerable = result["status"] == "answered"
+    values = {"answerability_correct": float(answerable == expectations["answerable"])}
+    evidence = expectations.get("evidence", [])
+
+    def url(value):
+        p = urlsplit(value)
+        return p.netloc.lower(), p.path.rstrip("/")
+
+    if evidence:
+        retrieved = result.get("retrieved_sources", [])
+        values["evidence_recall_at_k"] = sum(
+            any(
+                url(e["url"]) == url(s["url"])
+                and " ".join(e["quote"].split()) in " ".join(s["text"].split())
+                for s in retrieved
+            )
+            for e in evidence
+        ) / len(evidence)
+    return values
+
+
+def run_evaluation(store, job):
+    with store.connection() as conn:
+        evaluation = conn.execute(
+            "SELECT * FROM evaluation_runs WHERE id=%s", (job["id"],)
+        ).fetchone()
+    tracking = tracking_client(store.settings)
+    experiment = tracking.get_experiment_by_name(store.settings.qa_mlflow_experiment_name)
+    exp_id = (
+        experiment.experiment_id
+        if experiment
+        else tracking.create_experiment(store.settings.qa_mlflow_experiment_name)
+    )
+    run_id = tracking.create_run(
+        exp_id, tags={"mlflow.runName": "dataset-qa", "activity": "evaluation"}
+    ).info.run_id
+    with store.connection() as conn:
+        conn.execute("UPDATE evaluation_runs SET mlflow_run_id=%s WHERE id=%s", (run_id, job["id"]))
+    try:
+        for key, value in {
+            "dataset_id": evaluation["dataset_id"],
+            "dataset_digest": evaluation["dataset_digest"],
+            "qa_profile_key": evaluation["profile_key"],
+            "scorer_key": SCORER_KEY,
+            "history_mode": "provided",
+        }.items():
+            tracking.log_param(run_id, key, value)
+        tracking.log_dict(run_id, store.profile(evaluation["profile_key"]), "qa-profile.json")
+        cases = []
+        for record in evaluation["records"]:
+            store.heartbeat(job, f"evaluating:{len(cases)}/{len(evaluation['records'])}")
+            output = execute(store, evaluation["profile_key"], **record["inputs"])
+            scores = score(output["result"], record["expectations"]) if not output["error"] else {}
+            case = {"record_id": record["id"], **output, "scores": scores}
+            with store.connection() as conn:
+                conn.execute(
+                    """INSERT INTO evaluation_cases
+                    (evaluation_id,record_id,run_id,status,result,scores,error)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                    (
+                        job["id"],
+                        record["id"],
+                        output["run_id"],
+                        "failed" if output["error"] else "completed",
+                        Jsonb(output),
+                        Jsonb(scores),
+                        output["error"],
+                    ),
+                )
+            cases.append(case)
+        failed = sum(bool(c["error"]) for c in cases)
+        summary = {
+            "cases": len(cases),
+            "completed": len(cases) - failed,
+            "failed": failed,
+            "failure_rate": failed / len(cases),
+            "mlflow_run_id": run_id,
+        }
+        for name in {k for c in cases for k in c["scores"]}:
+            values = [c["scores"][name] for c in cases if name in c["scores"]]
+            summary[name] = sum(values) / len(values)
+            summary[name + "_scored_cases"] = len(values)
+        tracking.log_dict(run_id, {"summary": summary, "cases": cases}, "evaluation-results.json")
+        for name, value in summary.items():
+            if isinstance(value, (int, float)):
+                tracking.log_metric(run_id, name, value)
+        tracking.set_terminated(run_id, "FAILED" if failed else "FINISHED")
+        with store.connection() as conn:
+            conn.execute(
+                "UPDATE evaluation_runs SET summary=%s WHERE id=%s", (Jsonb(summary), job["id"])
+            )
+        return summary
+    except Exception:
+        tracking.set_terminated(run_id, "FAILED")
+        raise
