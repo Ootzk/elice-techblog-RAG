@@ -63,6 +63,9 @@ export function errorText(error: unknown): string {
 					review_bundle_unavailable_or_invalid: '검수할 답변 묶음이 없거나 유효하지 않습니다.',
 					review_answer_changed: '평가 대상이 일치하지 않습니다. 질문을 다시 불러와 주세요.',
 					review_already_submitted: '이미 제출한 평가입니다. 저장된 내용을 다시 불러와 주세요.',
+					review_draft_conflict:
+						'다른 탭에서 초안을 수정했습니다. 입력을 복사해 둔 뒤 서버 초안을 불러와 주세요.',
+					review_no_answers: '이 평가 실행에는 검수 가능한 답변이 없습니다.',
 					review_dimensions_mismatch: '모든 평가 항목을 입력해 주세요.',
 					review_invalid_applicability: '해당 없음의 적용 조건을 확인해 주세요.',
 					reviewer_inactive: '사용 가능한 로그인 코드에만 검수를 배정할 수 있습니다.',

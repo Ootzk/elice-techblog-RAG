@@ -1,17 +1,20 @@
 """Real PostgreSQL/auth boundaries, frozen answers, and a mocked MLflow artifact store."""
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.types.json import Jsonb
 from pydantic import SecretStr
 from test_chat_service import browser
 from test_chat_service import service as service  # noqa: F401
 
 from elice_knowledge.agreement import analyze
 from elice_knowledge.evaluation_bundle import create_bundle
+from elice_knowledge.human_review import HumanReview, initialize_reviews
 from elice_knowledge.main import create_app
 
 RUN = "a1" * 16
@@ -104,7 +107,7 @@ def review(service, monkeypatch):
     service.settings.mlflow_enabled = True
     monkeypatch.setattr("elice_knowledge.human_review.client", lambda _: tracking)
     admin = browser(service, "test-admin-login-code")
-    assert admin.post("/api/admin/reviews", json={"run_id": RUN}).status_code == 201
+    assert admin.post("/api/reviews", json={"run_id": RUN}).status_code == 201
     return SimpleNamespace(
         service=service, admin=admin, tracking=tracking, bundle=bundle, writes=writes
     )
@@ -123,48 +126,57 @@ def submission(case):
     }
 
 
-def test_assigned_review_is_blind_and_code_owned(review):
+def test_review_is_self_started_blind_and_code_owned(review):
     admin, service = review.admin, review.service
     anonymous = TestClient(create_app(service.settings))
     assert anonymous.get("/api/reviews").status_code == 401
     guest = browser(service, service.test_guest_code)
     assert guest.get("/api/reviews").json()["items"] == []
-    assert guest.get(f"/api/reviews/{RUN}/cases/0").status_code == 404
-    assert guest.post("/api/admin/reviews", json={"run_id": RUN}).status_code == 403
-    reviewer_id = guest.get("/api/auth/session").json()["identity"]["id"]
+    assert guest.get(f"/api/reviews/{RUN}/rounds/1/cases/0").status_code == 404
+    assert guest.post("/api/reviews", json={"run_id": RUN}).json()["round"] == 1
+    # A browser cannot pick or impersonate another reviewer.
+    assert (
+        guest.post(
+            "/api/reviews", json={"run_id": RUN, "reviewer_id": str(service.test_admin_id)}
+        ).status_code
+        == 422
+    )
     assert (
         admin.post(
-            f"/api/admin/reviews/{RUN}/assignments", json={"reviewer_id": reviewer_id}
+            f"/api/admin/reviews/{RUN}/assignments",
+            json={"reviewer_id": str(service.test_admin_id)},
         ).status_code
-        == 201
+        == 404
     )
     source = guest.get("/api/reviews").json()["items"][0]
     assert source["total"] == 2 and source["completed"] == 0
-    case = guest.get(f"/api/reviews/{RUN}/cases/0").json()
+    case = guest.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
     encoded = json.dumps(case)
     assert "HIDDEN" not in encoded
     assert case["dimensions"][2]["outputs"]["generation_sources"][0]["text"] == "최종 생성 근거"
     assert case["dimensions"][2].get("expectations") is None
-    assert guest.post(f"/api/reviews/{RUN}/cases/0", json=submission(case)).status_code == 200
+    assert (
+        guest.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=submission(case)).status_code == 200
+    )
     # The admin's packet cannot reveal the guest's assessment.
-    assert admin.get(f"/api/reviews/{RUN}/cases/0").json()["saved"] is None
-    assert admin.get(f"/api/reviews/{RUN}/labels").json()["labels"] == []
+    assert admin.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()["saved"] is None
+    assert admin.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"] == []
 
 
 def test_submit_is_atomic_immutable_and_idempotent(review):
     client = review.admin
-    case = client.get(f"/api/reviews/{RUN}/cases/0").json()
+    case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
     body = submission(case)
     wrong = {**body, "answer_digest": "0" * 64}
-    assert client.post(f"/api/reviews/{RUN}/cases/0", json=wrong).status_code == 409
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=wrong).status_code == 409
     incomplete = {**body, "scores": {"correctness": body["scores"]["correctness"]}}
-    assert client.post(f"/api/reviews/{RUN}/cases/0", json=incomplete).status_code == 422
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=incomplete).status_code == 422
     assert client.get("/api/reviews").json()["items"][0]["completed"] == 0
-    assert client.post(f"/api/reviews/{RUN}/cases/0", json=body).status_code == 200
-    assert client.post(f"/api/reviews/{RUN}/cases/0", json=body).status_code == 200
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=body).status_code == 200
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=body).status_code == 200
     body["scores"]["correctness"]["label"] = "fail"
-    assert client.post(f"/api/reviews/{RUN}/cases/0", json=body).status_code == 409
-    labels = client.get(f"/api/reviews/{RUN}/labels").json()["labels"]
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=body).status_code == 409
+    labels = client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"]
     assert len(labels) == 4 and labels[0]["label"] == "pass"
     # Re-login under the same code resumes the first unanswered question.
     again = browser(review.service, "test-admin-login-code")
@@ -174,33 +186,39 @@ def test_submit_is_atomic_immutable_and_idempotent(review):
 
 def test_applicability_validation_and_csrf(review):
     client = review.admin
-    case = client.get(f"/api/reviews/{RUN}/cases/1").json()
+    case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/1").json()
     body = submission(case)
     assert body["scores"]["correctness"]["label"] == "not_applicable"
     body["scores"]["correctness"]["label"] = "pass"
-    assert client.post(f"/api/reviews/{RUN}/cases/1", json=body).status_code == 422
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/1", json=body).status_code == 422
     body = submission(case)
     body["scores"]["relevance"]["rationale"] = "  "
-    assert client.post(f"/api/reviews/{RUN}/cases/1", json=body).status_code == 422
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/cases/1", json=body).status_code == 422
     csrf = client.headers.pop("x-csrf-token")
-    assert client.post(f"/api/reviews/{RUN}/cases/1", json=submission(case)).status_code == 403
+    assert (
+        client.post(f"/api/reviews/{RUN}/rounds/1/cases/1", json=submission(case)).status_code
+        == 403
+    )
     client.headers["x-csrf-token"] = csrf
-    assert client.post(f"/api/reviews/{RUN}/cases/1", json=submission(case)).status_code == 200
-    assert client.get(f"/api/reviews/{RUN}/cases/-1").status_code == 404
-    assert client.get(f"/api/reviews/{RUN}/cases/2").status_code == 404
+    assert (
+        client.post(f"/api/reviews/{RUN}/rounds/1/cases/1", json=submission(case)).status_code
+        == 200
+    )
+    assert client.get(f"/api/reviews/{RUN}/rounds/1/cases/-1").status_code == 404
+    assert client.get(f"/api/reviews/{RUN}/rounds/1/cases/2").status_code == 404
 
 
 def test_sync_failure_preserves_labels_and_retry_uses_source_run(review):
     client = review.admin
-    case = client.get(f"/api/reviews/{RUN}/cases/0").json()
-    client.post(f"/api/reviews/{RUN}/cases/0", json=submission(case))
+    case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
+    client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=submission(case))
     review.tracking.fail = True
-    response = client.post(f"/api/reviews/{RUN}/sync")
+    response = client.post(f"/api/reviews/{RUN}/rounds/1/sync")
     assert response.status_code == 503 and "secret" not in response.text
-    assert client.get(f"/api/reviews/{RUN}/cases/0").json()["saved"]["synced"] is False
+    assert client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()["saved"]["synced"] is False
     review.tracking.fail = False
-    assert client.post(f"/api/reviews/{RUN}/sync").json() == {"synced": 1}
-    assert client.post(f"/api/reviews/{RUN}/sync").json() == {"synced": 0}
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json() == {"synced": 1}
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json() == {"synced": 0}
     assert len(review.writes) == 1
     run_id, artifact, path = review.writes[0]
     assert run_id == RUN and artifact["source_run_id"] == RUN
@@ -211,12 +229,12 @@ def test_sync_failure_preserves_labels_and_retry_uses_source_run(review):
 def test_import_rejects_changed_bundle_and_unrelated_experiment(review):
     run_id = "b2" * 16
     review.bundle["source_run_id"] = run_id
-    assert review.admin.post("/api/admin/reviews", json={"run_id": run_id}).status_code == 422
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 422
     review.tracking.get_run = lambda _: SimpleNamespace(
         info=SimpleNamespace(experiment_id="other", status="FINISHED"),
         data=SimpleNamespace(tags={"activity": "evaluation"}),
     )
-    assert review.admin.post("/api/admin/reviews", json={"run_id": run_id}).status_code == 409
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 409
 
 
 def test_review_html_requires_login(review, tmp_path):
@@ -260,23 +278,27 @@ def test_iron_rubric_is_frozen_and_labels_fit_agreement_analysis(review):
     )
     review.bundle.clear()
     review.bundle.update(bundle)
-    assert review.admin.post("/api/admin/reviews", json={"run_id": run_id}).status_code == 201
-    case = review.admin.get(f"/api/reviews/{run_id}/cases/0").json()
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 201
+    case = review.admin.get(f"/api/reviews/{run_id}/rounds/1/cases/0").json()
     assert [e["dimension"] for e in case["dimensions"]] == ["behavior"]
     body = submission(case)
     body["scores"]["behavior"]["label"] = "not_applicable"
-    assert review.admin.post(f"/api/reviews/{run_id}/cases/0", json=body).status_code == 422
+    assert (
+        review.admin.post(f"/api/reviews/{run_id}/rounds/1/cases/0", json=body).status_code == 422
+    )
     body["scores"]["behavior"]["label"] = "pass"
-    assert review.admin.post(f"/api/reviews/{run_id}/cases/0", json=body).status_code == 200
-    labels = review.admin.get(f"/api/reviews/{run_id}/labels").json()["labels"]
+    assert (
+        review.admin.post(f"/api/reviews/{run_id}/rounds/1/cases/0", json=body).status_code == 200
+    )
+    labels = review.admin.get(f"/api/reviews/{run_id}/rounds/1/labels").json()["labels"]
     assert analyze(bundle, labels)["source_run_id"] == run_id
     # Re-import is idempotent and never re-reads changed remote artifacts/rubrics.
     review.bundle["digest"] = "changed"
-    assert review.admin.post("/api/admin/reviews", json={"run_id": run_id}).status_code == 201
-    assert review.admin.get(f"/api/reviews/{run_id}/cases/0").json()["saved"] is not None
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 201
+    assert review.admin.get(f"/api/reviews/{run_id}/rounds/1/cases/0").json()["saved"] is not None
 
 
-def test_only_admin_can_list_candidates_and_expired_codes_cannot_review(review):
+def test_candidate_counts_are_personal_and_expired_codes_cannot_review(review):
     class Page(list):
         token = "next-page"
 
@@ -296,24 +318,21 @@ def test_only_admin_can_list_candidates_and_expired_codes_cannot_review(review):
         )
 
     review.tracking.search_runs = search_runs
-    response = review.admin.get("/api/admin/review-candidates?page_token=previous")
+    response = review.admin.get("/api/review-candidates?page_token=previous")
     assert response.status_code == 200 and response.json()["next_page_token"] == "next-page"
     assert seen[0][1]["page_token"] == "previous"
     guest = browser(review.service, review.service.test_guest_code)
-    assert guest.get("/api/admin/review-candidates").status_code == 403
+    data = guest.get("/api/review-candidates").json()["items"][0]
+    assert data["my_completed_rounds"] == 0 and data["my_rounds"] == []
+    assert "url" not in data and "run_name" not in data
     principal = guest.get("/api/auth/session").json()["identity"]["id"]
-    review.admin.post(f"/api/admin/reviews/{RUN}/assignments", json={"reviewer_id": principal})
+    assert guest.post("/api/reviews", json={"run_id": RUN}).status_code == 201
     with review.service.connection() as conn:
         conn.execute(
             "UPDATE access_codes SET expires_at=now()-interval '1 day' WHERE id=%s", (principal,)
         )
-    assert guest.get(f"/api/reviews/{RUN}/cases/0").status_code == 401
-    assert (
-        review.admin.post(
-            f"/api/admin/reviews/{RUN}/assignments", json={"reviewer_id": principal}
-        ).status_code
-        == 422
-    )
+    assert guest.get(f"/api/reviews/{RUN}/rounds/1/cases/0").status_code == 401
+    assert guest.post("/api/reviews", json={"run_id": RUN}).status_code == 401
 
 
 def test_origin_links_are_admin_only_and_strip_credentials(review):
@@ -330,3 +349,128 @@ def test_origin_links_are_admin_only_and_strip_credentials(review):
     guest = browser(review.service, review.service.test_guest_code)
     assert guest.get(f"/api/admin/reviews/{RUN}/origin").status_code == 403
     assert "url" not in guest.get("/api/reviews").text
+
+
+def finish_round(client, number, label="pass"):
+    for position in (0, 1):
+        path = f"/api/reviews/{RUN}/rounds/{number}/cases/{position}"
+        case = client.get(path).json()
+        body = submission(case)
+        for score in body["scores"].values():
+            if score["label"] != "not_applicable":
+                score["label"] = label
+        assert client.post(path, json=body).status_code == 200
+
+
+def test_repeated_rounds_start_blank_and_preserve_previous_labels_and_artifacts(review):
+    client = review.admin
+    # An unfinished round is resumed, rather than accidentally starting duplicates.
+    assert client.post("/api/reviews", json={"run_id": RUN}).json()["round"] == 1
+    finish_round(client, 1)
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()["synced"] == 2
+    assert client.post("/api/reviews", json={"run_id": RUN}).json()["round"] == 2
+    fresh = client.get(f"/api/reviews/{RUN}/rounds/2/cases/0").json()
+    assert fresh["saved"] is None and fresh["draft"] is None
+    finish_round(client, 2, label="fail")
+    assert client.post(f"/api/reviews/{RUN}/rounds/2/sync").json()["synced"] == 2
+    first = client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"]
+    second = client.get(f"/api/reviews/{RUN}/rounds/2/labels").json()["labels"]
+    assert first[0]["label"] == "pass" and second[0]["label"] == "fail"
+    assert {r["round"] for r in first} == {"1"}
+    assert {r["round"] for r in second} == {"2"}
+    report = analyze(review.bundle, first + second)
+    assert report["comparisons"]
+    assert all(row["comparison"] == "repeat_consistency" for row in report["comparisons"])
+    assert any("/round-1/" in path for _, _, path in review.writes)
+    assert any("/round-2/" in path for _, _, path in review.writes)
+    sources = client.get("/api/reviews").json()["items"]
+    assert len(sources) == 2 and all(r["completed"] == 2 and r["synced"] == 2 for r in sources)
+    guest = browser(review.service, review.service.test_guest_code)
+    assert guest.get(f"/api/reviews/{RUN}/rounds/2/labels").status_code == 404
+
+
+def test_concurrent_round_starts_create_only_one_active_round(review):
+    finish_round(review.admin, 1)
+    store = HumanReview(review.service)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: store.start(RUN, review.service.test_admin_id), range(2)))
+    assert [r["round"] for r in results] == [2, 2]
+    assert len(review.admin.get("/api/reviews").json()["items"]) == 2
+
+
+def test_round_counts_are_not_shared_between_reviewers(review):
+    class Page(list):
+        token = None
+
+    review.tracking.search_runs = lambda *a, **kw: Page([review.tracking.get_run(RUN)])
+    finish_round(review.admin, 1)
+    mine = review.admin.get("/api/review-candidates").json()["items"][0]
+    assert mine["my_completed_rounds"] == 1
+    guest = browser(review.service, review.service.test_guest_code)
+    other = guest.get("/api/review-candidates").json()["items"][0]
+    assert other["my_completed_rounds"] == 0 and other["my_rounds"] == []
+    assert "url" not in other
+    guest.post("/api/reviews", json={"run_id": RUN})
+    assert len(guest.get("/api/review-candidates").json()["items"][0]["my_rounds"]) == 1
+    assert review.admin.get("/api/review-candidates").json()["items"][0]["my_completed_rounds"] == 1
+
+
+def test_drafts_resume_are_private_and_reject_stale_tabs(review):
+    client = review.admin
+    path = f"/api/reviews/{RUN}/rounds/1/cases/0"
+    case = client.get(path).json()
+    body = submission(case)
+    body["scores"]["correctness"]["rationale"] = "작성 중인 메모"
+    body["scores"]["relevance"] = {"label": "", "rationale": ""}
+    body["revision"] = 0
+    first = client.put(path + "/draft", json=body)
+    assert first.status_code == 200 and first.json()["revision"] == 1
+    assert client.put(path + "/draft", json=body).status_code == 409
+    again = browser(review.service, "test-admin-login-code")
+    draft = again.get(path).json()["draft"]
+    assert draft["scores"]["correctness"]["rationale"] == "작성 중인 메모"
+    assert again.get(f"/api/reviews/{RUN}/rounds/1/progress").json()["items"][0]["draft"] is True
+    guest = browser(review.service, review.service.test_guest_code)
+    guest.post("/api/reviews", json={"run_id": RUN})
+    assert guest.get(path).json()["draft"] is None
+    assert client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"] == []
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()["synced"] == 0
+    final = submission(case)
+    assert client.post(path, json=final).status_code == 409
+    final["draft_revision"] = 1
+    assert client.post(path, json=final).status_code == 200
+    assert client.get(path).json()["draft"] is None
+    body["revision"] = 1
+    assert client.put(path + "/draft", json=body).status_code == 409
+
+
+def test_legacy_reviews_migrate_to_first_round_without_losing_labels(review):
+    client = review.admin
+    case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
+    client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=submission(case))
+    labels = client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"]
+    with review.service.connection() as conn:
+        conn.execute("DROP TABLE human_review_drafts")
+        conn.execute("DROP TABLE human_reviews")
+        conn.execute("DROP TABLE human_review_rounds")
+        conn.execute("""CREATE TABLE human_review_assignments (
+            run_id text REFERENCES human_review_sources(run_id),
+            reviewer_id uuid REFERENCES access_codes(id),
+            PRIMARY KEY(run_id,reviewer_id))""")
+        conn.execute(
+            "INSERT INTO human_review_assignments VALUES (%s,%s)",
+            (RUN, review.service.test_admin_id),
+        )
+        conn.execute("""CREATE TABLE human_reviews (
+            run_id text,reviewer_id uuid,record_id text, labels jsonb, synced boolean DEFAULT false,
+            created_at timestamptz DEFAULT now(),PRIMARY KEY(run_id,reviewer_id,record_id),
+            FOREIGN KEY(run_id,reviewer_id)
+            REFERENCES human_review_assignments(run_id,reviewer_id))""")
+        conn.execute(
+            "INSERT INTO human_reviews(run_id,reviewer_id,record_id,labels) VALUES (%s,%s,%s,%s)",
+            (RUN, review.service.test_admin_id, "r1", Jsonb(labels)),
+        )
+        initialize_reviews(conn)
+        initialize_reviews(conn)
+    assert client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"] == labels
+    assert client.get("/api/reviews").json()["items"][0]["completed"] == 1

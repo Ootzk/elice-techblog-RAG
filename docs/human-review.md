@@ -1,38 +1,49 @@
 # Human Review
 
-Human Review는 MLflow evaluation run에서 생성된 답변에 사람이 평가를 추가하는 기능이다.
-질의응답·Judge를 다시 호출하지 않고 저장된 질문·답변·근거를 검수한다.
-화면은 `/review`이며 기존 대화 화면과 로그인 코드 관리 화면에서 이동할 수 있다.
-Open WebUI에서 추출한 답변·인용 렌더러를 재사용하며 검수 UI·API는 자체 구현이다.
+Human Review는 MLflow evaluation run의 고정 답변에 사람이 평가를 추가하는 기능이다.
+`/review`에서 현재 로그인한 코드로만 검수한다. 검수자를 드롭다운으로 고르거나 다른 사람에게 배정하지 않는다.
+여러 사람이 참여하려면 각자 다른 코드로 로그인한다. 같은 코드를 공유하면 같은 사람으로 집계된다.
 
-## 사용 순서
+## 평가 실행과 내 검수 회차
 
-1. 새 버전의 `init-db`를 실행해 검수 테이블을 추가하고 새 API·프런트를 기동한다.
-   기존 테이블과 평가 결과를 지우지 않는다. dev 예시는 저장소 루트 기준이다.
+- **평가 실행**: RAG가 한 번 생성한 질문별 답변·근거 묶음이다. 여러 사람·회차가 같은 묶음을 검수할 수 있다.
+- **내 검수 회차**: 현재 로그인한 사람이 그 묶음 전체를 한 번 채점하는 작업이다.
+- **내 검수 N회 완료**: 생성 실패 문항을 제외한 모든 질문을 제출한 본인의 회차 수다. 일부만 제출한 회차는 진행 중으로 표시한다.
 
-   ```bash
-   docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml build knowledge
-   docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml run --rm --no-deps knowledge python -m elice_knowledge init-db
-   docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --no-build knowledge worker
-   ```
+화면의 평가 실행 목록에 데이터셋 이름·실행 시각·본인의 완료 횟수를 함께 표시한다.
+평가 실행을 선택하면 본인의 회차만 표시한다. 별도의 중복된 ‘내 검수 목록’은 두지 않는다.
+진행 중인 회차가 있으면 이어서 검수하며, 완료한 뒤 **새 회차로 다시 검수**로 반복 평가한다.
+중복 클릭으로 진행 중인 회차를 여러 개 만들지 않는다.
+새 회차에는 이전 점수·의견·초안을 채워 넣지 않는다. 이전 회차의 판정은 그 회차를 직접 열면 읽기 전용으로 확인할 수 있다.
 
-2. 관리자 코드로 로그인하고 **사람 검수 → MLflow 평가 실행 불러오기**를 선택한다.
-   `QA_MLFLOW_EXPERIMENT_NAME`에 해당하는 실험의 `activity=evaluation` run을 최신순으로 조회한다.
-   목록은 25개씩 더 불러올 수 있다. 별도의 MLflow 사용자 비밀번호나 브라우저용 API 키는 필요하지 않다.
-   데이터셋 이름·run 이름·실행 시각으로 구분하며 **MLflow 원본 run 열기**로 바로 이동할 수 있다.
-3. 종료된 run을 검수 목록에 추가한다. 원본 run의 `evaluation-bundle.json`을 가져와 해시·문항 연결을
-   검증하고 DB에 고정한다. 실패한 run도 유효한 bundle이 있으면 가져올 수 있지만 생성 실패 문항은 제외한다.
-   실행 중인 run, 다른 실험, bundle이 없거나 손상된 run은 가져오지 않는다.
-4. 관리자는 본인에게 자동 배정된 run을 검수하거나 기존 로그인 코드에 배정한다.
-   다른 검수자는 자신의 코드로 로그인하면 배정된 run만 본다. 코드 발급·연장·폐기는 기존 관리자 화면에서 한다.
-5. 질문·고정된 이전 대화·답변·인용을 읽고 항목별 탭에서 기준과 허용된 참고 자료를 확인한다.
-   모든 항목의 판정과 이유를 입력한 뒤 **저장하고 다음 질문**을 누른다.
-6. 중단 후 같은 코드로 돌아오면 저장된 결과를 유지하며 첫 미제출 질문부터 이어서 검수한다.
-   제출한 질문은 읽기 전용이다. 제출 전 입력은 질문 이동·새로고침 시 보존되지 않는다.
-7. **MLflow 동기화**로 저장한 판정을 원본 run에 반영한다. 연결이 실패해도 DB의 판정은 유지된다.
-   재시도는 아직 동기화되지 않은 문항만 처리하며 동일 artifact 경로를 사용한다.
-   관리자는 검수 중인 run 상단의 **MLflow 원본 run 열기 → Artifacts → human-review**에서 결과를 확인한다.
-   이 링크는 일반 검수자에게 표시하지 않으며 API도 관리자 인증을 요구한다.
+## 실행과 검수 흐름
+
+새 버전의 이미지와 검수 테이블을 준비한다. 기존 수집·평가 결과를 삭제하지 않는다.
+기존 단일 검수 기록은 각 사람의 1회차로 이관하며 판정·동기화 상태를 보존한다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml build knowledge
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml run --rm --no-deps knowledge python -m elice_knowledge init-db
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --no-build knowledge worker
+```
+
+1. 개인 코드로 로그인하고 **사람 검수**에 들어간다. MLflow의 `QA_MLFLOW_EXPERIMENT_NAME`에서
+   `activity=evaluation` 실행을 자동 조회한다. **새로고침**·검색·추가 페이지 조회를 지원한다.
+2. 실행을 선택하고 **1회차 검수 시작**을 누른다. 종료된 run의 `evaluation-bundle.json`을 검증해 DB에 고정한다.
+   실패·중단된 run도 유효한 bundle이 있으면 검수할 수 있으나 생성 실패 문항은 제외한다.
+3. 질문·고정된 이전 대화·답변·인용을 읽고 항목별 기준·참고 자료로 판정과 이유를 작성한다.
+   넓은 화면은 답변과 채점 영역을 나란히 보여주며 좁은 화면은 세로로 배치한다.
+4. 입력은 서버에 초안으로 자동 저장한다. 이동 전에도 저장을 마치며, 저장에 실패하면 이동을 멈추고 오류·재시도 상태를 표시한다.
+   다른 탭의 새 초안을 오래된 내용으로 덮어쓰지 않는다. 브라우저를 닫는 순간 아직 저장 중이라면 이탈 확인을 표시한다.
+5. 모든 항목을 작성한 뒤 **제출하고 다음 질문**을 누른다. 초안은 수정할 수 있지만 제출한 질문은 읽기 전용이다.
+   질문 번호로 자유롭게 이동하고, 재접속 시 첫 미제출 질문부터 이어서 검수할 수 있다.
+6. 모든 질문을 제출하면 해당 회차가 검수 완료로 집계된다. 동기화 완료 여부와는 구분한다.
+7. **MLflow 동기화**로 그 회차의 미동기화 판정을 원본 run에 기록한다. 실패 시 DB의 판정은 보존되고 다시 시도할 수 있다.
+8. 반복 평가하려면 **새 회차로 다시 검수**를 누른다. 답변이나 Judge를 다시 호출하지 않는다.
+
+MLflow 연결이 끊겨 목록을 갱신하지 못해도 이미 시작한 본인 회차는 DB의 고정 답변으로 검수할 수 있다.
+관리자는 **원본 실행 정보 → MLflow 원본 run 열기 → Artifacts → human-review**에서 동기화 결과를 확인한다.
+외부 MLflow 화면으로 연결하는 URL과 run 상세 이름은 일반 검수자에게 반환하지 않는다.
 
 ## 판정과 블라인드 범위
 
@@ -41,64 +52,66 @@ Open WebUI에서 추출한 답변·인용 렌더러를 재사용하며 검수 UI
 | Gold | 정확성·완전성·근거 충실도·응답 적절성 | 충족 / 미충족 / 해당 없음 |
 | Iron | 행동 준수 | 충족 / 미충족 |
 
-기존 Judge의 rubric과 `evaluation_row` 입력 구성을 재사용한다. Gold의 충족·미충족은 Judge의 yes/no,
-Iron의 충족·미충족은 Boolean true/false와 대응한다. 분석 파일에서는 pass/fail/not_applicable로 저장한다.
-정확성·완전성의 사전 적용 조건도 Judge와 공유한다. 적용되지 않는 항목은 해당 없음으로 고정한다.
-근거 충실도에서는 누적 검색 후보나 모범 답안 대신 **최종 생성에 실제 제공한 generation_sources**만 사용한다.
-Iron은 실행 근거가 있으면 도구 실행 내역도 확인한다. 기준 원문은 탭에서 펼쳐 볼 수 있다.
+Judge의 rubric·`evaluation_row` 입력·사전 적용 조건을 공유한다.
+분석 파일에는 pass/fail/not_applicable과 판정 근거를 기록하며, 적용 불가 항목은 해당 없음으로 고정한다.
+사실 주장이 없는 응답의 groundedness 등 동적 N/A는 rubric에 따라 판단한다.
 
-검수 API는 허용한 질문·답변·항목별 참고 자료와 **현재 코드의 제출 결과만** 반환한다.
-Judge 점수·의견, 다른 검수자 판정, 생성 모델 설정과 전체 bundle은 브라우저에 전달하지 않는다.
-이는 검수 화면의 블라인드 처리이며 MLflow 자체의 열람 권한을 제한하는 기능은 아니다.
-MLflow 관리자 권한을 가진 검수자는 별도로 점수를 열람할 수 있다. 답변 본문이 모델명을 직접 말하는 경우도
-자동으로 지우지 않는다. 신뢰도 실험 시 검수 전에 다른 평가를 보지 않는 절차를 함께 지켜야 한다.
+근거 충실도에는 최종 생성에 실제 제공한 `generation_sources` 전체를 보여주고, 답변에서 인용한 근거를 표시한다.
+일부 근거만으로 모든 중요한 사실 주장이 지지되어도 충족이다. 근거를 전부 사용할 필요는 없다.
+특정 번호를 인용했다면 그 번호의 근거가 해당 주장을 지지하는지도 확인한다.
+모범 답안·누적 검색 후보·외부 지식으로 부족한 생성 근거를 보충하지 않는다.
+필수 항목은 목록, 검증된 인용문은 원문 링크·인용 카드로 표시하며 내부 JSON은 기본 화면에 노출하지 않는다.
 
-run을 가져온 시점의 rubric·적용 조건·답변 해시를 저장하며 재가져오기로 바꾸지 않는다.
-원본 run의 Judge 버전과 현행 저장소 rubric이 달라진 경우 동일 기준이라고 간주하지 않는다.
-반복·버전 비교의 rubric 대조와 실험 단위 관리는 후속 고도화 범위다.
+API에는 현재 코드·선택 회차의 판정과 초안만 포함한다. Judge의 점수·의견과 다른 사람의 판정·회차·완료 횟수는 노출하지 않는다.
+실행을 가져온 시점의 답변·rubric·적용 조건·해시를 고정한다.
+원본 Judge 버전과 현행 rubric이 달라졌다면 동일 기준으로 간주하지 않는다.
 
-## 저장과 MLflow 연결
+블라인드는 검수 UI/API의 처리 범위다. MLflow 관리자 권한으로 외부 화면을 열거나 이전 본인 회차를 직접 읽는 행동까지 막지 않는다.
+반복 일관성 실험에서는 이전 평가를 보지 않고 독립적으로 채점하는 절차를 함께 지켜야 한다.
+답변 본문에 포함된 모델명 등은 자동 삭제하지 않는다.
 
-- `human_review_sources`: 원본 MLflow run ID, 고정 bundle과 검수용 packet. 새 평가 run을 만들지 않는다.
-- `human_review_assignments`: run별 검수자 코드 ID. 코드가 만료·폐기되면 기존 인증 규칙에 따라 접근이 차단된다.
-- `human_reviews`: run·검수자·문항별 labels와 동기화 상태. 질문 전체를 한 트랜잭션으로 제출한다.
+## 저장과 분석
 
-같은 요청 재전송은 성공으로 처리하지만, 이미 제출한 판정을 다른 내용으로 덮어쓰면 409를 반환한다.
-브라우저가 보낸 답변 해시가 서버와 다르면 저장하지 않는다. 이 정책으로 탭 중복 제출과 대상 혼동을 방지한다.
+- `human_review_sources`: 원본 run별 고정 bundle·검수 packet. 별도 MLflow 평가 run을 만들지 않는다.
+- `human_review_rounds`: 원본 run·검수자 코드·회차 번호와 시작 시각.
+- `human_review_drafts`: 회차·문항별 가변 초안과 충돌 방지 revision. 채점·완료 횟수·MLflow 동기화에 포함하지 않는다.
+- `human_reviews`: 회차·문항별 불변 제출 labels·동기화 상태. 질문 전체를 한 트랜잭션으로 저장한다.
 
-동기화 경로는 원본 run의 `human-review/<검수자 코드 ID>/<문항 ID 해시>.json`이다.
-원본 run·bundle 해시와 분석용 labels를 기록한다. 현재 동기화는 **run artifact**이며 MLflow의 native
-Trace Feedback를 새로 생성하거나 Judge 점수를 수정하지 않는다. DB 저장 성공과 MLflow 동기화 성공은 별도 표시한다.
+세션이 검수자 신원을 결정한다. 요청 본문으로 다른 검수자를 선택할 수 없다.
+코드 만료·폐기는 기존 인증 규칙에 따라 검수 접근도 차단한다.
+같은 최종 제출의 재전송은 성공 처리하며, 내용이 다른 덮어쓰기는 409다.
+답변 해시나 초안 revision이 맞지 않는 요청도 저장하지 않는다.
 
-**내 평가 JSONL 내려받기**는 기존 `tools/evaluation/review.py analyze --human-labels`와 호환된다.
-기존 재채점 run ID들을 함께 지정하면 같은 답변의 Judge–사람 비교를 수행할 수 있다.
-한 코드를 공유하면 한 검수자로 취급되므로 독립 평가자는 각자 다른 코드를 사용한다.
-사람의 재검수 라운드·제출 수정·실험 비교 대시보드는 현재 제공하지 않는다.
+동기화 경로는 원본 run의 `human-review/<검수자 코드 ID>/round-<회차>/<문항 ID 해시>.json`이다.
+각 labels의 `rater`는 코드별로 고정하고 `round`는 실제 회차 번호로 기록한다.
+이전 회차의 파일을 덮어쓰지 않는다. 기존 단일 회차에서 이미 동기화한 파일도 보존한다.
+현재 동기화는 run artifact이며 native Trace Feedback나 Judge 점수 표를 수정하지 않는다.
+
+**내 판정 내려받기**로 선택 회차를 JSONL로 받는다. 여러 회차 파일을 기존
+`tools/evaluation/review.py analyze --human-labels`에 함께 전달하면 동일인의 회차 간 일치율·κ 분석에 사용할 수 있다.
+Judge 재채점 run들도 함께 지정해 Judge–사람 비교를 할 수 있다. 실제 반복 검수·사람 정합성 결과가 이미 확보되었다는 뜻은 아니다.
 
 ## API
 
-모든 웹 API는 기존 HttpOnly 세션을 사용하며 상태 변경은 CSRF와 origin을 검사한다.
-평가 실행용 Bearer 토큰만으로 검수자 신원을 대신하지 않는다.
+모든 검수 API는 HttpOnly 세션을 사용하고 상태 변경은 CSRF와 origin을 검사한다.
+평가 실행용 Bearer 토큰만으로 검수자를 대신하지 않는다.
 
-| 경로 | 권한·역할 |
+| 경로 | 역할 |
 | --- | --- |
-| `GET /api/admin/review-candidates` | 관리자: MLflow 평가 run 목록, page_token 페이지 조회 |
-| `POST /api/admin/reviews` | 관리자: run_id로 고정 bundle 가져오기 |
-| `GET /api/admin/reviews/{run}/origin` | 관리자: 원본 run 이름·데이터셋 이름·시각·MLflow 링크 |
-| `POST /api/admin/reviews/{run}/assignments` | 관리자: reviewer_id에 배정 |
-| `GET /api/reviews` | 본인에게 배정된 run과 진행 상황 |
-| `GET /api/reviews/{run}/cases/{position}` | 배정된 run의 0부터 시작하는 질문과 본인 판정 |
-| `POST /api/reviews/{run}/cases/{position}` | answer_digest·scores 제출 |
-| `GET /api/reviews/{run}/labels` | 본인의 분석용 labels |
-| `POST /api/reviews/{run}/sync` | 본인의 미동기화 판정을 원본 MLflow run에 기록 |
+| `GET /api/review-candidates` | 로그인 사용자: 평가 실행·본인 완료 횟수·회차 목록, 페이지 조회 |
+| `POST /api/reviews` | 로그인 사용자: run_id의 본인 새 회차 시작 또는 진행 회차 반환 |
+| `GET /api/reviews` | 본인 회차 목록과 문항별 집계 상태 |
+| `GET /api/admin/reviews/{run}/origin` | 관리자: 원본 run 이름·시각·외부 URL |
+| `GET /api/reviews/{run}/rounds/{round}/progress` | 본인 회차의 문항별 제출·초안·동기화 여부 |
+| `GET /api/reviews/{run}/rounds/{round}/cases/{position}` | 고정 문항과 본인 회차의 판정·초안 |
+| `PUT /api/reviews/{run}/rounds/{round}/cases/{position}/draft` | 답변 해시·revision·미완성 scores로 초안 저장 |
+| `POST /api/reviews/{run}/rounds/{round}/cases/{position}` | 답변 해시·scores·draft_revision으로 최종 제출 |
+| `GET /api/reviews/{run}/rounds/{round}/labels` | 본인 해당 회차의 분석용 labels |
+| `POST /api/reviews/{run}/rounds/{round}/sync` | 본인 해당 회차의 미동기화 판정 기록 |
 
 ## 검증 범위
 
-PostgreSQL 통합 테스트에서 코드별 배정·CSRF·만료·블라인드 응답·적용 조건·원자적 제출·중복 제출·재로그인 복원·
-동기화 실패 후 재시도·artifact 연결·분석 파일 호환성을 검증한다. 모델 호출과 MLflow 쓰기는 mock으로 대체한다.
-실제 전수 평가·사람 검수는 이 테스트에 포함하지 않는다.
-
-이번 구현에서는 격리 PostgreSQL을 포함한 앱 테스트와 Python lint·format·lock 검사,
-Web 포맷·타입 검사·정적 빌드를 통과했다. 실제 홈서버 MLflow에서 평가 run 1개와 고정 답변 1개·4차원을
-임시 로컬 DB로 가져오는 읽기 연동도 확인했다. 원격에 테스트 사람 판정을 기록하지 않았다.
-연결 가능한 브라우저가 없어 화면의 직접 클릭·시각 검증은 미수행이다.
+격리 PostgreSQL에서 로그인 신원·회차별 격리·개인별 횟수·중복 시작·블라인드 응답·CSRF·만료·적용 조건·불변 제출·
+초안 복원/충돌·동기화 재시도·회차별 artifact·분석 파일 호환성·기존 판정의 1회차 이관을 검증한다.
+테스트의 모델 호출·MLflow 쓰기는 mock이다. 실제 홈서버의 run/bundle 읽기 연동과 개발 컨테이너 API 기동도 구분해서 확인한다.
+연결 가능한 브라우저가 없어 직접 클릭·시각 검증은 미수행이다.
