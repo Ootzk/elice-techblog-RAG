@@ -14,8 +14,10 @@ Docker Compose가 있으면 아래 명령으로 실행할 수 있습니다. 이�
 ```bash
 cp .env.dev.example .env.dev
 # 아래 설명에 따라 .env.dev의 비밀번호와 홈서버 접속 설정을 입력합니다.
-docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up --build -d
-docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge init-db
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d postgres
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml build knowledge
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml run --rm --no-deps knowledge python -m elice_knowledge init-db
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --no-deps knowledge worker
 ```
 
 `compose.yaml`은 prod용 기본 구성으로 Knowledge 서비스를 정의합니다. `compose.dev.yaml`을 함께 사용하면
@@ -46,6 +48,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | 변수 | 용도 |
 | --- | --- |
 | `APP_ENV` | `dev` 또는 `prod`; Compose 기본 구성은 `prod`, dev override는 `dev`로 지정하며 접속 주소를 자동 선택하지 않음 |
+| `KNOWLEDGE_IMAGE` | 필수 이미지 이름. prod는 발행된 버전 태그/digest, dev는 로컬 build 이미지 |
 | `KNOWLEDGE_ENV_FILE` | 컨테이너에 전달할 환경 파일; prod는 `.env`, dev는 `.env.dev` |
 | `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
 | `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
@@ -78,14 +81,18 @@ DB 생성 후 `.env.dev`의 비밀번호만 바꾸면 기존 DB 비밀번호는 
 prod(엘리스클라우드 배포용)는 `compose.yaml`과 `.env`를 사용하며 파일명에 `prod`를 붙이지 않습니다.
 dev는 `compose.dev.yaml`을 덧씌우고 `.env.dev`를 사용합니다.
 prod 설정은 `.env.example`에서 별도로 복사합니다.
-이 예시는 Ollama 프로토콜용이며 실제 엘리스 추론 API 어댑터·배포는 아직 구현하지 않았습니다.
+임베딩 예시는 Ollama 프로토콜용이며, 다른 엘리스 ML API의 임베딩 어댑터와 실제 클라우드 배포는 아직 검증하지 않았습니다. 생성 모델은 별도의 Serverless 어댑터로 연결합니다.
 
 ```bash
 cp .env.example .env
-# 제출 환경 접속 주소와 인증정보를 입력한 뒤 실행합니다.
-docker compose up --build -d
-docker compose exec knowledge python -m elice_knowledge init-db
+# v0.1.0 이미지 발행을 확인하고 제출 환경 접속 주소·인증정보를 입력합니다.
+docker compose --env-file .env -f compose.yaml pull knowledge worker
+docker compose --env-file .env -f compose.yaml run --rm --no-deps knowledge python -m elice_knowledge init-db
+docker compose --env-file .env -f compose.yaml up -d --no-build knowledge worker
 ```
+
+패키지·lockfile 버전 갱신, CI/CD·GHCR 발행, 최초 배포·검증 순서는 [릴리스 문서](docs/release.md)에 정리했습니다.
+현재 Knowledge와 Web은 통합 릴리스 `0.1.0`을 사용하고 API와 worker는 같은 이미지를 실행합니다.
 
 개발 주소로 자동 fallback하지 않습니다. 환경 파일·홈서버 주소·키를 이미지나 보고서에 포함하지 않습니다.
 
