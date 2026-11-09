@@ -268,12 +268,20 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
 
     monkeypatch.setattr("elice_knowledge.execution.run_qa", answer)
 
+    links, params = [], {}
+
     class Tracking:
         def get_experiment_by_name(self, *a):
             return SimpleNamespace(experiment_id="experiment")
 
         def create_run(self, *a, **kw):
             return SimpleNamespace(info=SimpleNamespace(run_id="mlflow-run"))
+
+        def link_prompt_version_to_run(self, run_id, uri):
+            links.append((run_id, uri))
+
+        def log_param(self, run_id, key, value):
+            params[key] = value
 
         def __getattr__(self, name):
             return lambda *a, **kw: None
@@ -289,6 +297,8 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     records[0]["inputs"]["question"] = "changed after snapshot"
     assert process_one(service)
     assert calls[0]["question"] == "Q" and "GOLD" not in str(calls)
+    assert sorted(uri for _, uri in links) == sorted(f"prompts:/{n}/1" for n in PROMPT_NAMES)
+    assert params[f"prompt.{PROMPT_NAMES[0]}.digest"] == bundled(PROMPT_NAMES[0]).digest
     client = TestClient(
         create_app(service.settings), headers={"Authorization": "Bearer test-admin"}
     )
@@ -583,3 +593,47 @@ def test_revoked_admin_does_not_return_when_bootstrap_is_repeated(service):
         service.login(original.get_secret_value(), "test-admin-revoked")
     _, _, owner = service.login("additional-admin-login-code", "test-admin-active")
     assert owner["role"] == "admin"
+
+
+def test_evaluation_rejects_profiles_resolved_from_bundled_prompts(service):
+    config = {"prompts": {n: bundled(n, "registry_unavailable").model_dump() for n in PROMPT_NAMES}}
+    with service.connection() as conn:
+        base = conn.execute("SELECT config FROM qa_profiles WHERE key=%s", (PROFILE,)).fetchone()
+        conn.execute(
+            "INSERT INTO qa_profiles(key,config) VALUES (%s,%s)",
+            ("c" * 64, Jsonb({**base["config"], **config})),
+        )
+    request = EvaluationRequest(
+        dataset_id="dataset",
+        dataset_digest="d" * 64,
+        qa_profile_key="c" * 64,
+        scorer_profile_key=SCORER_KEY,
+    )
+    with pytest.raises(ServiceError) as error:
+        enqueue_evaluation(service, request)
+    assert error.value.code == "evaluation_requires_registry_prompts"
+    assert error.value.status == 409
+
+
+def test_experiment_profile_api_pins_prompt_selectors(service, monkeypatch):
+    seen = []
+
+    def active(self, index_key=None, top_k=5, prompt_selectors=None):
+        seen.append((index_key, top_k, prompt_selectors))
+        return PROFILE
+
+    monkeypatch.setattr(ServiceStore, "active_profile", active)
+    client = TestClient(
+        create_app(service.settings), headers={"Authorization": "Bearer test-admin"}
+    )
+    body = {"top_k": 3, "prompts": {PROMPT_NAMES[0]: "7"}}
+    response = client.post("/api/qa-profiles", json=body)
+    assert response.status_code == 201 and response.json()["key"] == PROFILE
+    assert seen == [(None, 3, {PROMPT_NAMES[0]: "7"})]
+    summary = response.json()["prompts"][PROMPT_NAMES[0]]
+    assert summary["source"] == "registry" and "template" not in summary
+    assert client.post("/api/qa-profiles", json={"unexpected": 1}).status_code == 422
+    assert (
+        TestClient(create_app(service.settings)).post("/api/qa-profiles", json={}).status_code
+        == 401
+    )

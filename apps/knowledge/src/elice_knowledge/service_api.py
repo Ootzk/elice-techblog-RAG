@@ -44,6 +44,15 @@ class EvaluationRequest(BaseModel):
     history_mode: str = Field(default="provided", pattern="^provided$")
 
 
+class ProfileRequest(BaseModel):
+    """An experiment profile: pin prompt versions/aliases without moving shared aliases."""
+
+    model_config = ConfigDict(extra="forbid")
+    index_key: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    top_k: int = Field(default=5, ge=1, le=20)
+    prompts: dict[str, str] = Field(default_factory=dict, max_length=8)
+
+
 class IssueCode(BaseModel):
     model_config = ConfigDict(extra="forbid")
     label: str = Field(min_length=1, max_length=80)
@@ -228,6 +237,18 @@ def mount_service(app, settings):
                     "SELECT * FROM qa_profiles ORDER BY created_at DESC"
                 ).fetchall(),
             }
+
+    @router.post("/qa-profiles", status_code=201, dependencies=[Depends(admin)])
+    def create_profile(body: ProfileRequest):
+        key = store.active_profile(body.index_key, body.top_k, body.prompts)
+        prompts = store.profile(key)["prompts"]
+        return {
+            "key": key,
+            "prompts": {
+                name: {k: prompt.get(k) for k in ("source", "uri", "version", "digest")}
+                for name, prompt in prompts.items()
+            },
+        }
 
     @router.get("/scorer-profiles", dependencies=[Depends(admin)])
     def scorers():

@@ -69,7 +69,10 @@ def dataset_snapshot(settings, dataset_id):
 
 
 def enqueue_evaluation(store, request):
-    store.profile(request.qa_profile_key)
+    profile = store.profile(request.qa_profile_key)
+    # Before/After comparisons must never silently mix in bundled fallback prompts.
+    if any(p.get("source") != "registry" for p in (profile.get("prompts") or {None: {}}).values()):
+        raise ServiceError("evaluation_requires_registry_prompts", 409)
     if request.scorer_profile_key != SCORER_KEY:
         raise ServiceError("unknown_scorer_profile", 422)
     snapshot = dataset_snapshot(store.settings, request.dataset_id)
@@ -155,7 +158,13 @@ def run_evaluation(store, job):
             "history_mode": "provided",
         }.items():
             tracking.log_param(run_id, key, value)
-        tracking.log_dict(run_id, store.profile(evaluation["profile_key"]), "qa-profile.json")
+        profile = store.profile(evaluation["profile_key"])
+        tracking.log_dict(run_id, profile, "qa-profile.json")
+        for name, prompt in profile["prompts"].items():
+            tracking.log_param(run_id, f"prompt.{name}.uri", prompt["uri"])
+            tracking.log_param(run_id, f"prompt.{name}.digest", prompt["digest"])
+            # Server-local lineage; the digest identifies the prompt across servers.
+            tracking.link_prompt_version_to_run(run_id, prompt["uri"])
         cases = []
         for record in evaluation["records"]:
             store.heartbeat(job, f"evaluating:{len(cases)}/{len(evaluation['records'])}")
