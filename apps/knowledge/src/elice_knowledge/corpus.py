@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from llama_index.core.schema import Document, TextNode
 
 from elice_knowledge.documents import article_document
@@ -85,6 +85,16 @@ class Article:
         )
 
 
+def authored_body(soup: BeautifulSoup) -> Tag:
+    body = soup.select_one('article [itemprop="articleBody"]')
+    if body is None:
+        raise CorpusError("Missing articleBody")
+    content = body.select_one(":scope > .MuiBox-root") or body
+    for node in content.select("script, style, nav, svg, button"):
+        node.decompose()
+    return content
+
+
 def extract_article(html: str, url: str) -> Article:
     expected = article_url(url)
     if urlsplit(url).path.rstrip("/") != urlsplit(expected).path:
@@ -98,10 +108,7 @@ def extract_article(html: str, url: str) -> Article:
     body = soup.select_one('article [itemprop="articleBody"]')
     if title is None or body is None:
         raise CorpusError("Missing article title or articleBody")
-    # Current site puts the authored body here; sibling stacks are sharing/CTA UI.
-    content = body.select_one(":scope > .MuiBox-root") or body
-    for node in content.select("script, style, nav, svg, button"):
-        node.decompose()
+    content = authored_body(soup)
     metadata = {}
     for script in soup.select('script[type="application/ld+json"]'):
         try:

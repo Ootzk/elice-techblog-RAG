@@ -28,6 +28,7 @@ def check_database(settings: Settings):
 
 
 def initialize_database(settings: Settings):
+    from elice_knowledge.chunk_store import initialize_chunks
     from elice_knowledge.corpus_store import initialize_corpus
 
     with connect(settings) as conn:
@@ -43,6 +44,7 @@ def initialize_database(settings: Settings):
             )
         """)
         initialize_corpus(conn)
+        initialize_chunks(conn)
 
 
 def store_and_search(settings: Settings, text: str, vector: list[float], profile: dict) -> dict:

@@ -10,10 +10,12 @@ dependencies = [
   "llama-index-core>=0.14.25,<0.15",
   "llama-index-storage-docstore-postgres>=0.6.0,<0.7",
   "llama-index-storage-kvstore-postgres>=0.4.3,<0.5",
+  "markdownify>=1.2,<2",
   "mlflow-skinny>=3.18,<4",
   "psycopg[binary]>=3.2,<4",
   "pydantic-settings>=2.7,<3",
   "sqlalchemy>=2,<3",
+  "tiktoken>=0.14,<1",
   "uvicorn>=0.34,<1",
 ]
 

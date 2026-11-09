@@ -4,6 +4,8 @@ from pathlib import Path
 
 import httpx
 
+from elice_knowledge.chunk_store import run_chunking
+from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
 from elice_knowledge.embedding import OllamaEmbedder, profile_id
 from elice_knowledge.ingest import run_ingest
@@ -21,10 +23,28 @@ def main():
     )
     ingest.add_argument("--report", type=Path, help="Write the collection report to this path")
     ingest.add_argument("--force", action="store_true", help="Re-download without HTTP validators")
+    chunk = subparsers.add_parser(
+        "chunk", help="Chunk an archived corpus snapshot without downloads"
+    )
+    chunk.add_argument("--snapshot-id", help="Corpus snapshot ID; defaults to the latest snapshot")
+    chunk.add_argument("--profile", choices=["h2", "every_heading", "page"], default="h2")
+    chunk.add_argument("--overflow", choices=["sentence", "none"], default="sentence")
+    chunk.add_argument("--chunk-size", type=int, default=512)
+    chunk.add_argument("--chunk-overlap", type=int, default=64)
     args = parser.parse_args()
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command == "chunk":
+            stage = "chunking"
+            policy = ChunkingPolicy(
+                profile=args.profile,
+                overflow=args.overflow,
+                chunk_size=args.chunk_size,
+                chunk_overlap=args.chunk_overlap,
+            )
+            print(json.dumps(run_chunking(settings, policy, args.snapshot_id)))
+            return
         if args.command == "ingest":
             stage = "ingest"
             result = run_ingest(
