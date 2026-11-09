@@ -65,7 +65,9 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
 | `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
 | `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
-| `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192` |
+| `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192`. planner와 답변 단계에 각각 적용 |
+| `QA_AGENT_MAX_TOOL_CALLS` | 질문 하나에서 agent가 호출할 수 있는 검색 도구 횟수(1~8); 기본 `4` |
+| `MCP_API_TOKEN` | `/mcp` 검색 도구 엔드포인트의 Bearer 토큰(20자 이상); 비우면 엔드포인트가 404 |
 
 `DATABASE_URL`의 비밀번호에 예약 문자가 있으면 URL 인코딩해야 합니다.
 로컬 DB의 초기화 환경 변수는 빈 볼륨에 처음 기동할 때 적용됩니다.
@@ -245,6 +247,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge index --policy-key '<policy_key>'
 # index 출력이나 corpus-vector-indexes.sql에서 확인한 인덱스 키를 지정합니다.
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge search 'B300 GPU 가상화는 어떻게 동작하나요?' --index-key '<index_key>' --top-k 5
+# 같은 인덱스 키의 청크를 BM25로 검색합니다. 임베딩 서버를 호출하지 않습니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge search 'B300 GPU 가상화' --index-key '<index_key>' --top-k 5 --mode keyword
 ```
 
 `index`의 `--snapshot-id` 기본값은 최신 Corpus 스냅샷입니다. 지정한 스냅샷의 모든 문서에
@@ -265,12 +269,25 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 결과는 유사도 내림차순으로 청크 ID·본문·제목·섹션 경로·원문 URL/앵커·문서 버전을 반환합니다.
 유사도는 답변의 정확도나 신뢰 확률이 아닙니다. QA 답변 생성과 Dataset 평가 API는 구현했고, reranking은 아직 구현하지 않았습니다.
 프로필이 달라졌거나 벡터가 누락된 인덱스는 검색을 실패 처리합니다.
+
+`--mode keyword`는 같은 인덱스 키가 가리키는 스냅샷·정책의 청크를 [bm25s](https://github.com/xhluca/bm25s)
+BM25(Lucene 방식, k1=1.5, b=0.75)로 검색합니다. 문서 입력은 Dense 색인과 같은 제목·제목 경로·청크 본문입니다.
+토큰은 [Kiwi](https://github.com/bab2min/kiwipiepy) 형태소 분석 결과에서 조사·어미·접사·기호를 제외하고,
+`b300`·`gpt-4o`처럼 영문과 숫자가 섞인 단어를 통째로 추가합니다. 단어 빈도는 중복 제거 없이 유지합니다.
+`엘리스클라우드`처럼 Kiwi가 잘못 나누는 도메인 단어는
+[사용자 사전](apps/knowledge/src/elice_knowledge/data/bm25_user_words.tsv)에 `단어<TAB>품사<TAB>구성 단어` 형식으로 등록합니다.
+품사는 `NNP`(기본)·`NNG`, 구성 단어는 쉼표로 구분하며 생략할 수 있습니다. 구성 단어도 토큰으로 추가해 `엘리스 클라우드`처럼 띄어 쓴 질의도 찾습니다.
+형식이 틀린 줄은 줄 번호와 함께 검색을 실패시킵니다. 사전 내용의 해시는 BM25 프로필과 QA 프로필에 포함되어,
+사전을 바꾸면 BM25 캐시가 다시 만들어지고 새 QA 프로필로 구분됩니다. 반영하려면 이미지를 다시 빌드합니다.
+BM25 색인은 별도 테이블 없이 프로세스 메모리에 만들고, 청크 ID·내용 해시와 토크나이저 버전이
+같으면 재사용합니다. API와 worker는 시작할 때 백그라운드에서 Kiwi와 활성 인덱스의 색인을 미리 만들며,
+실패하면 경고 로그만 남기고 첫 검색에서 다시 만듭니다. 질의어가 하나도 없는 청크(점수 0)는 결과에서 제외합니다. 점수는 Dense 유사도와 척도가 다릅니다.
 색인과 검색은 MLflow를 호출하지 않으며, 연결 검증용 `smoke`와 별개입니다.
 프로필과 검색 가능한 인덱스는 `tools/sql/corpus-embedding-profiles.sql`·`corpus-vector-indexes.sql`에서 확인합니다.
 
 ### 서버 실행과 질문 예시
 
-대화 화면·세션/작업 API와 관리자용 `POST /qa`를 제공합니다.
+대화 화면·세션/작업 API와 관리자용 `POST /qa`, 검색 도구용 `/mcp`를 제공합니다.
 코드 로그인·관리자 화면과 평가 실행은 [대화 서비스 운영 문서](docs/chat-service-operations.md)를 참고하세요. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
 생성 백엔드는 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions이며,
 아직 모델·endpoint·API Key를 설정하지 않은 상태에서는 HTTP 503과 `generation_not_configured`를 반환합니다.
@@ -308,13 +325,38 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ```
 
 요청은 `question`(1~4000자, 공백만 입력 불가), `index_key`(64자리 해시), `top_k`(1~20, 기본 5)입니다.
+`top_k`는 검색 도구 한 번이 반환할 수 있는 최대 청크 수입니다(도구 자체 상한 10).
 응답은 `status`·`answer`·`index_key`·`citations`·`reason`·`prompt_version`·`generation_model`·`usage`를 포함합니다.
+`agent_steps`에는 단계별 행동·도구 인자·결과 출처 번호·오류·지연·토큰 사용량을, `retrieved_sources`에는
+agent가 모은 청크 전체를 기록합니다. `agent_stop_reason`은 planner의 답변·되묻기 결정 또는
+도구 호출 한도(`tool_budget`)·planner 프롬프트 예산(`planner_context_budget`) 도달을 구분합니다.
 `answered`의 본문은 `[1]` 같은 출처 번호를 사용하며, 각 citation에는 `source_id`·`chunk_id`·제목·URL/앵커·
 섹션 경로·문서 버전·인용문·검색 점수가 들어갑니다. URL과 문서 정보는 모델 출력 대신 검색 결과에서 연결합니다.
 토큰 사용량은 제공자가 반환한 prompt/completion/total 값만 기록하며 비용을 추정하지 않습니다.
 스키마는 `/docs`와 `/openapi.json`에서 확인할 수 있습니다.
 
-LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고 `PromptTemplate`·`PydanticOutputParser`로
+QA는 [LangGraph](https://langchain-ai.github.io/langgraph/) `StateGraph`로 구성한 agentic RAG입니다.
+
+```mermaid
+flowchart LR
+    Q([질문 · 이력]) --> Plan{"plan<br/>planner LLM"}
+    Plan -->|keyword_search · meaning_search| Act["act<br/>검색 도구 실행 · 출처 누적"]
+    Act --> Plan
+    Plan -->|answer · 도구 한도 · 프롬프트 예산| Answer["answer<br/>근거 답변 · Citation 검증"]
+    Plan -->|clarify| Clarify([needs_clarification])
+    Answer --> R([QAResponse])
+```
+
+planner는 질문·대화 이력·도구 계약·지금까지의 관찰을 보고 다음 행동 하나를 JSON으로 고릅니다.
+모델의 native function calling 지원을 가정하지 않고 `PydanticOutputParser`로 형식을 검증합니다.
+`keyword_search`는 위의 BM25, `meaning_search`는 BGE-M3 Dense 검색이며 둘 다 요청의 인덱스 키에 고정됩니다.
+후속 질문의 대명사는 planner가 검색어를 쓸 때 풀고, 이력은 사실 근거로 쓰지 않습니다.
+도구 결과는 청크 ID로 중복을 제거해 출처 번호를 붙이고, planner에는 처음 나온 청크의 앞 400자 미리보기만 보여 줍니다.
+잘못된 도구 인자는 오류 관찰로 돌려줘 다음 턴에 고칠 수 있게 하고, 형식이 깨진 JSON이나 응답 모델 변경은 HTTP 502입니다.
+모든 검색이 인프라 오류로 실패해 근거가 없으면 HTTP 503(`retrieval_unavailable`)입니다.
+planner가 `answer`와 함께 출처 번호를 고르면 그 청크만, 아니면 모은 청크 전체를 원문 그대로 답변 단계에 넘깁니다.
+
+답변 단계는 LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고 `PromptTemplate`·`PydanticOutputParser`로
 질문·검색 문서·JSON 출력 형식을 구성합니다. 모델에는 검색 문서를 데이터로 취급하고
 문서 안의 규칙 변경 지시를 따르지 않도록 요청합니다. 예산을 넘는 청크는 통째로 제외하며 표·코드를 잘라 넣지 않습니다.
 이 예산은 모델의 실제 토크나이저·컨텍스트 한도를 보장하지 않으므로 모델 선택 후 호출 정보와 함께 확인해야 합니다.
@@ -325,6 +367,19 @@ LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고 `Prompt
 원문에 인용문이 있어도 다른 주장을 생성할 수 있으므로 실제 모델의 답변 정확성과 유보 성능은 Gold Set에서 평가해야 합니다.
 잘린 생성 결과나 잘못된 JSON은 HTTP 502, 생성 timeout은 504, 검색 불가·생성 미설정은 503입니다.
 인용 검증과 무관하게 API 오류를 성공 답변으로 바꾸지는 않습니다. 현재는 비스트리밍·단일 질문 방식입니다.
+
+### MCP 검색 도구
+
+agent가 쓰는 두 검색 도구를 같은 Pydantic 계약으로 [MCP](https://modelcontextprotocol.io/) Streamable HTTP
+엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 `QA_ACTIVE_INDEX_KEY` 또는 가장 최근에 발행된 인덱스를 사용합니다.
+`MCP_API_TOKEN`을 설정해야 열리고, 토큰이 다르면 401입니다. 응답은 JSON 텍스트와 `structuredContent`를 함께 담습니다.
+`meaning_search`는 임베딩 서버를 호출하고, 생성 모델은 호출하지 않습니다.
+
+```bash
+# 예: Claude Code에 등록합니다. 토큰은 현재 터미널 환경에서 읽습니다.
+claude mcp add --transport http elice-knowledge http://127.0.0.1:8080/mcp \
+  --header "Authorization: Bearer $MCP_API_TOKEN"
+```
 
 
 ```bash
@@ -376,6 +431,24 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
 수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 150개(PostgreSQL 통합 테스트 36개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+agentic RAG 교체 후 BM25·사용자 사전·도구 계약·MCP·agent 그래프 테스트를 더하고 폐기된 익명 세션 테스트를 정리해 176개(PostgreSQL 통합 테스트 36개 포함)가
+맥북의 임시 `pgvector/pgvector:pg17` 컨테이너에서 통과했습니다. agent 테스트는 모의 Serverless 응답을 사용합니다.
+개발 Corpus의 H2 인덱스(청크 454개)에서 BM25 검색이 B300·Whisper·Qwen 질의에 해당 글의 청크를 반환했습니다.
+미리 만들지 않은 프로세스의 첫 검색은 Kiwi 로딩과 색인 생성으로 약 3초, 이후 검색은 캐시를 재사용했습니다.
+같은 인덱스와 홈서버 BGE-M3에 실제 두 도구를 연결하고 planner·답변을 모의 응답으로 대체해
+검색 → 중복 제거 → 출처 선택 → Citation 검증까지의 agent 그래프를 확인했습니다.
+Knowledge 이미지(`linux/arm64`) 빌드와 컨테이너 안의 Kiwi·MCP 로딩도 확인했습니다.
+2026-11-09 dev 구성에서 설정한 엘리스 Serverless `gpt-6.1-terra`로 질문 3개를 호출해 planner JSON 프로토콜과
+Citation 검증이 끝까지 동작하는 것을 확인했습니다. 기본 도구 호출 한도는 4입니다.
+
+| 질문 | 경로 | 결과 | 종료 | 도구 호출 | 총 토큰 |
+| --- | --- | --- | --- | --- | --- |
+| B300 GPU 가상화 동작 방식 | CLI `ask` | `answered`, 인용 8개 | `tool_budget` | keyword 4회 | 18,771 |
+| Whisper-large-v3 비용 절감 | CLI `ask` | `answered`, 인용 2개 | `planner_answer` | keyword 2회 | 7,516 |
+| Corpus에 없는 레시피 질문 | 대화 API·worker | `insufficient_evidence`(`model_abstained`) | `tool_budget` | keyword 3회·meaning 1회 | 14,469 |
+
+세 질문 중 두 번은 planner가 스스로 답변을 결정하지 않고 도구 호출 한도까지 검색했고, `keyword_search`를 주로 골랐습니다.
+이 확인 뒤 planner에 보이는 `top_k` 상한을 요청 값으로 맞췄습니다. 이는 동작 확인이며 Gold Set 품질 평가가 아닙니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
@@ -436,9 +509,8 @@ MLflow Dataset 입력을 고정해 대화 서비스와 같은 QA 실행 경로�
 구현한 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
 Open WebUI 프런트엔드 일부를 추출해 관리자/방문자 코드 인증·코드별 대화 복구·관리자 코드 관리·출처 표시를 구현했습니다.
 [실행 방법과 Dataset 평가](docs/chat-service-operations.md)를 함께 참고하세요.
-해당 UI와 대화·평가 API는 설계 단계이며 아직 구현하지 않았습니다.
 
-아래는 전체 목표의 논리 구조입니다. 현재 문서 수집·청킹·벡터 검색·QA와 대화/평가 API를 구현했습니다.
+아래는 전체 목표의 논리 구조입니다. 현재 문서 수집·청킹·BM25/벡터 검색·agentic QA·MCP 검색 도구와 대화/평가 API를 구현했습니다.
 배포 구성은 Knowledge 이미지의 API와 worker를 나누고 정적 대화 화면을 API에서 제공합니다.
 
 ```mermaid
@@ -449,7 +521,7 @@ flowchart TB
 
     subgraph Knowledge["⚙️ Knowledge / RAG — 논리적 구성"]
         Ingest[["🔄 지식 갱신<br/>원본 감시 · 수집 · 정제 · 청킹"]]
-        RAG("💬 RAG QA<br/>검색 · 답변 생성 · Citation")
+        RAG("💬 Agentic RAG QA<br/>BM25 · Dense 검색 도구 · 답변 생성 · Citation")
         Adapter[["🔌 Embedding 어댑터"]]
     end
 
@@ -472,6 +544,7 @@ flowchart TB
     Report[/"📄 실험 보고서<br/>Before / After · 사례 분석"/]
 
     User --> Frontend
+    MCPClient(["🤖 MCP 클라이언트"]) -->|검색 도구 호출| RAG
     Frontend -->|질문| RAG
     RAG -->|답변과 출처| Frontend
     Blog --> Ingest
@@ -497,7 +570,7 @@ flowchart TB
     classDef evaluation fill:#fff7ed,stroke:#ea580c,color:#7c2d12
     classDef document fill:#fffbeb,stroke:#ca8a04,color:#713f12
 
-    class User person
+    class User,MCPClient person
     class Frontend,Ingest,RAG,Adapter service
     class KnowledgeDB,MLflowDB,Artifacts storage
     class Embedding,Models model
@@ -512,8 +585,9 @@ flowchart TB
 Knowledge는 문서와 수집 상태를 관계형 데이터로 관리하고, 청크 벡터도 같은 PostgreSQL의
 pgvector에 저장합니다. 문서를 색인할 때와 질문을 검색할 때는 같은 Embedding 프로필을 사용합니다.
 생성은 엘리스클라우드 Serverless의 OpenAI 호환 endpoint로 연결하며 구체적인 모델은 설정 시 선택합니다.
-프런트엔드는 Open WebUI 소스를 추출·수정하는 방향으로 정했으며 아직 구현하지 않았습니다.
-Judge 모델과 agentic 구성은 아직 정하지 않았습니다.
+프런트엔드는 Open WebUI 소스를 추출·수정한 대화 화면이며 Knowledge API가 정적 파일로 제공합니다.
+QA는 LangGraph agent가 BM25·Dense 검색 도구를 골라 근거를 모으는 구조이며, 같은 도구를 `/mcp`로도 공개합니다.
+Judge 모델은 아직 정하지 않았습니다.
 
 MLflow에는 평가 Dataset과 Prompt, AI endpoint 설정을 준비합니다.
 Eval Harness는 이 설정을 이용해 평가를 실행하고, 질문별 결과와 주요 지표를 기록해 보고서로 정리합니다.

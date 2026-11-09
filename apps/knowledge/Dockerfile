@@ -9,7 +9,7 @@ FROM ghcr.io/astral-sh/uv:0.11.2 AS uv
 FROM python:3.12-slim
 
 COPY --from=uv /uv /usr/local/bin/uv
-ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy \
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_NO_CACHE=1 \
     PATH="/app/.venv/bin:$PATH" \
     TIKTOKEN_CACHE_DIR=/app/tokenizer-cache \
     MLFLOW_HTTP_REQUEST_TIMEOUT=10 MLFLOW_HTTP_REQUEST_MAX_RETRIES=0 \

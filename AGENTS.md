@@ -38,8 +38,12 @@
 - 생성은 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions를 사용한다.
   구체적인 모델·endpoint·API Key는 사용자가 설정하며, 자동 선택·fallback·실제 유료 호출을 하지 않는다.
   PDF 2쪽과 선택한 모델의 호출 정보를 기준으로 /v1 Base URL과 Bearer 인증을 설정한다.
-- Judge 모델, agentic 동작 범위, 스케줄러,
-  서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
+- 사용자 지시로 QA는 LangGraph 기반 bounded agentic RAG로 교체했다. 고정 파이프라인은 유지하지 않는다.
+  planner는 JSON 프로토콜(PydanticOutputParser)로 도구를 고르며 native function calling을 가정하지 않는다.
+  검색 도구는 BM25(`bm25s`+Kiwi) `keyword_search`와 Dense `meaning_search`이고,
+  같은 Pydantic 계약을 agent와 Bearer 인증 MCP 엔드포인트(`/mcp`, `mcp` SDK)가 공유한다.
+  최종 답변은 기존 Citation 검증 단계를 거친다. LangChain 체인·LlamaIndex QueryEngine은 사용하지 않는다.
+- Judge 모델, 스케줄러, 서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
 - 사용자 승인으로 대화 UI는 Open WebUI 프런트엔드를 추출·수정해 사용한다.
   관리자/방문자 코드로 로그인하고 대화는 코드별로 보존한다. 로그아웃은 세션만 종료한다.
   관리자 화면에서 방문자 코드 발급·연장·폐기를 지원하고, Dataset 평가는 별도 Bearer로 인증한다.
@@ -75,6 +79,12 @@
   LlamaIndex LLM·프롬프트·출력 파서를 사용하고 출처 번호와 원문 인용문을 검증한다.
   생성 미설정·실호출 미검증 상태를 구현 완료와 구분하고, 상태 확인에서는 유료 요청을 보내지 않는다.
 - 사용자 지시로 대화 UI·코드 로그인·관리자 코드 관리와 Dataset 평가 API를 현재 범위에 포함한다.
+- 사용자 지시로 BM25 검색, 검색 도구의 MCP 엔드포인트와 LangGraph agentic RAG를 현재 범위에 포함한다.
+  BM25는 인덱스 키가 가리키는 스냅샷·정책 청크로 프로세스 메모리에 만들고 별도 테이블에 저장하지 않는다.
+  Kiwi 사용자 사전은 `apps/knowledge/src/elice_knowledge/data/bm25_user_words.tsv`로 관리하고 코드에 하드코딩하지 않는다.
+  사전·토큰화 규칙·BM25 매개변수 변경은 내용 해시와 코드 식별자로 구분한다.
+- 개발 중에는 `PROMPT_VERSION`·`BM25_VERSION`·`CHUNKER_VERSION` 등 내부 버전 문자열을 올리지 않고,
+  이전 구현과의 호환·마이그레이션 코드를 남기지 않는다. 버전 증가는 평가 기준을 고정하기로 결정한 뒤에 한다.
   검토된 Gold Set 평가·의미적 Judge와 엘리스클라우드 배포는 후속 작업이다.
 
 ## 코드와 설정 배치

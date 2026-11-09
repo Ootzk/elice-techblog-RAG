@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -6,13 +7,16 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from elice_knowledge.agent import run_qa
 from elice_knowledge.database import check_database
 from elice_knowledge.embedding import OllamaEmbedder
 from elice_knowledge.generation import GenerationError, GenerationNotConfigured, GenerationTimeout
-from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError, run_qa
+from elice_knowledge.mcp_server import MCP_PATH, create_mcp_app
+from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError
 from elice_knowledge.service_api import COOKIE, mount_service
 from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
+from elice_knowledge.sparse import start_warm_up
 from elice_knowledge.tracking import check_tracking
 
 
@@ -28,7 +32,19 @@ class Readiness(BaseModel):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
-    app = FastAPI(title="Elice Knowledge", version="0.1.0")
+    mcp_app, mcp_sessions = create_mcp_app(settings)
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        # /qa and /mcp keyword searches run in this process.
+        start_warm_up(settings)
+        async with mcp_sessions.run():
+            yield
+
+    app = FastAPI(title="Elice Knowledge", version="0.1.0", lifespan=lifespan)
+    # An exact ASGI route (not a Mount) so /mcp answers without a slash redirect;
+    # registered before the web catch-all route.
+    app.add_route(MCP_PATH, mcp_app)
 
     admin = mount_service(app, settings)
 
@@ -38,7 +54,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
-        if request.url.path.startswith(("/api/", "/qa")):
+        if request.url.path.startswith(("/api/", "/qa", MCP_PATH)):
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -122,7 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 response = FileResponse(settings.web_dist_dir / "index.html")
                 response.headers["Cache-Control"] = "no-store"
                 return response
-            if path.startswith(("api/", "health/")) or path == "qa":
+            if path.startswith(("api/", "health/", "mcp/")) or path in {"qa", "mcp"}:
                 raise HTTPException(status_code=404)
             candidate = (settings.web_dist_dir / path).resolve()
             if candidate.is_relative_to(settings.web_dist_dir.resolve()) and candidate.is_file():

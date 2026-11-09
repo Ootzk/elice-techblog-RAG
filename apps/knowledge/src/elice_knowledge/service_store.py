@@ -26,9 +26,14 @@ def token_hash(value):
 
 
 def initialize_service(conn):
+    from elice_knowledge.access_codes import initialize_access_codes
+
+    # Code identities own sessions and conversations, so they come first.
+    initialize_access_codes(conn)
     for statement in [
         """CREATE TABLE IF NOT EXISTS chat_sessions (
             id uuid PRIMARY KEY, token_hash text UNIQUE NOT NULL, csrf_hash text NOT NULL,
+            access_code_id uuid NOT NULL REFERENCES access_codes(id),
             expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now())""",
         """CREATE TABLE IF NOT EXISTS chat_login_attempts (
             bucket text NOT NULL, window_start timestamptz NOT NULL, attempts integer NOT NULL,
@@ -38,12 +43,14 @@ def initialize_service(conn):
             NULL, created_at timestamptz NOT NULL DEFAULT now())
         """,
         """
-            CREATE TABLE IF NOT EXISTS chat_conversations ( id uuid PRIMARY KEY, session_id
-            uuid NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE, profile_key text NOT
+            CREATE TABLE IF NOT EXISTS chat_conversations ( id uuid PRIMARY KEY,
+            access_code_id uuid NOT NULL REFERENCES access_codes(id), profile_key text NOT
             NULL REFERENCES qa_profiles(key), title text NOT NULL DEFAULT '새 대화', created_at
             timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
             deleted_at timestamptz)
         """,
+        """CREATE INDEX IF NOT EXISTS conversations_code_owner
+            ON chat_conversations(access_code_id,updated_at DESC,id)""",
         """
             CREATE TABLE IF NOT EXISTS qa_jobs ( id uuid PRIMARY KEY, kind text NOT NULL
             CHECK(kind IN ('chat','evaluation')), subject_id uuid NOT NULL, status text NOT
@@ -75,9 +82,6 @@ def initialize_service(conn):
             PRIMARY KEY(evaluation_id,record_id))""",
     ]:
         conn.execute(statement)
-    from elice_knowledge.access_codes import initialize_access_codes
-
-    initialize_access_codes(conn)
 
 
 PROFILE_FIELDS = [
@@ -88,6 +92,7 @@ PROFILE_FIELDS = [
     "qa_max_context_tokens",
     "qa_history_pairs",
     "qa_history_tokens",
+    "qa_agent_max_tool_calls",
 ]
 
 
@@ -99,6 +104,10 @@ def code_identity():
                 name: token_hash((base / name).read_text())
                 for name in [
                     "qa.py",
+                    "agent.py",
+                    "tools.py",
+                    "sparse.py",
+                    "data/bm25_user_words.tsv",
                     "generation.py",
                     "retrieval.py",
                     "embedding.py",
@@ -110,6 +119,10 @@ def code_identity():
                 for name in [
                     "llama-index-core",
                     "llama-index-vector-stores-postgres",
+                    "langgraph",
+                    "bm25s",
+                    "kiwipiepy",
+                    "kiwipiepy_model",
                     "httpx",
                     "tiktoken",
                 ]
@@ -400,10 +413,6 @@ class ServiceStore:
                              WHERE status='running' AND lease_expires<now()
                          """)
             conn.execute("""UPDATE qa_jobs j SET status='interrupted',stage='interrupted',
-                error='session_expired',finished_at=now() FROM chat_conversations c,chat_sessions s
-                WHERE j.kind='chat' AND j.status='queued' AND j.subject_id=c.id
-                AND c.session_id=s.id AND s.expires_at<=now()""")
-            conn.execute("""UPDATE qa_jobs j SET status='interrupted',stage='interrupted',
                 error='access_code_inactive',finished_at=now()
                 FROM chat_conversations c,access_codes a
                 WHERE j.kind='chat' AND j.status='queued' AND j.subject_id=c.id
@@ -515,15 +524,5 @@ class ServiceStore:
                 WHERE deleted_at<now()-interval '1 day' FOR UPDATE SKIP LOCKED""").fetchall()
             for conversation in deleted:
                 self._delete_conversation(conn, conversation["id"])
-            expired = conn.execute(
-                "SELECT id FROM chat_sessions WHERE expires_at<now()-interval '1 day'"
-            ).fetchall()
-            for session in expired:
-                # Only pre-migration anonymous histories belong to a session.
-                # Code-owned histories survive every cookie expiry and logout.
-                conversations = conn.execute(
-                    "SELECT id FROM chat_conversations WHERE session_id=%s", (session["id"],)
-                ).fetchall()
-                for conversation in conversations:
-                    self._delete_conversation(conn, conversation["id"])
-                conn.execute("DELETE FROM chat_sessions WHERE id=%s", (session["id"],))
+            # Conversations belong to codes, so expired sessions are removed alone.
+            conn.execute("DELETE FROM chat_sessions WHERE expires_at<now()-interval '1 day'")
