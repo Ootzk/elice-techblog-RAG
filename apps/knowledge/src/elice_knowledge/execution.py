@@ -3,6 +3,7 @@
 import time
 
 from elice_knowledge.agent import run_qa
+from elice_knowledge.prompts import from_profile
 from elice_knowledge.qa import QARequest
 from elice_knowledge.service_store import PROFILE_FIELDS, ServiceError
 
@@ -19,7 +20,7 @@ def execute(store, profile_key, question, history=None):
     started = time.monotonic()
     error, result = None, None
     try:
-        result = run_qa(settings, request).model_dump()
+        result = run_qa(settings, request, from_profile(config)).model_dump()
         expected = settings.generation_model
         actual = result.get("generation_model")
         if actual and actual.removeprefix("openai/") != expected.removeprefix("openai/"):

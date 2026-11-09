@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     qa_history_pairs: int = Field(default=3, ge=0, le=10)
     qa_history_tokens: int = Field(default=2048, ge=128, le=8192)
     qa_agent_max_tool_calls: int = Field(default=4, ge=1, le=8)
+    # MLflow Prompt Registry alias for new QA profiles; bundled templates are the fallback.
+    prompt_alias: str = Field(default="production", pattern=r"^[a-z][a-z0-9_-]{0,62}$")
     mcp_api_token: SecretStr | None = None
     qa_worker_concurrency: int = Field(default=1, ge=1, le=8)
     qa_build_revision: str = "development"

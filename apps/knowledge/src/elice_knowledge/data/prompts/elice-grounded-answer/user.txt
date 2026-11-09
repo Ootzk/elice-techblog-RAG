@@ -1,0 +1,4 @@
+질문과 검색 문서 데이터:
+{{payload}}
+
+{{output_schema}}

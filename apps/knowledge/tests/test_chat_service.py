@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from elice_knowledge.access_codes import AccessCodes
 from elice_knowledge.evaluation import SCORER_KEY, enqueue_evaluation, score
 from elice_knowledge.main import create_app
+from elice_knowledge.prompts import PROMPT_NAMES, bundled
 from elice_knowledge.qa import QAResponse
 from elice_knowledge.service_api import EvaluationRequest
 from elice_knowledge.service_store import (
@@ -25,6 +26,15 @@ from elice_knowledge.settings import Settings
 from elice_knowledge.worker import process_one
 
 PROFILE = "a" * 64
+
+
+def registry_prompts():
+    return {
+        name: bundled(name)
+        .model_copy(update={"source": "registry", "uri": f"prompts:/{name}/1", "version": 1})
+        .model_dump()
+        for name in PROMPT_NAMES
+    }
 
 
 @pytest.fixture
@@ -44,6 +54,7 @@ def service(store, monkeypatch):
         provider_identity=provider_identity(settings),
         index_key="b" * 64,
         top_k=5,
+        prompts=registry_prompts(),
     )
     with service.connection() as conn:
         conn.execute("INSERT INTO qa_profiles(key,config) VALUES (%s,%s)", (PROFILE, Jsonb(config)))
@@ -119,7 +130,7 @@ def test_duplicate_turn_busy_quota_and_worker_history(service, monkeypatch):
     assert submit(client, conversation).json()["error"] == "conversation_busy"
     seen = []
 
-    def answer(settings, request):
+    def answer(settings, request, prompts):
         seen.append(request)
         return QAResponse(
             status="answered",
@@ -245,7 +256,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
     calls = []
 
-    def answer(settings, request):
+    def answer(settings, request, prompts):
         calls.append(request.model_dump())
         return QAResponse(
             status="answered",
@@ -527,7 +538,7 @@ def test_deleted_code_conversation_is_physically_cleaned_after_grace(service, mo
     turn_id = submit(client, conversation).json()["id"]
     monkeypatch.setattr(
         "elice_knowledge.execution.run_qa",
-        lambda settings, request: QAResponse(
+        lambda settings, request, prompts: QAResponse(
             status="answered",
             answer="test answer",
             index_key=request.index_key,

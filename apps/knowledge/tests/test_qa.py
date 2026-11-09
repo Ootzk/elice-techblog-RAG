@@ -13,6 +13,8 @@ from elice_knowledge.generation import (
     GenerationTimeout,
 )
 from elice_knowledge.main import create_app
+from elice_knowledge.prompts import ANSWER as ANSWER_PROMPT
+from elice_knowledge.prompts import bundled
 from elice_knowledge.qa import (
     ABSTENTION,
     QARequest,
@@ -52,6 +54,7 @@ def ask_with_output(output, sources=None, **settings):
             QARequest(question="GPU 가상화란?", index_key=INDEX),
             [SOURCE] if sources is None else sources,
             EliceServerlessLLM(configured, client),
+            bundled(ANSWER_PROMPT),
         )
     return result, calls
 
