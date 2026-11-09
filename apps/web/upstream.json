@@ -1,0 +1,61 @@
+{
+	"repository": "https://github.com/open-webui/open-webui",
+	"commit": "b0e6098e940942281d9c83f3529ea117287a3a22",
+	"files": [
+		{
+			"path": "src/lib/components/chat/Chat.svelte",
+			"sha256": "23b335a9eeb4a25a0076f4265f36bd3dd46cc3705a575562c311bdf31ae09ecb",
+			"use": "pruned/adapted"
+		},
+		{
+			"path": "src/lib/components/chat/MessageInput.svelte",
+			"sha256": "1d97a5ac45a40c06ef0c5e0df3fa6d011ae82ec76fe4812075cf37d5b6b458bd",
+			"use": "pruned/adapted"
+		},
+		{
+			"path": "src/lib/components/chat/Messages.svelte",
+			"sha256": "c060a45d57d4d1e350ab73c57136fd8a2df8080f73296aff521e105b32411f78",
+			"use": "pruned/adapted"
+		},
+		{
+			"path": "src/lib/components/chat/Messages/ResponseMessage.svelte",
+			"sha256": "e054026feb6ffc71edb17cca445d440113392b677ba24ca87b0695ec12bd47c1",
+			"use": "pruned/adapted"
+		},
+		{
+			"path": "src/lib/components/chat/Messages/Name.svelte",
+			"sha256": "a21122ee1e661d48b32c334413a79939183ee46470664d0197ce4fc2f1cae0c2",
+			"use": "unchanged"
+		},
+		{
+			"path": "src/lib/components/common/Textarea.svelte",
+			"sha256": "9efde83e82dca846cb945a1a121fe3b510b74c5a343f0f456763c5da79e1ebdd",
+			"use": "unchanged"
+		},
+		{
+			"path": "src/lib/components/common/Spinner.svelte",
+			"sha256": "942bc6daaad5171ddd934a45b2159a9a23e66dae39d650adefba49f0dc2d4993",
+			"use": "unchanged"
+		},
+		{
+			"path": "LICENSE",
+			"sha256": "5f1bd74c48bf13ab0f82e177ad9e637313b92533d20ead2593d49347a47fc232",
+			"use": "unchanged"
+		},
+		{
+			"path": "LICENSE_HISTORY",
+			"sha256": "b1567cc9763241a41569e01f08272a167dac57273f717b95b31ba7b5ec935e17",
+			"use": "unchanged"
+		},
+		{
+			"path": "LICENSE_NOTICE",
+			"sha256": "9de72254becbb9a317410a459447be7e8f042b911a846c58307319c77e50df00",
+			"use": "unchanged"
+		},
+		{
+			"path": "static/static/logo.png",
+			"sha256": "0943914abd3a68644849f4bc6a54ad3a4b9ad2078bbc6cb7f131f4d6351ec9ce",
+			"use": "unchanged"
+		}
+	]
+}
