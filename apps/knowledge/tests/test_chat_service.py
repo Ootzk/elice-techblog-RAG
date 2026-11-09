@@ -304,7 +304,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
     result = client.get(f"/api/evaluations/{job_id}").json()
     assert result["status"] == "completed"
-    assert result["summary"]["evidence_recall_at_k"] == 1
+    assert result["summary"]["evidence_recall"] == 1
     assert (
         client.get(f"/api/evaluations/{job_id}/cases").json()["items"][0]["scores"][
             "answerability_correct"
@@ -322,9 +322,9 @@ def test_scorer_requires_url_and_actual_quote():
         "status": "answered",
         "retrieved_sources": [{"url": "https://elice.io/ko/a#h2", "text": "실제\n 근거"}],
     }
-    assert score(result, expectations)["evidence_recall_at_k"] == 1
+    assert score(result, expectations)["evidence_recall"] == 1
     result["retrieved_sources"][0]["text"] = "무관한 내용"
-    assert score(result, expectations)["evidence_recall_at_k"] == 0
+    assert score(result, expectations)["evidence_recall"] == 0
 
 
 def test_global_worker_concurrency_and_profile_drift(service):

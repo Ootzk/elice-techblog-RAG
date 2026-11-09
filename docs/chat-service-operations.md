@@ -251,10 +251,10 @@ MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공�
 
 첫 scorer `evidence-v1`은 다음 두 지표만 계산한다.
 
-- `evidence_recall_at_k`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
+- `evidence_recall`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
 - `answerability_correct`: answered 여부가 기대 answerable과 일치하는지.
 
-agentic QA의 `evidence_recall_at_k`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
+agentic QA의 `evidence_recall`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
 기대 근거가 없는 문항은 이 회수율의 채점 대상에서 제외한다. `answerability_correct`는 답변 내용이
 틀려도 answered 상태만 맞으면 통과할 수 있으므로 의미적 정확성과 혼동하지 않는다.
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.

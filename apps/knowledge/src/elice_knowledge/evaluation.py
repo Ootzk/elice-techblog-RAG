@@ -142,7 +142,7 @@ def score(result, expectations):
 
     if evidence:
         retrieved = result.get("retrieved_sources", [])
-        values["evidence_recall_at_k"] = sum(
+        values["evidence_recall"] = sum(
             any(
                 url(e["url"]) == url(s["url"])
                 and " ".join(e["quote"].split()) in " ".join(s["text"].split())
