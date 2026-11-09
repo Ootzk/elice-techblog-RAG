@@ -7,8 +7,9 @@ import httpx
 from elice_knowledge.chunk_store import run_chunking
 from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
-from elice_knowledge.embedding import OllamaEmbedder, profile_id
+from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, profile_id
 from elice_knowledge.ingest import run_ingest
+from elice_knowledge.retrieval import run_index, run_search
 from elice_knowledge.settings import Settings
 
 
@@ -31,10 +32,29 @@ def main():
     chunk.add_argument("--overflow", choices=["sentence", "none"], default="sentence")
     chunk.add_argument("--chunk-size", type=int, default=512)
     chunk.add_argument("--chunk-overlap", type=int, default=64)
+    index = subparsers.add_parser("index", help="Embed stored chunks and publish a dense index")
+    index.add_argument("--policy-key", required=True)
+    index.add_argument("--snapshot-id", help="Defaults to the latest corpus snapshot")
+    search = subparsers.add_parser("search", help="Find chunks and sources in a published index")
+    search.add_argument("query")
+    search.add_argument("--index-key", required=True)
+    search.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command == "index":
+            stage = "indexing"
+            print(json.dumps(run_index(settings, args.policy_key, args.snapshot_id)))
+            return
+        if args.command == "search":
+            stage = "search"
+            print(
+                json.dumps(
+                    run_search(settings, args.index_key, args.query, args.top_k), ensure_ascii=False
+                )
+            )
+            return
         if args.command == "chunk":
             stage = "chunking"
             policy = ChunkingPolicy(
@@ -80,7 +100,12 @@ def main():
         print(json.dumps({"status": "ok", "purpose": "connectivity-only", **result}))
     except Exception as exc:
         # Keep credentials/addresses out of CLI logs as well as HTTP responses.
-        print(json.dumps({"status": "error", "stage": stage, "error_type": type(exc).__name__}))
+        result = {"status": "error", "stage": stage, "error_type": type(exc).__name__}
+        if isinstance(exc, EmbeddingInputTooLong):
+            result["reason"] = (
+                "embedding_input_too_long; use a smaller chunk policy or handle oversized blocks"
+            )
+        print(json.dumps(result))
         raise SystemExit(1) from None
 
 

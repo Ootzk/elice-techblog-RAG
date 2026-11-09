@@ -2,7 +2,9 @@ import json
 from uuid import uuid4
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict
 from psycopg.types.json import Jsonb
+from sqlalchemy import URL
 
 from elice_knowledge.embedding import profile_id
 from elice_knowledge.settings import Settings
@@ -18,6 +20,25 @@ def connect(settings: Settings):
     )
 
 
+def sqlalchemy_url(settings: Settings) -> URL:
+    if settings.database_url is None:
+        raise ValueError("DATABASE_URL is required")
+    params = conninfo_to_dict(settings.database_url.get_secret_value())
+    return URL.create(
+        "postgresql+psycopg2",
+        username=params.get("user"),
+        password=params.get("password"),
+        host=params.get("host"),
+        port=int(params["port"]) if params.get("port") else None,
+        database=params.get("dbname"),
+        query={
+            k: v
+            for k, v in params.items()
+            if k not in {"user", "password", "host", "port", "dbname"}
+        },
+    )
+
+
 def check_database(settings: Settings):
     with connect(settings) as conn:
         row = conn.execute(
@@ -30,6 +51,7 @@ def check_database(settings: Settings):
 def initialize_database(settings: Settings):
     from elice_knowledge.chunk_store import initialize_chunks
     from elice_knowledge.corpus_store import initialize_corpus
+    from elice_knowledge.retrieval import initialize_retrieval
 
     with connect(settings) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -45,6 +67,7 @@ def initialize_database(settings: Settings):
         """)
         initialize_corpus(conn)
         initialize_chunks(conn)
+        initialize_retrieval(conn)
 
 
 def store_and_search(settings: Settings, text: str, vector: list[float], profile: dict) -> dict:

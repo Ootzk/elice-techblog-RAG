@@ -14,8 +14,9 @@ from llama_index.core.storage.docstore.types import BaseDocumentStore
 from llama_index.storage.docstore.postgres import PostgresDocumentStore
 from llama_index.storage.kvstore.postgres import PostgresKVStore
 from psycopg.conninfo import conninfo_to_dict
-from sqlalchemy import URL, create_engine
+from sqlalchemy import create_engine
 
+from elice_knowledge.database import sqlalchemy_url
 from elice_knowledge.settings import Settings
 
 
@@ -72,19 +73,7 @@ class VersionDocuments:
         if settings.database_url is None:
             raise ValueError("DATABASE_URL is required")
         params = conninfo_to_dict(settings.database_url.get_secret_value())
-        url = URL.create(
-            "postgresql+psycopg2",
-            username=params.get("user"),
-            password=params.get("password"),
-            host=params.get("host"),
-            port=int(params["port"]) if params.get("port") else None,
-            database=params.get("dbname"),
-            query={
-                k: v
-                for k, v in params.items()
-                if k not in {"user", "password", "host", "port", "dbname"}
-            },
-        )
+        url = sqlalchemy_url(settings)
         engine = create_engine(
             url,
             connect_args={
