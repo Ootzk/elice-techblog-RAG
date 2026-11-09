@@ -6,6 +6,7 @@ import time
 from elice_knowledge.evaluation import run_evaluation
 from elice_knowledge.execution import execute
 from elice_knowledge.service_store import ServiceStore
+from elice_knowledge.sparse import start_warm_up
 
 
 def process_one(store):
@@ -46,6 +47,8 @@ def process_one(store):
 
 def run_worker(settings, once=False):
     store = ServiceStore(settings)
+    # Chat and evaluation QA run here; a job claimed meanwhile waits for the build.
+    start_warm_up(settings)
     while True:
         store.cleanup()
         worked = process_one(store)

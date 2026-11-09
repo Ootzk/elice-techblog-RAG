@@ -16,6 +16,7 @@ from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError
 from elice_knowledge.service_api import COOKIE, mount_service
 from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
+from elice_knowledge.sparse import start_warm_up
 from elice_knowledge.tracking import check_tracking
 
 
@@ -35,6 +36,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app):
+        # /qa and /mcp keyword searches run in this process.
+        start_warm_up(settings)
         async with mcp_sessions.run():
             yield
 

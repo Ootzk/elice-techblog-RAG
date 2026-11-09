@@ -147,3 +147,37 @@ def test_packaged_dictionary_drives_tokenizer_and_bm25_profile():
     words = {entry.word for entry in user_words()}
     assert {"엘리스", "엘리스클라우드"} <= words
     assert len(bm25_profile()["user_dictionary"]) == 64
+
+
+def test_warm_up_builds_active_index_cache_and_never_raises(index, monkeypatch, caplog):
+    import elice_knowledge.sparse as sparse
+
+    sparse._cache.clear()
+    monkeypatch.setattr(sparse, "latest_index_key", lambda settings: INDEX)
+    monkeypatch.setattr(sparse.RetrievalStore, "open_index", lambda self, key: index)
+    assert sparse.warm_up(Settings()) == INDEX
+    assert len(sparse._cache) == 1 and _bm25_index(index) is next(iter(sparse._cache.values()))
+
+    def broken(settings):
+        raise RuntimeError("postgresql://user:private-password@db")
+
+    monkeypatch.setattr(sparse, "latest_index_key", broken)
+    assert sparse.warm_up(Settings()) is None
+    assert "RuntimeError" in caplog.text and "private" not in caplog.text
+
+
+def test_concurrent_builds_share_one_bm25_index(index):
+    import threading
+
+    import elice_knowledge.sparse as sparse
+
+    sparse._cache.clear()
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(_bm25_index(index))) for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len({id(result) for result in results}) == 1
