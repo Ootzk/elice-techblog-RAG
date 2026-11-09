@@ -4,7 +4,7 @@
 	import Name from './Name.svelte';
 	import Spinner from '../../common/Spinner.svelte';
 	import type { Turn } from '#lib/api.js';
-	import { groupSources, renderAnswer, safeSourceUrl, sourceId } from '#lib/citations.js';
+	import { groupSources, renderAnswer, highlightSourceUrl, sourceId } from '#lib/citations.js';
 
 	export let message: Turn;
 	let copied = false;
@@ -98,7 +98,7 @@
 							</div>
 							<div class="flex flex-col gap-3">
 								{#each sources as source (source.source_id)}
-									{@const url = safeSourceUrl(source.url)}
+									{@const url = highlightSourceUrl(source.url, source.quotes)}
 									{@const open = expanded.includes(source.source_id)}
 									{@const collapsible =
 										source.quotes.length > 1 ||
@@ -124,7 +124,7 @@
 														target="_blank"
 														rel="noopener noreferrer"
 														class="text-sm font-medium leading-6 hover:underline"
-														aria-label={`${source.title} 원문 열기 (새 탭)`}
+														aria-label={`${source.title} 인용 구간으로 이동 (새 탭)`}
 														>{source.title}
 														<span class="text-gray-400" aria-hidden="true">↗</span></a
 													>
@@ -151,6 +151,17 @@
 														: 'line-clamp-3'}"
 												>
 													{quote}
+													{#if source.quotes.length > 1 && open}
+														{@const quoteUrl = highlightSourceUrl(source.url, [quote])}
+														{#if quoteUrl}<a
+																href={quoteUrl}
+																target="_blank"
+																rel="noopener noreferrer"
+																class="block text-xs text-[#466047] hover:underline mt-1 mb-3"
+																aria-label={`출처 ${source.source_id}의 이 인용 구간으로 이동 (새 탭)`}
+																>이 구간 보기 ↗</a
+															>{/if}
+													{/if}
 												</blockquote>
 											{/each}
 										</div>
@@ -169,7 +180,8 @@
 													target="_blank"
 													rel="noopener noreferrer"
 													class="font-medium text-[#466047] hover:underline"
-													aria-label={`출처 ${source.source_id} 원문 열기 (새 탭)`}>원문 열기 ↗</a
+													aria-label={`출처 ${source.source_id} 인용 구간으로 이동 (새 탭)`}
+													>원문에서 인용 구간 보기 ↗</a
 												>{/if}
 											{#if selected === source.source_id && origin}<button
 													class="ml-auto text-gray-500 hover:text-gray-900"

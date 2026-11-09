@@ -1,6 +1,8 @@
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { Citation } from './api.js';
+import { textFragmentUrl } from './source-links.js';
+export { safeSourceUrl } from './source-links.js';
 
 export type Source = Citation & { quotes: string[] };
 
@@ -19,13 +21,25 @@ export function sourceId(messageId: string, source: number): string {
 	return `source-${messageId}-${source}`;
 }
 
-export function safeSourceUrl(value: string): string | null {
-	try {
-		const url = new URL(value);
-		return ['https:', 'http:'].includes(url.protocol) ? url.href : null;
-	} catch {
-		return null;
-	}
+/** Convert the archived Markdown quote to the visible text the original page displays. */
+export function highlightSourceUrl(value: string, quotes: string[]): string | null {
+	const blocks = quotes.map((quote) => {
+		const clean = DOMPurify.sanitize(marked.parse(quote, { async: false }) as string, {
+			FORBID_TAGS: ['img', 'iframe', 'video', 'audio', 'source', 'style', 'link', 'base'],
+			FORBID_ATTR: ['style']
+		});
+		const doc = new DOMParser().parseFromString(clean, 'text/html');
+		for (const node of doc.body.querySelectorAll(
+			'br,p,li,h1,h2,h3,h4,h5,h6,pre,blockquote,td,th,tr,div'
+		)) {
+			node.append('\n');
+		}
+		return (doc.body.textContent ?? '')
+			.split('\n')
+			.map((text) => text.trim())
+			.filter(Boolean);
+	});
+	return textFragmentUrl(value, blocks);
 }
 
 /** Link verified citation markers in prose; leave code and existing links untouched. */

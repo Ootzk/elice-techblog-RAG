@@ -105,6 +105,10 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 - 요청 UUID는 같은 전송에 재사용한다. 네트워크 오류 시 브라우저 sessionStorage에 질문과 UUID를
   남겨 같은 요청으로 확인한다. 자격증명은 저장하지 않는다.
 - queued/running 작업은 polling한다. 출처 검증을 마친 최종 답변만 표시한다.
+- 원문 링크는 인용문을 Text Fragments(`#:~:text=`)로 지정해 지원 브라우저에서 이동·강조한다.
+  Markdown 표기를 보이는 텍스트로 정리하고 여러 문단은 시작/끝 범위로 연결한다.
+  기존 섹션 앵커는 유지한다. 원문 변경·동일 문구 중복·브라우저 지원/정책에 따라 강조가 실패할 수 있으며,
+  실제 브라우저에서의 원문 강조는 자동 검증하지 않았다. 명세: https://wicg.github.io/scroll-to-text-fragment/
 - worker lease 기본 300초, 동시 실행 기본 1이다. DB에서 모든 worker의 claim을 직렬화하고
   running 작업 수를 검사한다. lease 만료 작업은 interrupted이며 자동 재호출하지 않는다.
 - 쿠키 세션 기본 168시간이며 로그아웃은 해당 세션만 종료한다. 코드별 대화는 세션 정리로 삭제하지 않는다.
