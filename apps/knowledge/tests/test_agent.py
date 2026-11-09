@@ -13,6 +13,7 @@ from elice_knowledge.generation import GenerationResponseError
 from elice_knowledge.main import create_app
 from elice_knowledge.qa import QARequest, QARetrievalError
 from elice_knowledge.tools import (
+    TOOL_CONTRACTS,
     TOOL_NAMES,
     KnowledgeTools,
     SearchOutput,
@@ -33,11 +34,11 @@ def step(action, **values):
 
 
 class FakeTools(KnowledgeTools):
-    def __init__(self, hits=None, fail=False):
+    def __init__(self, hits=None, fail=False, max_top_k=10):
         self.hits = hits or {"keyword_search": [SOURCE], "meaning_search": [OTHER]}
         self.fail = fail
         self.calls = []
-        self.max_top_k = 10
+        self.max_top_k = max_top_k
 
     def invoke(self, name, arguments):
         request = parse_arguments(name, arguments)
@@ -329,3 +330,12 @@ def test_full_qa_api_runs_agent_with_selected_index_and_top_k(monkeypatch):
     body = response.json()
     assert body["citations"][0]["version_id"] == SOURCE["version_id"]
     assert [s["action"] for s in body["agent_steps"]] == ["keyword_search", "answer"]
+
+
+def test_planner_schema_shows_the_top_k_cap_this_request_enforces(monkeypatch):
+    _, payloads, _ = run(monkeypatch, [step("answer")], tools=FakeTools(max_top_k=3))
+    payload = json.loads(payloads[0]["messages"][1]["content"].split("\n\n")[0])
+    top_k = payload["tools"][0]["input_schema"]["properties"]["top_k"]
+    assert top_k["maximum"] == 3 and top_k["default"] == 3
+    # The public MCP contract keeps its own bound.
+    assert TOOL_CONTRACTS[0].input_schema()["properties"]["top_k"]["maximum"] == 10

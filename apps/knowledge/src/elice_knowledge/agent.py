@@ -136,7 +136,19 @@ def _observations(steps: list[AgentStep], sources: list[dict]) -> list[dict]:
     return observations
 
 
-def planner_messages(state: AgentState, settings: Settings, parser) -> list[ChatMessage]:
+def _planner_schema(item, max_top_k: int) -> dict:
+    """The tool schema as this run enforces it: top_k is capped by the QA request."""
+    schema = _compact_schema(item.input_schema())
+    top_k = schema.get("properties", {}).get("top_k")
+    if top_k is not None:
+        top_k["maximum"] = min(top_k.get("maximum", max_top_k), max_top_k)
+        top_k["default"] = min(top_k.get("default", max_top_k), max_top_k)
+    return schema
+
+
+def planner_messages(
+    state: AgentState, settings: Settings, parser, max_top_k: int
+) -> list[ChatMessage]:
     request = state["request"]
     used = sum(step.action in TOOL_NAMES for step in state["steps"])
     payload = {
@@ -146,7 +158,7 @@ def planner_messages(state: AgentState, settings: Settings, parser) -> list[Chat
             {
                 "name": item.name,
                 "description": item.description,
-                "input_schema": _compact_schema(item.input_schema()),
+                "input_schema": _planner_schema(item, max_top_k),
             }
             for item in TOOL_CONTRACTS
         ],
@@ -178,7 +190,7 @@ def build_agent_graph(settings: Settings, llm, tools):
         used = sum(step.action in TOOL_NAMES for step in state["steps"])
         if used >= settings.qa_agent_max_tool_calls:
             return {"decision": None, "stop_reason": "tool_budget"}
-        messages = planner_messages(state, settings, parser)
+        messages = planner_messages(state, settings, parser, tools.max_top_k)
         if _count_tokens("".join(m.content for m in messages)) > settings.qa_max_context_tokens:
             return {"decision": None, "stop_reason": "planner_context_budget"}
         started = time.monotonic()
