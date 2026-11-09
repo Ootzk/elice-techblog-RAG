@@ -3,9 +3,29 @@
 import argparse
 import json
 import os
+import time
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+
+def wait_for_result(call, evaluation_id, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        result = call("/evaluations/" + evaluation_id)
+        if result["status"] in {"completed", "failed", "interrupted"}:
+            cases = []
+            while True:
+                page = call(
+                    f"/evaluations/{evaluation_id}/cases?limit=50&offset={len(cases)}"
+                )["items"]
+                cases.extend(page)
+                if len(page) < 50:
+                    break
+            return {"evaluation": result, "cases": cases}
+        time.sleep(2)
+    raise SystemExit(f"Evaluation wait timed out; job remains active: {evaluation_id}")
 
 
 def main():
@@ -20,6 +40,9 @@ def main():
         help="Create an experiment QA profile pinned to these registry prompts",
     )
     parser.add_argument("--record-id", action="append")
+    parser.add_argument("--wait", action="store_true")
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--timeout", type=float, default=3600)
     parser.add_argument(
         "--submit",
         action="store_true",
@@ -28,6 +51,12 @@ def main():
     args = parser.parse_args()
     if args.prompt and args.qa_profile_key:
         parser.error("Use either --qa-profile-key or --prompt")
+    if (args.wait or args.report) and not args.submit:
+        parser.error("--wait/--report requires --submit")
+    if args.timeout <= 0:
+        parser.error("--timeout must be positive")
+    if args.report and args.report.exists():
+        parser.error("Report already exists; choose a new path")
     token = os.environ.get("EVALUATION_API_TOKEN")
     if not token:
         parser.error("Set EVALUATION_API_TOKEN in the environment")
@@ -75,6 +104,18 @@ def main():
             }
         )
         print(json.dumps(output, ensure_ascii=False, indent=2))
+        if args.wait or args.report:
+            report = wait_for_result(call, output["id"], args.timeout)
+            if args.report:
+                args.report.parent.mkdir(parents=True, exist_ok=True)
+                args.report.write_text(
+                    json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+                )
+            print(json.dumps(report["evaluation"], ensure_ascii=False, indent=2))
+            if report["evaluation"]["status"] != "completed":
+                raise SystemExit(
+                    "Evaluation failed/interrupted; inspect the saved report"
+                )
     except HTTPError as exc:
         raise SystemExit(f"API request failed: HTTP {exc.code}") from None
     except (URLError, ValueError, KeyError):
