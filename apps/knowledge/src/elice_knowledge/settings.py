@@ -37,7 +37,9 @@ class Settings(BaseSettings):
         "max_completion_tokens"
     )
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
-    chat_access_code: SecretStr | None = None
+    chat_access_code: SecretStr | None = None  # Existing anonymous sessions only.
+    admin_access_code: SecretStr | None = None
+    auth_session_secret: SecretStr | None = None
     evaluation_api_token: SecretStr | None = None
     qa_active_index_key: str | None = None
     chat_session_hours: int = Field(default=168, ge=1, le=720)
@@ -56,6 +58,15 @@ class Settings(BaseSettings):
     @classmethod
     def blank_generation_value(cls, value):
         return (value.strip() or None) if isinstance(value, str) else value
+
+    @field_validator("admin_access_code", "auth_session_secret")
+    @classmethod
+    def authentication_secrets(cls, value, info):
+        if value is not None and len(value.get_secret_value()) < (
+            32 if info.field_name == "auth_session_secret" else 20
+        ):
+            raise ValueError("Use at least 32 characters for session secret and 20 for admin code")
+        return value
 
     @property
     def generation_configured(self) -> bool:

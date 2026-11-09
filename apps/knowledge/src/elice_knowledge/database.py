@@ -70,6 +70,10 @@ def initialize_database(settings: Settings):
         initialize_chunks(conn)
         initialize_retrieval(conn)
         initialize_service(conn)
+    from elice_knowledge.access_codes import AccessCodes
+    from elice_knowledge.service_store import ServiceStore
+
+    AccessCodes(ServiceStore(settings)).bootstrap()
 
 
 def store_and_search(settings: Settings, text: str, vector: list[float], profile: dict) -> dict:

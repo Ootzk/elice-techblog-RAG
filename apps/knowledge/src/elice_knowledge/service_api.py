@@ -1,4 +1,4 @@
-"""Shared-code browser sessions and separate bearer-authenticated evaluation API."""
+"""Code-identity browser sessions and separate bearer-authenticated evaluation API."""
 
 import secrets
 from datetime import datetime
@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from elice_knowledge.access_codes import AccessCodes
 from elice_knowledge.evaluation import SCORER, SCORER_KEY, dataset_snapshot, enqueue_evaluation
 from elice_knowledge.execution import public_result
 from elice_knowledge.service_store import ServiceError, ServiceStore, token_hash
@@ -16,6 +17,7 @@ COOKIE = "knowledge_session"
 
 
 class Login(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     code: str = Field(min_length=1, max_length=256)
 
 
@@ -40,6 +42,25 @@ class EvaluationRequest(BaseModel):
     scorer_profile_key: str = Field(pattern=r"^[a-f0-9]{64}$")
     record_ids: list[str] | None = Field(default=None, max_length=200)
     history_mode: str = Field(default="provided", pattern="^provided$")
+
+
+class IssueCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(min_length=1, max_length=80)
+    expires_days: int = Field(default=30, ge=1, le=3660)
+    requests_per_hour: int = Field(default=30, ge=1, le=1000)
+
+    @field_validator("label")
+    @classmethod
+    def clean_label(cls, value):
+        if not value.strip():
+            raise ValueError("Label must not be blank")
+        return value.strip()
+
+
+class ExtendCode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    days: int = Field(ge=1, le=3660)
 
 
 def admin_dependency(settings):
@@ -81,6 +102,17 @@ def mount_service(app, settings):
 
     session_dependency = Depends(session)
 
+    def code_admin(owner=session_dependency):
+        if owner["role"] != "admin":
+            raise ServiceError("admin_required", 403)
+        return owner
+
+    code_admin_dependency = Depends(code_admin)
+    codes = AccessCodes(store)
+
+    def identity(row):
+        return {"id": row["principal_id"], "label": row["label"], "role": row["role"]}
+
     def turn_output(row):
         return {
             "id": row["id"],
@@ -97,7 +129,7 @@ def mount_service(app, settings):
     def config():
         return {
             "name": "엘리스 테크블로그",
-            "access": "shared",
+            "access": "code",
             "session_hours": settings.chat_session_hours,
         }
 
@@ -117,13 +149,14 @@ def mount_service(app, settings):
             path="/",
         )
         response.headers["Cache-Control"] = "no-store"
-        return {"csrf_token": csrf, "expires_at": row["expires_at"]}
+        return {"csrf_token": csrf, "expires_at": row["expires_at"], "identity": identity(row)}
 
     @router.get("/auth/session")
     def get_session(request: Request, response: Response, owner=session_dependency):
         response.headers["Cache-Control"] = "no-store"
         return {
-            "csrf_token": store.csrf(request.cookies[COOKIE]),
+            "csrf_token": store.csrf(request.cookies[COOKIE], legacy=owner["role"] == "legacy"),
+            "identity": identity(owner),
             "expires_at": owner["expires_at"],
         }
 
@@ -134,16 +167,16 @@ def mount_service(app, settings):
 
     @router.get("/conversations")
     def conversations(cursor: datetime | None = None, owner=session_dependency):
-        return {"items": store.conversations(owner["id"], cursor)}
+        return {"items": store.conversations(owner["principal_id"], cursor)}
 
     @router.post("/conversations", status_code=201)
     def create(owner=session_dependency):
-        row = store.create_conversation(owner["id"])
+        row = store.create_conversation(owner["principal_id"])
         return {"id": row["id"], "title": row["title"], "turns": []}
 
     @router.get("/conversations/{conversation_id}")
     def conversation(conversation_id: UUID, owner=session_dependency):
-        row = store.conversation(owner["id"], conversation_id)
+        row = store.conversation(owner["principal_id"], conversation_id)
         return {
             "id": row["id"],
             "title": row["title"],
@@ -152,16 +185,38 @@ def mount_service(app, settings):
 
     @router.delete("/conversations/{conversation_id}", status_code=204)
     def delete(conversation_id: UUID, owner=session_dependency):
-        store.conversation(owner["id"], conversation_id, delete=True)
+        store.conversation(owner["principal_id"], conversation_id, delete=True)
 
     @router.post("/conversations/{conversation_id}/turns", status_code=202)
     def submit(conversation_id: UUID, body: Turn, owner=session_dependency):
-        turn_id = store.enqueue_turn(owner["id"], conversation_id, body.request_id, body.question)
-        return turn_output(store.turn(owner["id"], turn_id))
+        turn_id = store.enqueue_turn(
+            owner["principal_id"], conversation_id, body.request_id, body.question
+        )
+        return turn_output(store.turn(owner["principal_id"], turn_id))
 
     @router.get("/turns/{turn_id}")
     def turn(turn_id: UUID, owner=session_dependency):
-        return turn_output(store.turn(owner["id"], turn_id))
+        return turn_output(store.turn(owner["principal_id"], turn_id))
+
+    @router.get("/admin/access-codes")
+    def list_codes(status: str = "all", page: int = 1, owner=code_admin_dependency):
+        if status not in {"all", "active", "expiring", "expired", "revoked"} or page < 1:
+            raise ServiceError("invalid_code_filter", 422)
+        return codes.list(owner["principal_id"], status, page)
+
+    @router.post("/admin/access-codes", status_code=201)
+    def create_code(body: IssueCode, owner=code_admin_dependency):
+        return codes.issue(
+            owner["principal_id"], body.label, body.expires_days, body.requests_per_hour
+        )
+
+    @router.post("/admin/access-codes/{code_id}/extend")
+    def extend_code(code_id: UUID, body: ExtendCode, owner=code_admin_dependency):
+        return codes.extend(owner["principal_id"], code_id, body.days)
+
+    @router.delete("/admin/access-codes/{code_id}", status_code=204)
+    def revoke_code(code_id: UUID, owner=code_admin_dependency):
+        codes.revoke(owner["principal_id"], code_id)
 
     @router.get("/qa-profiles", dependencies=[Depends(admin)])
     def profiles():

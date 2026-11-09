@@ -19,6 +19,10 @@ from elice_knowledge.settings import Settings
 def main():
     parser = argparse.ArgumentParser(description="Knowledge ingestion and infrastructure checks")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    revoke_admin = subparsers.add_parser(
+        "revoke-admin", help="Revoke an admin code; keep at least one"
+    )
+    revoke_admin.add_argument("code_id")
     worker = subparsers.add_parser("worker", help="Run durable chat/evaluation worker")
     worker.add_argument("--once", action="store_true")
     subparsers.add_parser("init-db", help="Initialize connectivity and corpus tables")
@@ -52,6 +56,12 @@ def main():
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command == "revoke-admin":
+            from elice_knowledge.access_codes import AccessCodes
+
+            AccessCodes(ServiceStore(settings)).revoke_admin(args.code_id)
+            print(json.dumps({"status": "ok"}))
+            return
         if args.command == "worker":
             from elice_knowledge.worker import run_worker
 

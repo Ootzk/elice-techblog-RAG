@@ -75,6 +75,9 @@ def initialize_service(conn):
             PRIMARY KEY(evaluation_id,record_id))""",
     ]:
         conn.execute(statement)
+    from elice_knowledge.access_codes import initialize_access_codes
+
+    initialize_access_codes(conn)
 
 
 PROFILE_FIELDS = [
@@ -134,7 +137,7 @@ class ServiceStore:
 
     def login(self, code, client_id):
         s = self.settings
-        if not s.chat_access_code or not s.chat_access_code.get_secret_value():
+        if not s.auth_session_secret:
             raise ServiceError("chat_not_configured", 503)
         with self.connection() as conn:
             attempts = conn.execute(
@@ -145,40 +148,61 @@ class ServiceStore:
             ).fetchone()["attempts"]
         if attempts > s.chat_login_attempts_per_minute:
             raise ServiceError("login_rate_limited", 429)
-        if not secrets.compare_digest(
-            token_hash(code), token_hash(s.chat_access_code.get_secret_value())
-        ):
-            raise ServiceError("invalid_access_code", 401)
         token = secrets.token_urlsafe(32)
         csrf = self.csrf(token)
         with self.connection() as conn:
-            row = conn.execute(
-                """INSERT INTO chat_sessions(id,token_hash,csrf_hash,expires_at)
-                VALUES (%s,%s,%s,now()+(%s * interval '1 hour')) RETURNING id,expires_at""",
-                (uuid4(), token_hash(token), token_hash(csrf), s.chat_session_hours),
+            identity = conn.execute(
+                """SELECT * FROM access_codes WHERE code_hash=%s
+                AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now()) FOR UPDATE""",
+                (token_hash(code),),
             ).fetchone()
+            if not identity:
+                raise ServiceError("invalid_access_code", 401)
+            conn.execute(
+                "UPDATE access_codes SET last_login_at=now(),last_login_ip=%s WHERE id=%s",
+                (client_id, identity["id"]),
+            )
+            row = conn.execute(
+                """INSERT INTO chat_sessions(id,token_hash,csrf_hash,expires_at,access_code_id)
+                VALUES (%s,%s,%s,now()+(%s * interval '1 hour'),%s)
+                RETURNING id,expires_at,access_code_id""",
+                (
+                    uuid4(),
+                    token_hash(token),
+                    token_hash(csrf),
+                    s.chat_session_hours,
+                    identity["id"],
+                ),
+            ).fetchone()
+            row.update(principal_id=identity["id"], role=identity["kind"], label=identity["label"])
         return token, csrf, row
 
     def session(self, token):
-        if not self.settings.chat_access_code:
-            raise ServiceError("chat_not_configured", 503)
         if not token:
             raise ServiceError("authentication_required", 401)
         with self.connection() as conn:
             row = conn.execute(
-                "SELECT * FROM chat_sessions WHERE token_hash=%s AND expires_at>now()",
+                """SELECT s.*,a.kind AS role,a.label,
+                    coalesce(a.id,s.id) AS principal_id
+                FROM chat_sessions s LEFT JOIN access_codes a ON a.id=s.access_code_id
+                WHERE s.token_hash=%s AND s.expires_at>now()
+                AND (s.access_code_id IS NULL OR (a.revoked_at IS NULL
+                    AND (a.expires_at IS NULL OR a.expires_at>now())))""",
                 (token_hash(token),),
             ).fetchone()
         if row is None or not secrets.compare_digest(
-            row["csrf_hash"], token_hash(self.csrf(token))
+            row["csrf_hash"], token_hash(self.csrf(token, legacy=row["access_code_id"] is None))
         ):
             raise ServiceError("session_expired", 401)
+        row["role"] = row["role"] or "legacy"
+        row["label"] = row["label"] or "이전 익명 세션"
         return row
 
-    def csrf(self, token):
-        return hmac.new(
-            self.settings.chat_access_code.get_secret_value().encode(), token.encode(), "sha256"
-        ).hexdigest()
+    def csrf(self, token, legacy=False):
+        secret = self.settings.chat_access_code if legacy else self.settings.auth_session_secret
+        if not secret:
+            raise ServiceError("session_expired", 401)
+        return hmac.new(secret.get_secret_value().encode(), token.encode(), "sha256").hexdigest()
 
     def logout(self, session_id):
         with self.connection() as conn:
@@ -229,19 +253,19 @@ class ServiceStore:
     def create_conversation(self, owner):
         profile = self.active_profile()
         with self.connection() as conn:
+            code = conn.execute("SELECT id FROM access_codes WHERE id=%s", (owner,)).fetchone()
             return conn.execute(
-                (
-                    "INSERT INTO chat_conversations(id,session_id,profile_key) VALUES "
-                    "(%s,%s,%s) RETURNING *"
-                ),
-                (uuid4(), owner, profile),
+                """INSERT INTO chat_conversations(id,session_id,access_code_id,profile_key)
+                VALUES (%s,%s,%s,%s) RETURNING *""",
+                (uuid4(), None if code else owner, owner if code else None, profile),
             ).fetchone()
 
     def conversations(self, owner, cursor=None, limit=30):
         with self.connection() as conn:
             return conn.execute(
                 """
-                    SELECT id,title,updated_at FROM chat_conversations WHERE session_id=%s AND
+                    SELECT id,title,updated_at FROM chat_conversations
+                    WHERE coalesce(access_code_id,session_id)=%s AND
                     deleted_at IS NULL AND (%s::timestamptz IS NULL OR updated_at<%s) ORDER BY
                     updated_at DESC,id LIMIT %s
                 """,
@@ -252,7 +276,8 @@ class ServiceStore:
         with self.connection() as conn:
             row = conn.execute(
                 (
-                    "SELECT * FROM chat_conversations WHERE id=%s AND session_id=%s AND "
+                    "SELECT * FROM chat_conversations WHERE id=%s "
+                    "AND coalesce(access_code_id,session_id)=%s AND "
                     "deleted_at IS NULL FOR UPDATE"
                 ),
                 (conversation_id, owner),
@@ -284,11 +309,23 @@ class ServiceStore:
     def enqueue_turn(self, owner, conversation_id, request_id, question):
         fingerprint = digest({"question": question})
         with self.connection() as conn:
-            # Lock the session to make the quota atomic across all its conversations.
-            conn.execute("SELECT id FROM chat_sessions WHERE id=%s FOR UPDATE", (owner,))
+            # Serialize the quota across every browser using the same code.
+            identity = conn.execute(
+                "SELECT * FROM access_codes WHERE id=%s FOR UPDATE", (owner,)
+            ).fetchone()
+            if identity and (
+                identity["revoked_at"]
+                or conn.execute(
+                    "SELECT expires_at<=now() AS expired FROM access_codes WHERE id=%s", (owner,)
+                ).fetchone()["expired"]
+            ):
+                raise ServiceError("session_expired", 401)
+            if not identity:
+                conn.execute("SELECT id FROM chat_sessions WHERE id=%s FOR UPDATE", (owner,))
             conv = conn.execute(
                 (
-                    "SELECT * FROM chat_conversations WHERE id=%s AND session_id=%s AND "
+                    "SELECT * FROM chat_conversations WHERE id=%s "
+                    "AND coalesce(access_code_id,session_id)=%s AND "
                     "deleted_at IS NULL FOR UPDATE"
                 ),
                 (conversation_id, owner),
@@ -314,12 +351,15 @@ class ServiceStore:
             used = conn.execute(
                 """
                     SELECT count(*) AS n FROM chat_turns t JOIN chat_conversations c ON
-                    c.id=t.conversation_id WHERE c.session_id=%s AND
+                    c.id=t.conversation_id WHERE coalesce(c.access_code_id,c.session_id)=%s AND
                     t.created_at>now()-interval '1 hour'
                 """,
                 (owner,),
             ).fetchone()["n"]
-            if used >= self.settings.chat_requests_per_hour:
+            limit = (
+                identity["requests_per_hour"] if identity else self.settings.chat_requests_per_hour
+            )
+            if used >= limit and (not identity or identity["kind"] != "admin"):
                 raise ServiceError("chat_rate_limited", 429)
             job_id = uuid4()
             payload = {"question": question, "profile_key": conv["profile_key"]}
@@ -349,7 +389,7 @@ class ServiceStore:
                 """
                     SELECT j.*,t.conversation_id,t.question FROM qa_jobs j JOIN chat_turns t ON
                     t.id=j.id JOIN chat_conversations c ON c.id=t.conversation_id WHERE j.id=%s
-                    AND c.session_id=%s AND c.deleted_at IS NULL
+                    AND coalesce(c.access_code_id,c.session_id)=%s AND c.deleted_at IS NULL
                 """,
                 (turn_id, owner),
             ).fetchone()
@@ -369,6 +409,11 @@ class ServiceStore:
                 error='session_expired',finished_at=now() FROM chat_conversations c,chat_sessions s
                 WHERE j.kind='chat' AND j.status='queued' AND j.subject_id=c.id
                 AND c.session_id=s.id AND s.expires_at<=now()""")
+            conn.execute("""UPDATE qa_jobs j SET status='interrupted',stage='interrupted',
+                error='access_code_inactive',finished_at=now()
+                FROM chat_conversations c,access_codes a
+                WHERE j.kind='chat' AND j.status='queued' AND j.subject_id=c.id
+                AND c.access_code_id=a.id AND (a.revoked_at IS NOT NULL OR a.expires_at<=now())""")
             running = conn.execute(
                 "SELECT count(*) AS n FROM qa_jobs WHERE status='running'"
             ).fetchone()["n"]
@@ -453,31 +498,38 @@ class ServiceStore:
             )
         return str(run_id)
 
+    def _delete_conversation(self, conn, conversation_id):
+        turns = conn.execute(
+            "DELETE FROM chat_turns WHERE conversation_id=%s RETURNING id", (conversation_id,)
+        ).fetchall()
+        ids = [turn["id"] for turn in turns]
+        if ids:
+            conn.execute(
+                """DELETE FROM qa_runs WHERE id IN (
+                SELECT (result->>'run_id')::uuid FROM qa_jobs WHERE id=ANY(%s))""",
+                (ids,),
+            )
+            conn.execute("DELETE FROM qa_jobs WHERE id=ANY(%s)", (ids,))
+        conn.execute("DELETE FROM chat_conversations WHERE id=%s", (conversation_id,))
+
     def cleanup(self):
         with self.connection() as conn:
             conn.execute(
                 "DELETE FROM chat_login_attempts WHERE window_start<now()-interval '1 day'"
             )
-            # Remove private conversation content after its owning session expires.
+            deleted = conn.execute("""SELECT id FROM chat_conversations
+                WHERE deleted_at<now()-interval '1 day' FOR UPDATE SKIP LOCKED""").fetchall()
+            for conversation in deleted:
+                self._delete_conversation(conn, conversation["id"])
             expired = conn.execute(
                 "SELECT id FROM chat_sessions WHERE expires_at<now()-interval '1 day'"
             ).fetchall()
             for session in expired:
-                turns = conn.execute(
-                    """
-                        SELECT t.id FROM chat_turns t JOIN chat_conversations c ON
-                        c.id=t.conversation_id WHERE c.session_id=%s
-                    """,
-                    (session["id"],),
+                # Only pre-migration anonymous histories belong to a session.
+                # Code-owned histories survive every cookie expiry and logout.
+                conversations = conn.execute(
+                    "SELECT id FROM chat_conversations WHERE session_id=%s", (session["id"],)
                 ).fetchall()
-                for turn in turns:
-                    conn.execute(
-                        (
-                            "DELETE FROM qa_runs WHERE id=(SELECT (result->>'run_id')::uuid "
-                            "FROM qa_jobs WHERE id=%s)"
-                        ),
-                        (turn["id"],),
-                    )
-                    conn.execute("DELETE FROM chat_turns WHERE id=%s", (turn["id"],))
-                    conn.execute("DELETE FROM qa_jobs WHERE id=%s", (turn["id"],))
+                for conversation in conversations:
+                    self._delete_conversation(conn, conversation["id"])
                 conn.execute("DELETE FROM chat_sessions WHERE id=%s", (session["id"],))

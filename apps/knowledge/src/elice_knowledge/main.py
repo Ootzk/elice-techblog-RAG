@@ -2,7 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -10,7 +10,8 @@ from elice_knowledge.database import check_database
 from elice_knowledge.embedding import OllamaEmbedder
 from elice_knowledge.generation import GenerationError, GenerationNotConfigured, GenerationTimeout
 from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError, run_qa
-from elice_knowledge.service_api import mount_service
+from elice_knowledge.service_api import COOKIE, mount_service
+from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import check_tracking
 
@@ -108,7 +109,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.mount("/_app", StaticFiles(directory=assets), name="web-assets")
 
         @app.get("/{path:path}", include_in_schema=False)
-        def web(path: str):
+        def web(path: str, request: Request):
+            if path == "admin" or path.startswith("admin/"):
+                try:
+                    owner = ServiceStore(settings).session(request.cookies.get(COOKIE))
+                except ServiceError:
+                    return RedirectResponse("/", status_code=303)
+                if owner["role"] != "admin":
+                    raise HTTPException(status_code=403)
+                if path not in {"admin", "admin/", "admin/authentication", "admin/authentication/"}:
+                    raise HTTPException(status_code=404)
+                response = FileResponse(settings.web_dist_dir / "index.html")
+                response.headers["Cache-Control"] = "no-store"
+                return response
             if path.startswith(("api/", "health/")) or path == "qa":
                 raise HTTPException(status_code=404)
             candidate = (settings.web_dist_dir / path).resolve()
