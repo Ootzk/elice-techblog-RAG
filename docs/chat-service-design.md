@@ -1,7 +1,8 @@
 # 대화 서비스와 Dataset 평가 API 설계
 
-2026-11-09 기준 설계안이다. 현재 구현된 단일 질문 QA를 확장할 범위를 정의하며,
-이 문서의 대화 UI·인증·대화 저장·worker·평가 API는 아직 구현하지 않았다.
+2026-11-09 기준 설계와 구현 계약이다. 대화 UI·공유 인증·대화 저장·worker와
+Dataset 평가 API/CLI를 구현했다. 실행 방법과 검증 한계는
+[운영 문서](chat-service-operations.md)를 따른다. Gold Set 작성과 의미적 Judge 평가는 후속 작업이다.
 
 ## 확정한 방향
 
@@ -65,7 +66,7 @@ flowchart LR
     Worker --> MLflow[Dataset·Run·Trace·평가 결과]
 ```
 
-웹 소스는 `apps/web/`, 공통 QA와 API·worker는 `apps/knowledge/`, 평가 도구는 `tools/evaluation/`에 둔다.
+웹 소스는 `apps/web/`, 공통 QA와 API·worker는 `apps/knowledge/`, 평가 CLI는 `tools/evaluation/`에 둔다.
 웹은 SvelteKit 정적 산출물로 빌드해 Knowledge 이미지에서 제공하고, API와 같은 origin을 사용한다.
 API·worker는 같은 패키지와 이미지를 다른 명령으로 실행한다. 개발 시 Vite proxy로 API를 연결한다.
 Open WebUI의 Python 백엔드나 자체 RAG·모델 프록시는 배포하지 않는다.
@@ -92,7 +93,7 @@ API가 여러 프로세스로 실행되어도 한도가 유지되도록 상태�
 
 ## 공통 QA 실행 계약
 
-화면의 대화 요청과 관리자의 평가 요청을 같은 `execute_qa_turn` 입력으로 변환한다.
+화면의 대화 요청과 관리자의 평가 요청을 같은 `execution.execute` 입력으로 변환한다.
 경로에 따라 검색·재작성·생성·인용 검증 프롬프트를 달리하지 않는다.
 브라우저에는 모델 이름·인덱스 해시·검색 크기를 직접 고르는 관리 기능을 제공하지 않는다.
 
@@ -129,7 +130,7 @@ Serverless 별칭 뒤의 비공개 모델 revision 변경까지 통제하거나 
 
 | API | 인증 | 용도 |
 | --- | --- | --- |
-| `GET /api/ui-config` | 공개 | 화면에 필요한 이름·예시 질문·서비스 사용 가능 상태 |
+| `GET /api/ui-config` | 공개 | 서비스 이름·공유 접속 방식·세션 보존 시간 |
 | `POST /api/auth/session` | 공유 코드 | 세션 쿠키 발급·로그인 시도 제한 |
 | `GET /api/auth/session` | 세션 | 현재 인증·만료·CSRF 토큰 확인 |
 | `DELETE /api/auth/session` | 세션+CSRF | 로그아웃·세션 폐기 |
@@ -159,13 +160,13 @@ QA용 관리자 토큰은 공유 코드와 다른 자격증명이며, 프런트�
 }
 ```
 
-새 요청은 HTTP 202와 `turn_id`·`status`를 반환한다.
-완료된 같은 요청은 기존 결과를 반환하고, 같은 request ID에 다른 질문을 보내면 409다.
+새 요청은 HTTP 202와 turn의 `id`·`status`를 반환한다.
+같은 요청은 기존 turn과 현재 결과를 반환하고, 같은 request ID에 다른 질문을 보내면 409다.
 한 대화에 다른 요청이 진행 중이면 409 `conversation_busy`를 반환한다.
 한 세션·대화의 ID만 알아낸 다른 세션은 자원에 접근할 수 없으며 404로 처리한다.
 
 turn 응답은 `id`, `conversation_id`, `status`, `stage`, `result`, `error`, `run_id`를 가진다.
-`result`는 검증된 QA 결과와 출처이고, `error`는 안전한 코드와 재시도 가능 여부다.
+`result`는 검증된 QA 결과와 출처이고, `error`는 안전한 오류 코드다. failed/interrupted는 자동 재시도하지 않는다.
 상태는 queued/running/completed/failed/interrupted로 구분한다.
 내부 모델·검색 설정·토큰 통계는 관리자 실행 기록에 보관하고 일반 화면에는 답변·출처·사용자용 상태를 표시한다.
 

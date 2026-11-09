@@ -42,7 +42,7 @@
   서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
 - 사용자 승인으로 대화 UI는 Open WebUI 프런트엔드를 추출·수정해 사용한다.
   공유 접속 코드와 브라우저별 익명 세션을 적용하고, Dataset 평가는 관리자 인증으로 분리한다.
-  설계는 `docs/chat-service-design.md`에 기록하며, 대화·평가는 동일한 QA 실행 로직을 사용한다.
+  설계는 `docs/chat-service-design.md`, 실행은 `docs/chat-service-operations.md`에 기록하며, 대화·평가는 동일한 QA 실행 로직을 사용한다.
   원본 커밋·수정 내역·라이선스·branding을 추적하고 Open WebUI 백엔드는 배포하지 않는다.
 - 활성 release는 `release/v0.1.0`이며, 구현 범위는 아래 milestone 기준을 따른다.
 

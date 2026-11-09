@@ -263,14 +263,15 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 선택한 스냅샷의 문서 버전과 청킹 정책을 메타데이터 필터로 제한하여 과거/다른 정책의 결과가 섞이지 않게 합니다.
 현재는 cosine distance 기반의 정확 검색이며 근사 검색 인덱스는 만들지 않습니다.
 결과는 유사도 내림차순으로 청크 ID·본문·제목·섹션 경로·원문 URL/앵커·문서 버전을 반환합니다.
-유사도는 답변의 정확도나 신뢰 확률이 아니며, 답변 생성·reranking·검색 품질 평가는 아직 구현하지 않았습니다.
+유사도는 답변의 정확도나 신뢰 확률이 아닙니다. QA 답변 생성과 Dataset 평가 API는 구현했고, reranking은 아직 구현하지 않았습니다.
 프로필이 달라졌거나 벡터가 누락된 인덱스는 검색을 실패 처리합니다.
 색인과 검색은 MLflow를 호출하지 않으며, 연결 검증용 `smoke`와 별개입니다.
 프로필과 검색 가능한 인덱스는 `tools/sql/corpus-embedding-profiles.sql`·`corpus-vector-indexes.sql`에서 확인합니다.
 
 ### 서버 실행과 질문 예시
 
-서비스 상태 API와 `POST /qa`를 제공합니다. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
+대화 화면·세션/작업 API와 관리자용 `POST /qa`를 제공합니다.
+공유 접속과 평가 실행은 [대화 서비스 운영 문서](docs/chat-service-operations.md)를 참고하세요. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
 생성 백엔드는 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions이며,
 아직 모델·endpoint·API Key를 설정하지 않은 상태에서는 HTTP 503과 `generation_not_configured`를 반환합니다.
 수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
@@ -300,6 +301,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --n
 # <index_key>는 corpus-vector-indexes.sql에서 확인한 실제 키로 교체합니다.
 curl -X POST http://127.0.0.1:8080/qa \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $EVALUATION_API_TOKEN" \
   -d '{"question":"B300 GPU 가상화는 어떻게 동작하나요?","index_key":"<index_key>","top_k":5}'
 # 같은 QA 로직을 사용하는 CLI
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ask 'B300 GPU 가상화는 어떻게 동작하나요?' --index-key '<index_key>' --top-k 5
@@ -373,7 +375,7 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
-수집·청킹·벡터 검색·QA를 포함한 테스트 124개(PostgreSQL 통합 테스트 15개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 139개(PostgreSQL 통합 테스트 25개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
@@ -386,12 +388,17 @@ H2 정책의 454개 청크를 홈서버 BGE-M3로 임베딩해 1024차원 벡터
 벡터 프로필·인덱스 조회 SQL 2개도 실행했습니다. 이는 동작 확인이며 Gold Set 검색 품질 평가가 아닙니다.
 QA는 모의 Serverless 응답으로 API 요청 형식·출처 매핑·유보·오류 처리를 검증했습니다.
 실제 BGE-M3 검색과 모의 생성을 연결한 경로 및 Docker의 QA 미설정 응답(503)·OpenAPI 스키마·CLI 오류 코드를 확인했습니다.
-이후 사용자가 설정한 엘리스 Serverless endpoint의 `gpt-6.1-terra`로 QA 한 건을 호출해
+이전 단계에서 사용자가 설정한 엘리스 Serverless endpoint의 `gpt-6.1-terra`로 QA 한 건을 호출해
 HTTP 200·`answered`와 출처 3개를 확인했습니다. 제공자가 반환한 입력/출력 토큰은 1540/475였습니다.
 이는 연결과 출력 계약 확인이며 실제 답변 정확성·유보 성능에 대한 Gold Set 평가는 아직 하지 않았습니다.
 MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 실행은 아직 검증하지 않았습니다.
 
 ### 평가 실행
+
+MLflow Dataset 입력을 고정해 대화 서비스와 같은 QA 실행 경로로 평가합니다.
+[운영 문서](docs/chat-service-operations.md)에 Dataset 형식·Bearer 인증·CLI와 결과 조회 방법을 정리했습니다.
+기본 CLI는 계획만 표시하고 `--submit`을 지정해야 작업을 접수합니다.
+현재 검색 근거 Recall과 답변 가능 여부를 채점하며, 검토된 Gold Set·의미적 정확성 Judge는 후속 작업입니다.
 
 ---
 
@@ -426,12 +433,13 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 
 ### 서비스와 데이터 흐름
 
-다음 단계의 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
-Open WebUI 프런트엔드 추출 범위, 공유 코드 인증, 대화 저장과 공통 QA 실행 계약을 정리했습니다.
+구현한 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
+Open WebUI 프런트엔드 일부를 추출해 공유 코드 인증·세션별 대화·출처 표시를 구현했습니다.
+[실행 방법과 Dataset 평가](docs/chat-service-operations.md)를 함께 참고하세요.
 해당 UI와 대화·평가 API는 설계 단계이며 아직 구현하지 않았습니다.
 
-아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹·벡터 검색 및 QA API 경로를 구현했으며,
-Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
+아래는 전체 목표의 논리 구조입니다. 현재 문서 수집·청킹·벡터 검색·QA와 대화/평가 API를 구현했습니다.
+배포 구성은 Knowledge 이미지의 API와 worker를 나누고 정적 대화 화면을 API에서 제공합니다.
 
 ```mermaid
 flowchart TB
@@ -543,7 +551,7 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 현재 구현은 서비스 기동·외부 인프라 연결 검증, 문서 수집·버전 관리·정책별 청킹과 벡터 검색 범위입니다.
 QA API·엘리스 Serverless 어댑터를 구현하고 설정된 모델의 실호출 한 건을 확인했습니다.
 답변 정확성·유보 성능에 대한 체계적 평가는 아직 하지 않았습니다.
-Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
+Dataset 평가 API/CLI와 결정적 scorer는 구현했습니다. 검토된 Gold Set 평가·의미적 Judge·클라우드 배포 검증은 남아 있습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
 임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
