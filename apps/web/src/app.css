@@ -65,3 +65,26 @@ summary:focus-visible {
 		animation-duration: 0.001ms !important;
 	}
 }
+
+.markdown a.citation-reference {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.4rem;
+	height: 1.4rem;
+	padding: 0 0.3rem;
+	margin: 0 0.15rem;
+	border: 1px solid #d9e2d4;
+	border-radius: 0.4rem;
+	background: #eff4eb;
+	color: #3f5840;
+	font-size: 0.7rem;
+	font-weight: 650;
+	line-height: 1;
+	text-decoration: none;
+	vertical-align: 0.1em;
+}
+.markdown a.citation-reference:hover {
+	background: #dfe9d8;
+	border-color: #8fa48f;
+}
