@@ -9,8 +9,12 @@ def test_live_works_without_configuration_and_ready_reports_each_dependency():
     assert client.get("/health/live").json() == {"status": "ok"}
     response = client.get("/health/ready")
     assert response.status_code == 503
-    assert set(response.json()["dependencies"]) == {"database", "embedding", "mlflow"}
-    assert all(item["status"] == "error" for item in response.json()["dependencies"].values())
+    assert set(response.json()["dependencies"]) == {"database", "embedding", "mlflow", "generation"}
+    assert all(
+        response.json()["dependencies"][name]["status"] == "error"
+        for name in ("database", "embedding", "mlflow")
+    )
+    assert response.json()["dependencies"]["generation"]["status"] == "not_configured"
 
 
 def test_ready_is_read_only_and_allows_tracking_disabled(monkeypatch):
@@ -33,3 +37,18 @@ def test_dependency_failure_does_not_expose_secret(monkeypatch):
     assert response.status_code == 503
     assert "private-" not in response.text
     assert response.json()["dependencies"]["database"]["status"] == "error"
+
+
+def test_generation_readiness_is_configuration_only_without_paid_calls(monkeypatch):
+    from test_generation import generation_settings
+
+    monkeypatch.setattr("elice_knowledge.main.check_database", lambda _: None)
+    monkeypatch.setattr("elice_knowledge.main.OllamaEmbedder.profile", lambda _: {})
+    monkeypatch.setattr(
+        "elice_knowledge.generation.EliceServerlessLLM.chat",
+        lambda *args: (_ for _ in ()).throw(AssertionError("No generation on health")),
+    )
+    client = TestClient(create_app(generation_settings(mlflow_enabled=False)))
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["dependencies"]["generation"]["status"] == "configured"

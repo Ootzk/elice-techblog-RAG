@@ -8,7 +8,9 @@ from elice_knowledge.chunk_store import run_chunking
 from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
 from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, profile_id
+from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
+from elice_knowledge.qa import QARequest, run_qa
 from elice_knowledge.retrieval import run_index, run_search
 from elice_knowledge.settings import Settings
 
@@ -39,10 +41,26 @@ def main():
     search.add_argument("query")
     search.add_argument("--index-key", required=True)
     search.add_argument("--top-k", type=int, default=5)
+    ask = subparsers.add_parser("ask", help="Answer from a selected index using Elice Serverless")
+    ask.add_argument("question")
+    ask.add_argument("--index-key", required=True)
+    ask.add_argument("--top-k", type=int, default=5)
     args = parser.parse_args()
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command == "ask":
+            stage = "qa"
+            result = run_qa(
+                settings,
+                QARequest(
+                    question=args.question,
+                    index_key=args.index_key,
+                    top_k=args.top_k,
+                ),
+            )
+            print(result.model_dump_json())
+            return
         if args.command == "index":
             stage = "indexing"
             print(json.dumps(run_index(settings, args.policy_key, args.snapshot_id)))
@@ -101,6 +119,8 @@ def main():
     except Exception as exc:
         # Keep credentials/addresses out of CLI logs as well as HTTP responses.
         result = {"status": "error", "stage": stage, "error_type": type(exc).__name__}
+        if isinstance(exc, GenerationError):
+            result["reason"] = exc.code
         if isinstance(exc, EmbeddingInputTooLong):
             result["reason"] = (
                 "embedding_input_too_long; use a smaller chunk policy or handle oversized blocks"
