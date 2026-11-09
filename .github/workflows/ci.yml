@@ -43,6 +43,8 @@ jobs:
       - name: Check branch direction and package versions
         id: contract
         run: python .github/scripts/release.py pr
+      - name: Test release contracts
+        run: python -m unittest discover -s .github/tests -v
       - name: Check whitespace
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -70,8 +72,8 @@ jobs:
           TEST_DATABASE_URL: postgresql://knowledge:test-only@localhost:5432/knowledge_test
         run: |
           uv sync --project apps/knowledge --locked
-          uv run --project apps/knowledge --no-sync ruff check apps/knowledge tools/evaluation
-          uv run --project apps/knowledge --no-sync ruff format --check apps/knowledge tools/evaluation
+          uv run --project apps/knowledge --no-sync ruff check .github/scripts .github/tests apps/knowledge tools/evaluation
+          uv run --project apps/knowledge --no-sync ruff format --check .github/scripts .github/tests apps/knowledge tools/evaluation
           uv run --project apps/knowledge --no-sync pytest apps/knowledge/tests -q
 
   images:
@@ -107,6 +109,12 @@ jobs:
         env:
           CHECKS_RESULT: ${{ needs.checks.result }}
           IMAGES_RESULT: ${{ needs.images.result }}
+          RELEASE_PR: ${{ needs.checks.outputs.release_pr }}
+          HAS_IMAGES: ${{ needs.checks.outputs.has_images }}
         run: |
           test "$CHECKS_RESULT" = success
-          test "$IMAGES_RESULT" = success || test "$IMAGES_RESULT" = skipped
+          if test "$RELEASE_PR" = true && test "$HAS_IMAGES" = true; then
+            test "$IMAGES_RESULT" = success
+          else
+            test "$IMAGES_RESULT" = skipped
+          fi
