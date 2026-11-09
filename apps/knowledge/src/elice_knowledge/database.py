@@ -28,6 +28,8 @@ def check_database(settings: Settings):
 
 
 def initialize_database(settings: Settings):
+    from elice_knowledge.corpus_store import initialize_corpus
+
     with connect(settings) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         conn.execute("""
@@ -40,6 +42,7 @@ def initialize_database(settings: Settings):
                 created_at timestamptz NOT NULL DEFAULT now()
             )
         """)
+        initialize_corpus(conn)
 
 
 def store_and_search(settings: Settings, text: str, vector: list[float], profile: dict) -> dict:
