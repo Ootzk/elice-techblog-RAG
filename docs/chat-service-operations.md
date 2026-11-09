@@ -28,7 +28,6 @@ AUTH_SESSION_SECRET=<세션 CSRF 서명용 비밀값, 최소 32자>
 EVALUATION_API_TOKEN=<평가 API 전용 관리자 토큰>
 QA_ACTIVE_INDEX_KEY=<corpus-vector-indexes.sql에서 확인한 인덱스 키>
 CHAT_SESSION_HOURS=168
-CHAT_REQUESTS_PER_HOUR=30
 QA_WORKER_CONCURRENCY=1
 ```
 
@@ -116,9 +115,10 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 - 질문 한도는 모든 기기·세션을 합쳐 코드별로 계산한다. 실패/중단을 포함한 접수 건수 기준이며
   재로그인으로 초기화하지 않는다. 관리자 코드는 이 시간당 한도만 우회하고 전역 worker 동시 실행 제한은 적용한다.
 - 코드 만료/폐기 시 queued 작업은 중단한다. 이미 실행 중인 외부 모델 요청을 취소하거나 과금을 되돌리지는 않는다.
-- 이전 공유 코드 기반 익명 대화는 기존 세션에만 남긴다. 여러 방문자의 기록을 하나의 코드로 합치지 않는다.
-  기존 `.env`의 `CHAT_ACCESS_CODE`는 그 익명 쿠키 확인에만 사용하고 새 로그인에는 허용하지 않는다.
-  기존 익명 세션은 만료 후 24시간이 지나면 대화와 함께 정리한다.
+- 개발 중 사용한 공유 코드 인증은 제거했다. `CHAT_ACCESS_CODE`와 전역 `CHAT_REQUESTS_PER_HOUR`는
+  사용하지 않는다. 방문자 질문 한도는 코드 발급 시 설정한다.
+  과거 익명 쿠키는 거부하고 다른 코드에 대화를 합치지 않는다.
+  과거 DB 행은 보존 기간이 끝나면 기존 정리 작업으로 제거한다.
 - 총 예산과 대규모 공개 서비스의 ingress 제한은 후속 과제다.
 
 ## 평가 API와 CLI

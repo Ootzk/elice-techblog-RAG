@@ -32,12 +32,10 @@ def service(store, monkeypatch):
     settings = Settings(
         database_url="postgresql://test@localhost/test",
         app_env="dev",
-        chat_access_code="legacy-shared-code",
         auth_session_secret="test-session-secret-with-32-bytes",
         admin_access_code="test-admin-login-code",
         evaluation_api_token="test-admin",
         generation_model="test-model",
-        chat_requests_per_hour=2,
     )
     service = ServiceStore(settings)
     config = {name: getattr(settings, name) for name in PROFILE_FIELDS}
@@ -479,36 +477,34 @@ def test_revoked_code_queued_work_is_interrupted_without_generation(service):
     assert row == {"status": "interrupted", "error": "access_code_inactive"}
 
 
-def test_legacy_sessions_are_not_merged_into_any_code_history(service):
+def test_retired_anonymous_cookies_are_rejected_and_never_merge_into_code_history(service):
     from elice_knowledge.service_store import token_hash
 
-    token = "old-anonymous-cookie"
-    session_id = uuid4()
+    token = "retired-anonymous-cookie"
+    session_id, conversation_id = uuid4(), uuid4()
     with service.connection() as conn:
         conn.execute(
             """INSERT INTO chat_sessions(id,token_hash,csrf_hash,expires_at)
             VALUES (%s,%s,%s,now()+interval '1 day')""",
-            (session_id, token_hash(token), token_hash(service.csrf(token, legacy=True))),
+            (session_id, token_hash(token), token_hash("retired-csrf")),
         )
-    conversation = service.create_conversation(session_id)["id"]
-    legacy = TestClient(create_app(service.settings))
-    legacy.cookies.set("knowledge_session", token)
-    assert legacy.get(f"/api/conversations/{conversation}").status_code == 200
-    assert legacy.get("/api/auth/session").json()["identity"]["role"] == "legacy"
-    assert legacy.get("/api/admin/access-codes").status_code == 403
+        conn.execute(
+            """INSERT INTO chat_conversations(id,session_id,profile_key)
+            VALUES (%s,%s,%s)""",
+            (conversation_id, session_id, PROFILE),
+        )
+    retired = TestClient(create_app(service.settings))
+    retired.cookies.set("knowledge_session", token)
+    assert retired.get(f"/api/conversations/{conversation_id}").status_code == 401
+    assert retired.get("/api/auth/session").status_code == 401
+    assert retired.get("/api/admin/access-codes").status_code == 401
+    for code in [service.test_guest_code, "test-admin-login-code"]:
+        assert (
+            browser(service, code).get(f"/api/conversations/{conversation_id}").status_code == 404
+        )
     assert (
-        browser(service, service.test_guest_code)
-        .get(f"/api/conversations/{conversation}")
-        .status_code
-        == 404
+        retired.post("/api/auth/session", json={"code": "retired-shared-code"}).status_code == 401
     )
-    assert (
-        browser(service, "test-admin-login-code")
-        .get(f"/api/conversations/{conversation}")
-        .status_code
-        == 404
-    )
-    assert legacy.post("/api/auth/session", json={"code": "legacy-shared-code"}).status_code == 401
 
 
 def test_admin_html_is_protected_and_cannot_be_accessed_with_guest_cookie(service, tmp_path):
@@ -526,7 +522,6 @@ def test_admin_html_is_protected_and_cannot_be_accessed_with_guest_cookie(servic
 def test_session_secret_is_independent_and_bootstrap_is_idempotent(service):
     client = browser(service, service.test_guest_code)
     conversation = new_conversation(client)
-    service.settings.chat_access_code = SecretStr("different legacy setting")
     assert client.get("/api/auth/session").status_code == 200
     AccessCodes(service).bootstrap()
     with service.connection() as conn:

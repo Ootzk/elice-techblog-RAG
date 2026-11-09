@@ -37,13 +37,11 @@ class Settings(BaseSettings):
         "max_completion_tokens"
     )
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
-    chat_access_code: SecretStr | None = None  # Existing anonymous sessions only.
     admin_access_code: SecretStr | None = None
     auth_session_secret: SecretStr | None = None
     evaluation_api_token: SecretStr | None = None
     qa_active_index_key: str | None = None
     chat_session_hours: int = Field(default=168, ge=1, le=720)
-    chat_requests_per_hour: int = Field(default=30, ge=1, le=1000)
     chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
     qa_history_pairs: int = Field(default=3, ge=0, le=10)
     qa_history_tokens: int = Field(default=2048, ge=128, le=8192)

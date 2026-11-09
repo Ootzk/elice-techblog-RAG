@@ -183,23 +183,21 @@ class ServiceStore:
         with self.connection() as conn:
             row = conn.execute(
                 """SELECT s.*,a.kind AS role,a.label,
-                    coalesce(a.id,s.id) AS principal_id
-                FROM chat_sessions s LEFT JOIN access_codes a ON a.id=s.access_code_id
+                    a.id AS principal_id
+                FROM chat_sessions s JOIN access_codes a ON a.id=s.access_code_id
                 WHERE s.token_hash=%s AND s.expires_at>now()
-                AND (s.access_code_id IS NULL OR (a.revoked_at IS NULL
-                    AND (a.expires_at IS NULL OR a.expires_at>now())))""",
+                AND a.revoked_at IS NULL
+                    AND (a.expires_at IS NULL OR a.expires_at>now())""",
                 (token_hash(token),),
             ).fetchone()
         if row is None or not secrets.compare_digest(
-            row["csrf_hash"], token_hash(self.csrf(token, legacy=row["access_code_id"] is None))
+            row["csrf_hash"], token_hash(self.csrf(token))
         ):
             raise ServiceError("session_expired", 401)
-        row["role"] = row["role"] or "legacy"
-        row["label"] = row["label"] or "이전 익명 세션"
         return row
 
-    def csrf(self, token, legacy=False):
-        secret = self.settings.chat_access_code if legacy else self.settings.auth_session_secret
+    def csrf(self, token):
+        secret = self.settings.auth_session_secret
         if not secret:
             raise ServiceError("session_expired", 401)
         return hmac.new(secret.get_secret_value().encode(), token.encode(), "sha256").hexdigest()
@@ -253,11 +251,10 @@ class ServiceStore:
     def create_conversation(self, owner):
         profile = self.active_profile()
         with self.connection() as conn:
-            code = conn.execute("SELECT id FROM access_codes WHERE id=%s", (owner,)).fetchone()
             return conn.execute(
-                """INSERT INTO chat_conversations(id,session_id,access_code_id,profile_key)
-                VALUES (%s,%s,%s,%s) RETURNING *""",
-                (uuid4(), None if code else owner, owner if code else None, profile),
+                """INSERT INTO chat_conversations(id,access_code_id,profile_key)
+                VALUES (%s,%s,%s) RETURNING *""",
+                (uuid4(), owner, profile),
             ).fetchone()
 
     def conversations(self, owner, cursor=None, limit=30):
@@ -265,7 +262,7 @@ class ServiceStore:
             return conn.execute(
                 """
                     SELECT id,title,updated_at FROM chat_conversations
-                    WHERE coalesce(access_code_id,session_id)=%s AND
+                    WHERE access_code_id=%s AND
                     deleted_at IS NULL AND (%s::timestamptz IS NULL OR updated_at<%s) ORDER BY
                     updated_at DESC,id LIMIT %s
                 """,
@@ -277,7 +274,7 @@ class ServiceStore:
             row = conn.execute(
                 (
                     "SELECT * FROM chat_conversations WHERE id=%s "
-                    "AND coalesce(access_code_id,session_id)=%s AND "
+                    "AND access_code_id=%s AND "
                     "deleted_at IS NULL FOR UPDATE"
                 ),
                 (conversation_id, owner),
@@ -313,19 +310,19 @@ class ServiceStore:
             identity = conn.execute(
                 "SELECT * FROM access_codes WHERE id=%s FOR UPDATE", (owner,)
             ).fetchone()
-            if identity and (
+            if not identity:
+                raise ServiceError("session_expired", 401)
+            if (
                 identity["revoked_at"]
                 or conn.execute(
                     "SELECT expires_at<=now() AS expired FROM access_codes WHERE id=%s", (owner,)
                 ).fetchone()["expired"]
             ):
                 raise ServiceError("session_expired", 401)
-            if not identity:
-                conn.execute("SELECT id FROM chat_sessions WHERE id=%s FOR UPDATE", (owner,))
             conv = conn.execute(
                 (
                     "SELECT * FROM chat_conversations WHERE id=%s "
-                    "AND coalesce(access_code_id,session_id)=%s AND "
+                    "AND access_code_id=%s AND "
                     "deleted_at IS NULL FOR UPDATE"
                 ),
                 (conversation_id, owner),
@@ -351,15 +348,12 @@ class ServiceStore:
             used = conn.execute(
                 """
                     SELECT count(*) AS n FROM chat_turns t JOIN chat_conversations c ON
-                    c.id=t.conversation_id WHERE coalesce(c.access_code_id,c.session_id)=%s AND
+                    c.id=t.conversation_id WHERE c.access_code_id=%s AND
                     t.created_at>now()-interval '1 hour'
                 """,
                 (owner,),
             ).fetchone()["n"]
-            limit = (
-                identity["requests_per_hour"] if identity else self.settings.chat_requests_per_hour
-            )
-            if used >= limit and (not identity or identity["kind"] != "admin"):
+            if used >= identity["requests_per_hour"] and identity["kind"] != "admin":
                 raise ServiceError("chat_rate_limited", 429)
             job_id = uuid4()
             payload = {"question": question, "profile_key": conv["profile_key"]}
@@ -389,7 +383,7 @@ class ServiceStore:
                 """
                     SELECT j.*,t.conversation_id,t.question FROM qa_jobs j JOIN chat_turns t ON
                     t.id=j.id JOIN chat_conversations c ON c.id=t.conversation_id WHERE j.id=%s
-                    AND coalesce(c.access_code_id,c.session_id)=%s AND c.deleted_at IS NULL
+                    AND c.access_code_id=%s AND c.deleted_at IS NULL
                 """,
                 (turn_id, owner),
             ).fetchone()

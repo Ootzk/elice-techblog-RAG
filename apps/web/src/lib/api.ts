@@ -15,7 +15,7 @@ export type Turn = {
 };
 export type Conversation = { id: string; title: string; turns: Turn[] };
 export type Item = { id: string; title: string; updated_at: string };
-export type Identity = { id: string; label: string; role: 'admin' | 'guest' | 'legacy' };
+export type Identity = { id: string; label: string; role: 'admin' | 'guest' };
 export type Session = { csrf_token: string; expires_at: string; identity: Identity };
 let csrf = '';
 export function setCsrf(value: string) {

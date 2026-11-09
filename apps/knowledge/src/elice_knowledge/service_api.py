@@ -155,7 +155,7 @@ def mount_service(app, settings):
     def get_session(request: Request, response: Response, owner=session_dependency):
         response.headers["Cache-Control"] = "no-store"
         return {
-            "csrf_token": store.csrf(request.cookies[COOKIE], legacy=owner["role"] == "legacy"),
+            "csrf_token": store.csrf(request.cookies[COOKIE]),
             "identity": identity(owner),
             "expires_at": owner["expires_at"],
         }
