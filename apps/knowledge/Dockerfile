@@ -5,13 +5,15 @@ COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH" \
     MLFLOW_HTTP_REQUEST_TIMEOUT=10 MLFLOW_HTTP_REQUEST_MAX_RETRIES=0 \
-    MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT=true
+    MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT=true INGEST_REPORT_DIR=/artifacts/ingest
 WORKDIR /app
 COPY apps/knowledge/pyproject.toml apps/knowledge/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 COPY apps/knowledge/src ./src
+COPY corpus ./corpus
 RUN uv sync --locked --no-dev --no-editable \
-    && useradd --uid 10001 --create-home app
+    && useradd --uid 10001 --create-home app \
+    && mkdir -p /artifacts/ingest && chown -R app:app /artifacts
 USER app
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

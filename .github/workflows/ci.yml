@@ -16,6 +16,18 @@ jobs:
   checks:
     name: Repository checks
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: knowledge
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: knowledge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowledge -d knowledge_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
     outputs:
       matrix: ${{ steps.contract.outputs.matrix }}
       has_images: ${{ steps.contract.outputs.has_images }}
@@ -40,6 +52,8 @@ jobs:
         with:
           version: '0.11.2'
       - name: Check Knowledge lockfile, lint and unit tests
+        env:
+          TEST_DATABASE_URL: postgresql://knowledge:test-only@localhost:5432/knowledge_test
         run: |
           uv sync --project apps/knowledge --locked
           uv run --project apps/knowledge --no-sync ruff check apps/knowledge

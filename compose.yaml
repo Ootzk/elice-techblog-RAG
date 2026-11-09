@@ -15,3 +15,8 @@ services:
       - "127.0.0.1:${KNOWLEDGE_PORT:-8080}:8080"
     init: true
     restart: unless-stopped
+    volumes:
+      - knowledge-artifacts:/artifacts
+
+volumes:
+  knowledge-artifacts:

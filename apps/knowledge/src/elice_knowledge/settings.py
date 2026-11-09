@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -20,6 +21,12 @@ class Settings(BaseSettings):
     mlflow_enabled: bool = True
     mlflow_tracking_uri: SecretStr | None = None
     mlflow_experiment_name: str = Field(default="elice-techblog-rag-connectivity", min_length=1)
+    crawl_interval_seconds: float = Field(default=0.5, ge=0, le=60)
+    crawl_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    crawl_retries: int = Field(default=2, ge=0, le=5)
+    crawl_max_pages: int = Field(default=100, ge=1, le=1000)
+    corpus_min_documents: int = Field(default=20, ge=1)
+    ingest_report_dir: Path = Path("artifacts/ingest")
 
     @model_validator(mode="after")
     def validate_endpoints(self):
