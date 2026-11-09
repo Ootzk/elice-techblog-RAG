@@ -1,0 +1,278 @@
+{
+  "source": "https://elice.io/ko/resources/blog?filter=tech_blog",
+  "language": "ko",
+  "processor_version": "elice-html-v1",
+  "snapshot_id": "18d24230ba50577b26858c2d062fa180cc22445ccf6c64e1ccfcd0f5e8a76356",
+  "documents": [
+    {
+      "url": "https://elice.io/ko/resources/blog/agentic-purpleops-automated-security-operations",
+      "document_id": "3aca270c-b7e5-52d5-b315-8fe14daaf638",
+      "version_id": "9f50b9b2-6b54-50b3-9c97-accaabb833b7",
+      "content_hash": "942fc75bec06f6cc7e95bc3b6e5785d332fad2a199f7191f792f6330441d2a10",
+      "raw_hash": "c2b941bf12ca95b79ce8f5d333ad07060e16117f6008016856f7a9a24dc52197",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/agentic-purpleops-automated-security-operations-3",
+      "document_id": "8e9122d3-e537-52d8-9d92-a995ef77abb5",
+      "version_id": "e0bdb952-51b4-54bf-b57b-8106d1ea2aed",
+      "content_hash": "bd6abbe4e43718b4dfaf81477a57b32e7816e032cef1a2c7148d3fc7192a49f9",
+      "raw_hash": "281ab7420bc9a4b802b29eec546d05e62b106f8d0d786184bc60a29ab32c7975",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/agentic-purpleops-automated-security-operations-4",
+      "document_id": "772ac486-daf8-51e2-9146-640cadf0bbfa",
+      "version_id": "ee045146-9efc-5301-b320-b21eb123d8ea",
+      "content_hash": "42af71432283b43979613ed138d2b5b9ffc163e42adc05a0233de75b02725892",
+      "raw_hash": "8e34e97811d57495eba0c4b0d91a5c683c549cff2f71785365b64c0a4c40c84b",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/agentic-purpleops-automated-security-operations-5",
+      "document_id": "a26773ba-6d09-580c-a175-be65b6b63fe5",
+      "version_id": "d727f3c1-f8d8-5ef2-b3fb-fb77431dd8d6",
+      "content_hash": "26c6a3ec040e46147d67e1986fc5370bc848680a78e6deb7cbb77bd697688135",
+      "raw_hash": "b03a52ce0c0c8f8b5d5f2c22695a024481fac475f9f9f396d7ee1a812ac6a818",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/ai-storage-poc-workload-comparison",
+      "document_id": "1246ae89-86b4-5b0a-89a6-b4401a2dae38",
+      "version_id": "1aa52535-2903-5784-85b0-7c85eaf72430",
+      "content_hash": "24d84d6ed0ac13fbd22058c647fa1ce91673b199ff67f747c9d8baac3daffe80",
+      "raw_hash": "55dd30627ead62eb979bf6dd60bd2c39ebeb1300bd36f7cc653c26825761016e",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/b200-korean-llm-dataset-1",
+      "document_id": "19cc8ba6-c805-561c-8c1d-ac4043aa24b5",
+      "version_id": "6ddc1638-ca23-5c6f-92d2-34c0cbca187e",
+      "content_hash": "4a6c1f5857079fcb534b38819fa741295569b006a47eaa645710289b5190346f",
+      "raw_hash": "53f481f1213e85fc5e63f937803a32c84778ef43abccc05aacd8041edeae6a27",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/b200-korean-llm-dataset-2",
+      "document_id": "5b7f7699-17a1-5ce9-8b04-d69c4070d610",
+      "version_id": "7863a1c2-b6b0-5e61-b6e3-88e3b647700f",
+      "content_hash": "3fe8cfbf485ecaf8b5a8a2a26d601408a97fc710348009ffef9b45a8a7ce0c26",
+      "raw_hash": "3d682fa18ca3dbce2457e41b67281f4364e9c042f3f618f40d6d65013233cb80",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/eci-b300-gpu-virtualization",
+      "document_id": "10b1c60e-0604-5f71-a927-eae443be44f7",
+      "version_id": "0fcbf94c-63ef-59f2-8a2e-1fd990468005",
+      "content_hash": "7cd356bea01fc6b4429b0745f1e044a42a190c8b6eba24844af17c131bfa1fde",
+      "raw_hash": "98c0e2b83d95dfc9f43897283a842532a95b623ccac9bc1278e984fea4129c2f",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/eci-b300-gpu-virtualization-2",
+      "document_id": "00fd2726-b35e-57ce-aeb6-4783fe4d874d",
+      "version_id": "f7dc50f5-61b0-5833-939d-ae44f9a11041",
+      "content_hash": "66c8f8f1fa01e9ce752a337f6df1b0176b53845c20b9397abc9efb770f1a366d",
+      "raw_hash": "9ac492799187a6a6ea084ef52943ab7ea0d95c3fd067ac501511373404398b0a",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/eeg-transformer-lbm",
+      "document_id": "ae6e3103-9234-584e-a249-0a8b4cba2171",
+      "version_id": "7cdee087-88b9-5f20-80c5-b5d57092c3a4",
+      "content_hash": "855fb31a67ab92fa80324bae88f7101bf9a8726c1f11467e2147e2d1508de7df",
+      "raw_hash": "e6125cc69f42c0b56c5613f56a0a813dcc3b6b8c8d3779a38a2cf41ff0fe92b5",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/elicecloud-llm-financial-research",
+      "document_id": "54277b31-687f-573d-8a7e-e9c9b25e528d",
+      "version_id": "db190da3-80dd-57d9-b85a-5d8226dce841",
+      "content_hash": "33c1e9f407d81bbaaddfac8715f082d4f390fb9450b2d31384d0a0269a96dbf9",
+      "raw_hash": "d6c49b0dfc8700ae3dda186496affeebf3dadfb9bea73a13a75fcc580c1d909c",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/elice-korean-qwen2.5",
+      "document_id": "7e069616-ea5c-5de8-9d4d-290c1e7d8b5b",
+      "version_id": "c69bfbc2-76c7-5447-8100-bd9c700c9de1",
+      "content_hash": "1536720ecd6a1f1bcea6d9f5b9faf6f9d7d62f22b3151456e9c03a0b8d9ec1ac",
+      "raw_hash": "7e430e8428081b706bbce1ce6c70303af5316ea28e45d60906bdda75984b3409",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/flutter_app_performance",
+      "document_id": "539ba367-2c28-5aa5-a8b9-3f92a575dd9f",
+      "version_id": "fb3ae488-5952-579d-b9a0-754839acb77a",
+      "content_hash": "3382314fafb3952a13a96a8e6b45963dc0a5e441ae7f08040531ce254e304306",
+      "raw_hash": "cf292b5ad8d0bab6445cc8c7f40e0d9e7147b7dcfc8af88a3bd623a94b89cbfc",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/flux1-schnell-benchmark",
+      "document_id": "c8da8e40-3ca9-5ccd-b38d-ffd0ad5e8904",
+      "version_id": "fca78b50-12eb-5e8f-9021-ed1f827af3e9",
+      "content_hash": "cab0fbff7345491181ce2b764e528efd1c9354bed333ad7b8b7e48c1fde678d6",
+      "raw_hash": "9b03163948b0fa1c7cbdd133d1b31054fc4d561467796ee7a83d52f0b16413f2",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/gpu-benchmark-b200-a100-h100",
+      "document_id": "6fc853c1-2899-5203-82bd-a911c356b353",
+      "version_id": "5ad8cde9-94b2-58e8-8669-dfedca370479",
+      "content_hash": "3663990a89ce82e7de22c9907751a17b21c72f68f8c792f2e9c08a3b18089c8b",
+      "raw_hash": "7652ca214ff116beb6bf898e7fc6ebce60ad355d3b3471fce8ae6b55aff1279d",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/helpycode-blog-system-build",
+      "document_id": "3ecdb923-3a1b-59a8-8423-69d6030c7992",
+      "version_id": "b4acde0a-3d96-5fbf-90ec-0e83e73919b0",
+      "content_hash": "99111fce9450a4a0b0eed1957519334f2d9ea96cddcf5880a4ee489591e015cd",
+      "raw_hash": "4d026545624516ed919ef3a4ada0cc9aa8294f47c9ea7a5e5cf0170544b33eea",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/helpy-vision-model-introduction",
+      "document_id": "8d4d942b-24ed-51a2-8087-dff7ca08af2b",
+      "version_id": "606239c6-d4e5-5b37-b638-e5e4424723b6",
+      "content_hash": "ea1972bf01f8cecafaeaf4780f89fe11c1289b6ea9db57e5fa15acbb99faf6e4",
+      "raw_hash": "06e1adf76c79f10cfee4684c1992cf9b69a33eae64f7a19a68b004aae624a27c",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/infiniband-vs-rocev2-benchmark",
+      "document_id": "192eed95-3045-5aec-ad84-eb5384feadd3",
+      "version_id": "e7ee33eb-ade7-5297-a829-ddb73f07dd9d",
+      "content_hash": "6ade8ca9963293885c0d23b05cbeffcb3d558bb43c683696245fbefc776bc7d0",
+      "raw_hash": "1be94590b742c2097817327bb7c6f506022eddb154fa91061547dfc273168ec0",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/llama3.1-ko-benchmark",
+      "document_id": "4bbbd7dc-7bb6-5476-9265-a2f62a9ebd4d",
+      "version_id": "e77ecc0d-3e73-549f-9f89-8e3d0425cf63",
+      "content_hash": "6d93ca236a29b1f547b48aab1cd0bdca7ec38ffc946184f322883fb434c97beb",
+      "raw_hash": "c79fb73bc5b77549f11307bf07bf0560ad896df1a8d8ef1632cbb1e8da4cfea4",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/llama-3-benchmark",
+      "document_id": "300e6255-ad99-5bc6-984f-26106b6b3c58",
+      "version_id": "93dca1ed-b5d8-585a-8c34-9c92ec010b5d",
+      "content_hash": "eae05f47347715b5513544d4e826db71b07c7ecef42b5fcd6a0d0868430eced3",
+      "raw_hash": "b9dc9e842b748837fc281745a7a62af97708ce9a431930aaf7ca39b05d8bd98f",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/llm-benchmark-korea-elice",
+      "document_id": "4b54c7b5-948e-50a2-a28e-b92910872838",
+      "version_id": "2e6e18ef-c172-5736-b89c-cf91ae102d83",
+      "content_hash": "152b457d97e0509b15b4875b61b5723919f59e0532d153a3599dfaf78c0f1a85",
+      "raw_hash": "e74c66c878524413a8205947671cd0e9c3e493cd09ed9e98d6209d1cc7988e6a",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/pwa_1",
+      "document_id": "c512cc47-228d-5c87-b57f-caf22149eb96",
+      "version_id": "abfdc168-e0c1-5534-b143-33c204f2f5ba",
+      "content_hash": "a88f571be5ef9cfc66bd31cd89a686238c958204c3565dbe5204e4c24c21fdc0",
+      "raw_hash": "0ce95ed6ba63f8fd5f12dcfc8ced1e118787982cc2a4dd93131744da57d14e54",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/pwa_2",
+      "document_id": "ce21bd83-3e66-582e-a5f4-e935e50aa7ac",
+      "version_id": "205acc66-3ecc-5a52-b553-e804e49124e6",
+      "content_hash": "30ee9555fb9aa1b0f3f7bf4983a5f464a022c19418bc2e618bd42969c077205b",
+      "raw_hash": "6f754c26477a4d3882f29e604b364e491ef4d307701cd5c24929e7c7a1eb2ad6",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/salesops-crm-development-story",
+      "document_id": "793ce565-47cb-59fe-92e5-4eb287b1bee9",
+      "version_id": "2b751967-03c3-5d1c-a28d-f2ec352c3ac3",
+      "content_hash": "88ee75e1120b23264fba83125da82f5106d386b762e78305f02b6ec137f1442e",
+      "raw_hash": "d08873732f36b63099daffbabff825ca4f58d08e5b2968f6f883aa225d4789cd",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/softwaretest_tdd",
+      "document_id": "2f36aa37-5426-5623-bc73-2cc65169b747",
+      "version_id": "a428ca38-63aa-5d18-9e0d-5e5e470df447",
+      "content_hash": "facb356661147b5bb546fe7021474b4f5923334bb4a677529848150c997b0923",
+      "raw_hash": "dd04fc486e34b815b4239a85a02c8a625cab5ca940d2dd8c02c75ad70c840736",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/unity-ml-agents",
+      "document_id": "2047fbe4-b161-556b-b939-5d8fb8f3fcd2",
+      "version_id": "1d5c9ada-e868-585f-9987-5edbdc8b3e6b",
+      "content_hash": "b11677ad0f50b97573d4aff643c81a89c7293e51be9fa60a3b924534f08e4fa8",
+      "raw_hash": "4fa60c620c2cbee22eacc5360bb0fb64dcbb1990c1e683e169c5e3e924830df2",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    },
+    {
+      "url": "https://elice.io/ko/resources/blog/whisper-large-benchmark",
+      "document_id": "6768ea52-5e82-56bd-b741-3118c2df6152",
+      "version_id": "7a8be652-6529-5c52-a105-5b631bc18548",
+      "content_hash": "654cc914e97b192e5f9b18d2923116d0db3e6c3c5f8738a8009393c54de36398",
+      "raw_hash": "08dff8b0d6aa03464004fb89ca7a1462068a4882c73e720dfcc66eed3f8ecf96",
+      "processor_version": "elice-html-v1",
+      "included": true,
+      "reason": "Korean tech_blog; last validated version"
+    }
+  ]
+}

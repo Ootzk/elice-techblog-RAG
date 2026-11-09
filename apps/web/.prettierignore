@@ -1,0 +1,9 @@
+node_modules
+.svelte-kit
+build
+package-lock.json
+# Preserve verbatim upstream copies (hashes in upstream.json).
+src/lib/components/common/Textarea.svelte
+src/lib/components/common/Spinner.svelte
+src/lib/components/chat/Messages/Name.svelte
+static/licenses

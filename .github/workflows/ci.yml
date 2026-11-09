@@ -1,0 +1,169 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, 'release/**']
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.contract.outputs.matrix }}
+      has_images: ${{ steps.contract.outputs.has_images }}
+      release_pr: ${{ steps.contract.outputs.release_pr }}
+      web: ${{ steps.scope.outputs.web }}
+      knowledge: ${{ steps.scope.outputs.knowledge }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check branch direction and package versions
+        id: contract
+        run: python .github/scripts/release.py pr
+      - name: Select checks for changed paths
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RELEASE_PR: ${{ steps.contract.outputs.release_pr }}
+        run: python .github/scripts/ci_scope.py --base "$BASE_SHA" --head "$HEAD_SHA" --release-pr "$RELEASE_PR"
+      - name: Test CI and release contracts
+        run: python -m unittest discover -s .github/tests -v
+      - name: Check whitespace
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --check "$BASE_SHA...$HEAD_SHA"
+
+  web:
+    name: Web checks
+    needs: checks
+    if: needs.checks.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Check extracted web frontend
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run format:check
+          npm run check
+          npm run build
+
+  knowledge:
+    name: Knowledge checks
+    needs: checks
+    if: needs.checks.outputs.knowledge == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: knowledge
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: knowledge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowledge -d knowledge_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.2'
+      - name: Check Knowledge lockfile, lint and unit tests
+        env:
+          # NLTK rejects hardlinked data files; use independent installed copies.
+          UV_LINK_MODE: copy
+          TEST_DATABASE_URL: postgresql://knowledge:test-only@localhost:5432/knowledge_test
+        run: |
+          uv sync --project apps/knowledge --locked
+          uv run --project apps/knowledge --no-sync ruff check .github/scripts .github/tests apps/knowledge tools/evaluation
+          uv run --project apps/knowledge --no-sync ruff format --check .github/scripts .github/tests apps/knowledge tools/evaluation
+          uv run --project apps/knowledge --no-sync pytest apps/knowledge/tests -q
+
+  images:
+    name: Build ${{ matrix.service }}
+    needs: [checks, web, knowledge]
+    if: >-
+      needs.checks.result == 'success' && !cancelled() &&
+      needs.web.result == 'success' && needs.knowledge.result == 'success' &&
+      needs.checks.outputs.release_pr == 'true' && needs.checks.outputs.has_images == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.checks.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          build-args: |
+            QA_BUILD_REVISION=${{ github.sha }}
+            QA_BUILD_DIRTY=false
+          file: ${{ matrix.file }}
+          platforms: linux/amd64
+          push: false
+
+  ready:
+    name: Ready to merge
+    needs: [checks, web, knowledge, images]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful checks and release image builds
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          WEB_REQUIRED: ${{ needs.checks.outputs.web }}
+          WEB_RESULT: ${{ needs.web.result }}
+          KNOWLEDGE_REQUIRED: ${{ needs.checks.outputs.knowledge }}
+          KNOWLEDGE_RESULT: ${{ needs.knowledge.result }}
+          IMAGES_RESULT: ${{ needs.images.result }}
+          RELEASE_PR: ${{ needs.checks.outputs.release_pr }}
+          HAS_IMAGES: ${{ needs.checks.outputs.has_images }}
+        run: |
+          test "$CHECKS_RESULT" = success
+          if test "$WEB_REQUIRED" = true; then
+            test "$WEB_RESULT" = success
+          else
+            test "$WEB_RESULT" = skipped
+          fi
+          if test "$KNOWLEDGE_REQUIRED" = true; then
+            test "$KNOWLEDGE_RESULT" = success
+          else
+            test "$KNOWLEDGE_RESULT" = skipped
+          fi
+          if test "$RELEASE_PR" = true && test "$HAS_IMAGES" = true; then
+            test "$IMAGES_RESULT" = success
+          else
+            test "$IMAGES_RESULT" = skipped
+          fi

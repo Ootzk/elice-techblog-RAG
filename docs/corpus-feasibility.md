@@ -63,10 +63,9 @@ https://elice.io/ko/resources/blog?filter=tech_blog 의 현재 목록에 포함�
 
 ## 점검 산출물
 
-- `tmp/site-scan/article-paths.json`: 목록에서 발견한 27개 글 경로
-- `tmp/site-scan/scan-results.json`: 글별 URL·언어·제목·게시일·본문 길이·구조 통계
-- `tmp/site-scan/scan.py`: 진단용 본문 추출 스크립트. 표 구조를 보존하는 실제 ingest 구현은 아님
-- `tmp/site-scan/*.html`, `*.txt`: 로컬 점검용 응답 및 텍스트. 공개 제출용 정제 Corpus가 아님
+초기 조사에 사용한 임시 스크립트·응답 HTML·추출 텍스트는 개발 자료로 정리했다.
+현재 수집 대상은 `corpus/manifest.json`, 재현 가능한 수집·검증 경로는 README의 Ingest 실행 절차를 따른다.
+위 조사 결과는 사전 검토 기록이며 현재 Corpus 품질 평가는 별도로 수행한다.
 
 ## 대표 원문
 
