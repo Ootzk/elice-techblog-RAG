@@ -305,6 +305,9 @@ def run_qa(
                 config={"recursion_limit": 2 * settings.qa_agent_max_tool_calls + 6},
             )
     result = state["result"]
+    for name, value in llm.usage_summary().items():
+        setattr(result, name, value)
+    result.tool_call_count = sum(step.action in TOOL_NAMES for step in state["steps"])
     result.retrieved_sources = state["sources"]
     result.agent_steps = state["steps"]
     result.history_omitted_count = omitted

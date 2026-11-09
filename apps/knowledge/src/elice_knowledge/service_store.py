@@ -437,7 +437,9 @@ class ServiceStore:
                 return None
             return conn.execute(
                 """UPDATE qa_jobs SET status='running',stage='retrieving',lease_owner=%s,
-                lease_expires=now()+(%s * interval '1 second') WHERE id=%s RETURNING *""",
+                lease_expires=now()+(%s * interval '1 second') WHERE id=%s RETURNING *,
+                (extract(epoch FROM (clock_timestamp()-created_at))*1000)::double precision
+                AS queue_wait_ms""",
                 (uuid4(), self.settings.worker_lease_seconds, row["id"]),
             ).fetchone()
 

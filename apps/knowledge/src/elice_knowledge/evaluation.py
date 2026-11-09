@@ -8,6 +8,7 @@ from psycopg.types.json import Jsonb
 from elice_knowledge.corpus import digest
 from elice_knowledge.execution import execute
 from elice_knowledge.judges import evaluate_answers, frozen_judges
+from elice_knowledge.performance import summarize as performance_summary
 from elice_knowledge.qa import QARequest
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client as tracking_client
@@ -231,6 +232,7 @@ def run_evaluation(store, job):
                             (Jsonb(case["scores"]), job["id"], case["record_id"]),
                         )
         summary = {
+            **performance_summary(cases),
             "judge_metrics": judge_metrics,
             "cases": len(cases),
             "completed": len(cases) - failed,

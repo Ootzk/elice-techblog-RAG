@@ -263,13 +263,55 @@ Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했�
 Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아직 수행하지 않았다.
 등록 CLI는 생성이나 평가를 호출하지 않는다.
 
+### 자원·시간 지표
+
+QA 응답의 `llm_call_count`·`tool_call_count`와 `usage`는 한 질문의 planner 및 최종 생성을 합산한다.
+Judge 사용량은 이 집계에 포함하지 않는다. `usage`는 기존 Chat Completions 이름
+`prompt_tokens`·`completion_tokens`·`total_tokens`와 캐시 입력인 `cached_tokens`를 사용한다.
+`prompt_tokens_details.cached_tokens`가 유효한 정수일 때만 추출하며, input/total에 더하지 않는다.
+
+필드별 `usage_reported_calls`로 제공한 호출 수를 기록하고, 모든 호출이 보고한 항목만 질문 총량에 넣는다.
+누락·null·잘못된 값은 0으로 채우지 않는다. 호출별 LLM span에는 제공된 값만 기록하고,
+캐시 입력은 MLflow 표준 `cache_read_input_tokens`로 전달한다. Trace의 자동 토큰 집계는 보고된 호출을
+기준으로 하므로, 질문 전체의 완전성은 QA 응답의 coverage를 함께 확인한다.
+
+평가 Run에는 성공한 QA 사례를 대상으로 다음 지표를 기록한다.
+
+| 지표 접두사 | 값과 집계 |
+| --- | --- |
+| `qa_duration_ms` | QA 실행 시간의 `_mean`·`_median`·`_max`·`_measured_cases` |
+| `failed_qa_duration_ms` | 실패한 QA의 시간을 위와 같은 방식으로 별도 집계 |
+| `input_tokens`·`cached_input_tokens`·`output_tokens`·`total_tokens` | 위 집계와 `_total`. 완전히 보고한 질문만 대상 |
+| `llm_call_count`·`tool_call_count` | 질문당 호출 수의 위 집계와 `_total` |
+| `cache_hit_ratio` | 캐시와 입력이 모두 보고된 같은 질문 집합에서 캐시 입력 합 / 전체 입력 합 |
+| `cache_hit_ratio_measured_cases` | 위 비율의 계산 대상 질문 수 |
+
+측정값이 없는 항목은 건수만 0으로 기록하고 평균·합계·비율을 만들지 않는다.
+`qa_duration_ms`는 프로필을 확인한 뒤 공통 QA 실행에 들어가서 완료할 때까지이며,
+추적 설정·종료를 포함하지만 큐 대기와 QA 결과 DB 저장은 제외한다.
+질문별 원시 값은 `evaluation-results.json`과 사례 API에서 확인한다.
+
+일반 대화 작업의 DB 결과에는 `timings.queue_wait_ms`(접수부터 worker claim까지),
+`worker_duration_ms`(claim 후 처리 시작부터 답변 준비까지), 두 값의 합인 `server_duration_ms`를 남긴다.
+worker 시간에는 프로필 갱신·이력 조회·QA 실행·QA 결과 저장이 포함된다.
+이 값은 작업 완료 DB 갱신과 브라우저 polling/렌더링 시간을 포함하지 않으므로 사용자 체감 시간과 구분한다.
+큐 대기 시간은 QA 루트 span의 `elice.queue_wait_ms`에도 기록한다.
+
+아직 원화/달러 비용·첫 토큰 시간(TTFT)·브라우저 기준 응답 시간은 산출하지 않는다.
+비교 실험에서는 질문·모델·자원 한도·캐시 상태와 측정 건수를 같이 확인한다.
+소규모 세트의 기본 집계는 평균·중앙값·최댓값이며 p95는 산출하지 않는다.
+
+MLflow 지표 이름은 key다. 코드에서 새 이름을 기록해도 이전 Run의 key가 자동으로 변경되지 않는다.
+이후 실행에는 `evidence_recall`을 사용하고, 과거 `evidence_recall_at_k` 기록은 보존한다.
+
 ## 검증 한계
 
 Judge 연동은 Gold·Iron의 고정 모범 답안 샘플 각 1개에 모델 3개가 판정·이유를 남기는지 확인했다.
 실제 QA 샘플로 질문·답변·검색 근거의 Trace 저장과 online Judge 3개의 서버 자동 판정을 확인했다.
 span 보강 후 별도 실제 질문에서는 답변 생성과 36개 span의 서버 저장·부모 자식 연결·LLM 토큰 집계를 확인했다.
+자원 계측 보강 후 실제 QA 샘플에서 토큰·캐시 사용량·호출 수·지연을 확인하고, 성능 요약 Run의 저장·재조회를 검증했다.
 이는 연결·rubric 실행 검증이며 전수 기준 평가나 Judge 신뢰도 측정 결과가 아니다.
-격리된 임시 PostgreSQL DB를 포함한 Python 테스트 211개, lint와 개발 이미지 빌드·기동을 확인했다.
+격리된 임시 PostgreSQL DB를 포함한 Python 테스트 221개, lint와 개발 이미지 빌드·기동을 확인했다.
 
 브라우저 연결이 없어 실제 화면 클릭·모바일 배치는 확인하지 못했다.
 대화 UI의 정적 빌드·Docker HTTP 검증과 Dataset 등록의 파일 검증·원격 내용 대조·재등록을 확인했다.

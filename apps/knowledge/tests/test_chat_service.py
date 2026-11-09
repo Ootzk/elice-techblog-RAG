@@ -143,6 +143,16 @@ def test_duplicate_turn_busy_quota_and_worker_history(service, monkeypatch):
     assert process_one(service)
     assert not process_one(service)
     assert client.get(f"/api/turns/{turn_id}").json()["result"]["answer"] == "답변입니다."
+    with service.connection() as conn:
+        execution = conn.execute("SELECT result FROM qa_jobs WHERE id=%s", (turn_id,)).fetchone()[
+            "result"
+        ]
+    timings = execution["timings"]
+    assert timings["queue_wait_ms"] >= 0
+    assert timings["worker_duration_ms"] >= execution["duration_ms"]
+    assert timings["server_duration_ms"] == pytest.approx(
+        timings["queue_wait_ms"] + timings["worker_duration_ms"]
+    )
     assert len(seen) == 1
     assert submit(client, conversation, question="그것은?").status_code == 202
     process_one(service)

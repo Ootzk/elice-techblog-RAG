@@ -42,6 +42,7 @@ class GenerationResponseError(GenerationError):
 class EliceServerlessLLM(CustomLLM):
     _settings: Settings = PrivateAttr()
     _client: httpx.Client = PrivateAttr()
+    _usage_records: list[dict[str, int]] = PrivateAttr(default_factory=list)
 
     def __init__(self, settings: Settings, client: httpx.Client):
         super().__init__()
@@ -78,6 +79,7 @@ class EliceServerlessLLM(CustomLLM):
                             ("prompt_tokens", "input_tokens"),
                             ("completion_tokens", "output_tokens"),
                             ("total_tokens", "total_tokens"),
+                            ("cached_tokens", "cache_read_input_tokens"),
                         ]
                         if source in usage
                     },
@@ -127,23 +129,43 @@ class EliceServerlessLLM(CustomLLM):
                 or not content.strip()
             ):
                 raise ValueError("Incomplete or empty generation")
-            usage = data.get("usage") or {}
+            raw_usage = data.get("usage") or {}
             usage = {
                 key: value
-                for key, value in usage.items()
+                for key, value in raw_usage.items()
                 if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
                 and type(value) is int
                 and value >= 0
             }
+            details = raw_usage.get("prompt_tokens_details")
+            cached = details.get("cached_tokens") if isinstance(details, dict) else None
+            if type(cached) is int and 0 <= cached <= usage.get("prompt_tokens", cached):
+                usage["cached_tokens"] = cached
             actual_model = data.get("model")
             if not isinstance(actual_model, str):
                 actual_model = settings.generation_model
         except (ValueError, KeyError, IndexError, TypeError, AttributeError):
             raise GenerationResponseError("Invalid Chat Completions response") from None
+        self._usage_records.append(usage)
         return ChatResponse(
             message=ChatMessage(role=MessageRole.ASSISTANT, content=content),
             additional_kwargs={"model": actual_model, "usage": usage},
         )
+
+    def usage_summary(self):
+        """A question total is known only if every successful call reported it."""
+        records = self._usage_records
+        fields = ("prompt_tokens", "cached_tokens", "completion_tokens", "total_tokens")
+        coverage = {field: sum(field in record for record in records) for field in fields}
+        return {
+            "llm_call_count": len(records),
+            "usage_reported_calls": coverage,
+            "usage": {
+                field: sum(record[field] for record in records)
+                for field in fields
+                if records and coverage[field] == len(records)
+            },
+        }
 
     @llm_completion_callback()
     def complete(self, prompt: str, formatted: bool = False, **kwargs) -> CompletionResponse:

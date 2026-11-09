@@ -13,6 +13,7 @@ def process_one(store):
     job = store.claim()
     if not job:
         return False
+    started = time.monotonic()
     stop = threading.Event()
 
     def renew():
@@ -45,7 +46,14 @@ def process_one(store):
                 profile_key,
                 job["payload"]["question"],
                 store.history(job["subject_id"]),
+                queue_wait_ms=job["queue_wait_ms"],
             )
+            worker_ms = (time.monotonic() - started) * 1000
+            output["timings"] = {
+                "queue_wait_ms": job["queue_wait_ms"],
+                "worker_duration_ms": worker_ms,
+                "server_duration_ms": job["queue_wait_ms"] + worker_ms,
+            }
             store.finish(job, output, output["error"])
         else:
             output = run_evaluation(store, job)

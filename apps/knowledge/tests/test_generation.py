@@ -156,3 +156,54 @@ def test_empty_templates_do_not_enable_generation():
 def test_base_url_is_explicit_and_has_no_embedded_credentials(url):
     with pytest.raises(ValueError):
         Settings(generation_base_url=url)
+
+
+@pytest.mark.parametrize("cached", [0, 7, None, -1, True, "7", 21])
+def test_cached_tokens_are_optional_validated_and_not_added_to_total(cached):
+    usage = {
+        "prompt_tokens": 20,
+        "completion_tokens": 5,
+        "total_tokens": 25,
+        "prompt_tokens_details": {"cached_tokens": cached},
+    }
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json=completion(usage=usage))
+        )
+    ) as client:
+        llm = EliceServerlessLLM(generation_settings(), client)
+        response = llm.complete("Q")
+        actual = response.additional_kwargs["usage"]
+        assert actual["total_tokens"] == 25
+        if type(cached) is int and 0 <= cached <= 20:
+            assert actual["cached_tokens"] == cached
+        else:
+            assert "cached_tokens" not in actual
+
+
+def test_question_usage_omits_totals_with_incomplete_reporting():
+    responses = iter(
+        [
+            completion(
+                usage={
+                    "prompt_tokens": 20,
+                    "completion_tokens": 5,
+                    "total_tokens": 25,
+                    "prompt_tokens_details": {"cached_tokens": 0},
+                }
+            ),
+            completion(usage={"prompt_tokens": 30, "completion_tokens": 6, "total_tokens": 36}),
+        ]
+    )
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=next(responses)))
+    ) as client:
+        llm = EliceServerlessLLM(generation_settings(), client)
+        llm.complete("planner")
+        llm.complete("answer")
+        summary = llm.usage_summary()
+    assert summary["llm_call_count"] == 2
+    assert summary["usage"]["prompt_tokens"] == 50
+    assert summary["usage"]["total_tokens"] == 61
+    assert "cached_tokens" not in summary["usage"]
+    assert summary["usage_reported_calls"]["cached_tokens"] == 1

@@ -11,7 +11,7 @@ from elice_knowledge.service_store import PROFILE_FIELDS, ServiceError
 
 
 @contextmanager
-def qa_trace(settings, request, profile_key, mode):
+def qa_trace(settings, request, profile_key, mode, queue_wait_ms=None):
     """A single application boundary; no credentials or Settings are exported."""
     if not settings.mlflow_enabled or not settings.mlflow_tracking_uri:
         import mlflow
@@ -33,6 +33,8 @@ def qa_trace(settings, request, profile_key, mode):
             trace_destination=MlflowExperimentLocation(experiment_id=experiment_id),
         )
         span = context.__enter__()
+        if queue_wait_ms is not None:
+            span.set_attribute("elice.queue_wait_ms", queue_wait_ms)
         span.set_inputs(
             {"question": request.question, "history": [m.model_dump() for m in request.history]}
         )
@@ -55,7 +57,7 @@ def qa_trace(settings, request, profile_key, mode):
                 logging.getLogger(__name__).warning("QA trace export failed", exc_info=False)
 
 
-def execute(store, profile_key, question, history=None, *, mode="online"):
+def execute(store, profile_key, question, history=None, *, mode="online", queue_wait_ms=None):
     config = store.profile(profile_key)
     settings = store.settings.model_copy(update={name: config[name] for name in PROFILE_FIELDS})
     request = QARequest(
@@ -67,7 +69,7 @@ def execute(store, profile_key, question, history=None, *, mode="online"):
     started = time.monotonic()
     error, result = None, None
     trace_id = None
-    with qa_trace(settings, request, profile_key, mode) as span:
+    with qa_trace(settings, request, profile_key, mode, queue_wait_ms) as span:
         if span:
             trace_id = span.trace_id
         try:
@@ -81,6 +83,14 @@ def execute(store, profile_key, question, history=None, *, mode="online"):
         if span:
             try:
                 span.set_outputs(result if not error else {"error": error})
+                if not error:
+                    span.set_attributes(
+                        {
+                            "elice.llm_call_count": result["llm_call_count"],
+                            "elice.tool_call_count": result["tool_call_count"],
+                            "elice.usage_reported_calls": result["usage_reported_calls"],
+                        }
+                    )
                 if error:
                     span.set_status("ERROR")
             except Exception:

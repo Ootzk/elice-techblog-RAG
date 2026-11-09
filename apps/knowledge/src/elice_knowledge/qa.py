@@ -92,6 +92,9 @@ class QAResponse(BaseModel):
     generation_model: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     retrieved_sources: list[dict] = Field(default_factory=list)
+    usage_reported_calls: dict[str, int] = Field(default_factory=dict)
+    llm_call_count: int = Field(default=0, ge=0)
+    tool_call_count: int = Field(default=0, ge=0)
     history_omitted_count: int = 0
     agent_steps: list[AgentStep] = Field(default_factory=list)
     agent_stop_reason: (

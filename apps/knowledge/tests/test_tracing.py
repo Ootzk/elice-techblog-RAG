@@ -8,7 +8,7 @@ import mlflow
 import pytest
 from mlflow.entities import MlflowExperimentLocation
 from test_agent import OTHER, run, step
-from test_generation import generation_settings
+from test_generation import completion, generation_settings
 from test_qa import ANSWER, INDEX, SOURCE
 
 from elice_knowledge.settings import Settings
@@ -42,6 +42,12 @@ def persisted(root):
 
 
 def test_graph_tools_models_and_final_context_are_one_trace(trace_backend, monkeypatch):
+    def cached_completion(*a, **kw):
+        data = completion(*a, **kw)
+        data["usage"]["prompt_tokens_details"] = {"cached_tokens": 7}
+        return data
+
+    monkeypatch.setattr("test_agent.completion", cached_completion)
     with httpx.Client() as client:
         tools = KnowledgeTools(generation_settings(), INDEX, client)
         tools.store = SimpleNamespace(
@@ -83,6 +89,13 @@ def test_graph_tools_models_and_final_context_are_one_trace(trace_backend, monke
     models = [s for s in spans if s.span_type == "LLM"]
     assert len(models) == 4
     assert all(s.attributes["mlflow.chat.tokenUsage"]["total_tokens"] == 25 for s in models)
+    assert all(
+        s.attributes["mlflow.chat.tokenUsage"]["cache_read_input_tokens"] == 7 for s in models
+    )
+    assert result.usage["cached_tokens"] == 28
+    assert result.usage["total_tokens"] == 100
+    assert result.usage_reported_calls["cached_tokens"] == 4
+    assert result.llm_call_count == 4 and result.tool_call_count == 2
     assert all(s.inputs["messages"] and s.outputs["messages"] for s in models)
     assert "private-serverless-key" not in json.dumps([s.to_dict() for s in spans], default=str)
 
