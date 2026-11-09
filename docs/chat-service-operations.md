@@ -153,11 +153,14 @@ python3 tools/evaluation/evaluate.py --dataset-id '<dataset-id>' --submit
 ```
 
 개별 record는 `--record-id`를 반복해 선택한다. QA 프로필은 `--qa-profile-key`로 지정할 수 있다.
+`--prompt NAME=VERSION|ALIAS`를 반복하면 해당 Registry 프롬프트로 고정한 실험용 프로필을 만들어 평가한다(미리보기에서도 프로필은 생성된다).
+평가는 모든 프롬프트가 Registry에서 확정된 프로필만 접수하고, 저장소 템플릿으로 대체된 프로필은 409로 거부한다.
 CLI 기본 동작은 metadata만 읽으며 생성하지 않는다. 접수 후 다음 API에서 조회한다.
 
 | API | 용도 |
 | --- | --- |
 | `GET /api/qa-profiles` | 활성/저장된 QA 프로필 |
+| `POST /api/qa-profiles` | `index_key`·`top_k`·`prompts`(이름→버전/alias)로 실험용 프로필 생성, HTTP 201 |
 | `GET /api/scorer-profiles` | 고정 scorer 키와 정의 |
 | `GET /api/evaluation-datasets/{id}` | Dataset 해시·레코드 검토 |
 | `POST /api/evaluations` | 고정 평가 접수, HTTP 202 |

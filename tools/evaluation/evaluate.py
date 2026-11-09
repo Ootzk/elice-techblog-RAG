@@ -13,6 +13,12 @@ def main():
     parser.add_argument("--base-url", default="http://127.0.0.1:8080")
     parser.add_argument("--dataset-id", required=True)
     parser.add_argument("--qa-profile-key")
+    parser.add_argument(
+        "--prompt",
+        action="append",
+        metavar="NAME=VERSION|ALIAS",
+        help="Create an experiment QA profile pinned to these registry prompts",
+    )
     parser.add_argument("--record-id", action="append")
     parser.add_argument(
         "--submit",
@@ -20,6 +26,8 @@ def main():
         help="Enqueue generation calls (may incur cost)",
     )
     args = parser.parse_args()
+    if args.prompt and args.qa_profile_key:
+        parser.error("Use either --qa-profile-key or --prompt")
     token = os.environ.get("EVALUATION_API_TOKEN")
     if not token:
         parser.error("Set EVALUATION_API_TOKEN in the environment")
@@ -38,7 +46,13 @@ def main():
 
     try:
         dataset = call("/evaluation-datasets/" + quote(args.dataset_id, safe=""))
-        profile = args.qa_profile_key or call("/qa-profiles")["active"]
+        if args.prompt:
+            selectors = dict(value.partition("=")[::2] for value in args.prompt)
+            created = call("/qa-profiles", {"prompts": selectors})
+            profile = created["key"]
+            print(json.dumps({"qa_profile": created}, ensure_ascii=False, indent=2))
+        else:
+            profile = args.qa_profile_key or call("/qa-profiles")["active"]
         scorer = call("/scorer-profiles")["items"][0]["key"]
         plan = {
             "dataset_id": args.dataset_id,

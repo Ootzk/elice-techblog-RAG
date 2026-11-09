@@ -11,6 +11,7 @@ from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, pro
 from elice_knowledge.execution import execute
 from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
+from elice_knowledge.prompts import PromptError
 from elice_knowledge.retrieval import run_index, run_keyword_search, run_search
 from elice_knowledge.service_store import ServiceError, ServiceStore
 from elice_knowledge.settings import Settings
@@ -60,6 +61,25 @@ def main():
     ask.add_argument("question")
     ask.add_argument("--index-key", required=True)
     ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument(
+        "--prompt",
+        action="append",
+        metavar="NAME=VERSION|ALIAS",
+        help="Pin a registry prompt for this run (no bundled fallback)",
+    )
+    prompt = subparsers.add_parser("prompt", help="Manage QA prompts in MLflow Prompt Registry")
+    prompt_commands = prompt.add_subparsers(dest="prompt_command", required=True)
+    register = prompt_commands.add_parser(
+        "register", help="Publish bundled templates (idempotent) and set an alias"
+    )
+    register.add_argument("--alias", default="development")
+    register.add_argument("--message", help="Commit message for new versions")
+    alias = prompt_commands.add_parser("alias", help="Point an alias at an existing version")
+    alias.add_argument("name")
+    alias.add_argument("version", type=int)
+    alias.add_argument("--alias", required=True)
+    show = prompt_commands.add_parser("show", help="Resolve prompts as a new QA profile would")
+    show.add_argument("--prompt", action="append", metavar="NAME=VERSION|ALIAS")
     args = parser.parse_args()
     stage = "configuration"
     try:
@@ -75,10 +95,25 @@ def main():
 
             run_worker(settings, once=args.once)
             return
+        if args.command == "prompt":
+            from elice_knowledge import prompts
+
+            stage = "prompt registry"
+            if args.prompt_command == "register":
+                output = prompts.register(settings, args.alias, args.message)
+            elif args.prompt_command == "alias":
+                output = prompts.set_alias(settings, args.name, args.alias, args.version)
+            else:
+                resolved = prompts.resolve(settings, prompts.parse_selectors(args.prompt))
+                output = {name: p.ref().model_dump() for name, p in resolved.items()}
+            print(json.dumps({"status": "ok", "prompts": output}, ensure_ascii=False))
+            return
         if args.command == "ask":
+            from elice_knowledge.prompts import parse_selectors
+
             stage = "qa"
             store = ServiceStore(settings)
-            key = store.active_profile(args.index_key, args.top_k)
+            key = store.active_profile(args.index_key, args.top_k, parse_selectors(args.prompt))
             output = execute(store, key, args.question)
             if output["error"]:
                 raise ServiceError(output["error"])
@@ -143,7 +178,7 @@ def main():
     except Exception as exc:
         # Keep credentials/addresses out of CLI logs as well as HTTP responses.
         result = {"status": "error", "stage": stage, "error_type": type(exc).__name__}
-        if isinstance(exc, (GenerationError, ServiceError)):
+        if isinstance(exc, (GenerationError, ServiceError, PromptError)):
             result["reason"] = exc.code
         if isinstance(exc, EmbeddingInputTooLong):
             result["reason"] = (

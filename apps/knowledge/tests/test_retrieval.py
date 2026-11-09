@@ -187,3 +187,28 @@ def test_repeated_dense_search_on_open_index_checks_profile_once_per_search(retr
     backend.digest = "swapped"
     with pytest.raises(EmbeddingError, match="profile changed"):
         repo.dense_search(index, "GPU", backend, top_k=2)
+
+
+def test_active_profile_freezes_resolved_prompt_content(retrieval, monkeypatch):
+    from elice_knowledge.prompts import PLANNER, PROMPT_NAMES, bundled
+    from elice_knowledge.service_store import ServiceStore
+
+    repo, corpus, _, snapshot, policy, _ = retrieval
+    key = repo.index(policy.key, FakeEmbedder(), snapshot)["index_key"]
+    store = ServiceStore(corpus.settings)
+    default = store.profile(store.active_profile(key, 3))
+    assert {p["source"] for p in default["prompts"].values()} == {"bundled"}
+    assert default["prompts"][PLANNER]["template"] == bundled(PLANNER).template
+
+    def pinned(settings, selectors):
+        out = {n: bundled(n) for n in PROMPT_NAMES}
+        if selectors:
+            out[PLANNER] = out[PLANNER].model_copy(
+                update={"source": "registry", "uri": f"prompts:/{PLANNER}/7", "version": 7}
+            )
+        return out
+
+    monkeypatch.setattr("elice_knowledge.service_store.resolve", pinned)
+    experiment = store.active_profile(key, 3, {PLANNER: "7"})
+    assert experiment != store.active_profile(key, 3)
+    assert store.profile(experiment)["prompts"][PLANNER]["version"] == 7

@@ -12,6 +12,7 @@ from elice_knowledge.database import check_database
 from elice_knowledge.embedding import OllamaEmbedder
 from elice_knowledge.generation import GenerationError, GenerationNotConfigured, GenerationTimeout
 from elice_knowledge.mcp_server import MCP_PATH, create_mcp_app
+from elice_knowledge.prompts import PromptError, resolve
 from elice_knowledge.qa import QARequest, QAResponse, QARetrievalError
 from elice_knowledge.service_api import COOKIE, mount_service
 from elice_knowledge.service_store import ServiceError, ServiceStore
@@ -109,7 +110,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     def qa(request: QARequest):
         try:
-            return run_qa(settings, request)
+            # Immediate admin path: no stored profile, so resolve the configured alias now.
+            return run_qa(settings, request, resolve(settings))
+        except PromptError as exc:
+            return JSONResponse(status_code=422, content={"error": exc.code})
         except GenerationNotConfigured as exc:
             return JSONResponse(status_code=503, content={"error": exc.code})
         except GenerationTimeout as exc:

@@ -7,7 +7,9 @@ from elice_knowledge.settings import Settings
 def client(settings: Settings) -> MlflowClient:
     if settings.mlflow_tracking_uri is None:
         raise ValueError("MLFLOW_TRACKING_URI is required when MLflow is enabled")
-    return MlflowClient(tracking_uri=settings.mlflow_tracking_uri.get_secret_value())
+    uri = settings.mlflow_tracking_uri.get_secret_value()
+    # Prompt lineage (link_prompt_version_to_run) needs the registry on the same server.
+    return MlflowClient(tracking_uri=uri, registry_uri=uri)
 
 
 def check_tracking(settings: Settings):

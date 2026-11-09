@@ -12,7 +12,7 @@ from psycopg.types.json import Jsonb
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.database import connect
-from elice_knowledge.qa import PROMPT_VERSION
+from elice_knowledge.prompts import PromptError, resolve
 
 
 class ServiceError(ValueError):
@@ -219,8 +219,14 @@ class ServiceStore:
         with self.connection() as conn:
             conn.execute("UPDATE chat_sessions SET expires_at=now() WHERE id=%s", (session_id,))
 
-    def active_profile(self, index_key=None, top_k=5):
+    def active_profile(self, index_key=None, top_k=5, prompt_selectors=None):
+        """Freeze index, generation settings and resolved prompt content into a profile."""
         s = self.settings
+        try:
+            # Resolved before the DB transaction: the registry is a network call.
+            prompts = resolve(s, prompt_selectors)
+        except PromptError as exc:
+            raise ServiceError(exc.code, 503 if exc.code == "prompt_unavailable" else 422) from None
         with self.connection() as conn:
             if index_key or s.qa_active_index_key:
                 row = conn.execute(
@@ -237,7 +243,7 @@ class ServiceStore:
             config.update(
                 index_key=row["key"],
                 top_k=top_k,
-                prompt_version=PROMPT_VERSION,
+                prompts={name: prompt.model_dump() for name, prompt in prompts.items()},
                 code_identity=code_identity(),
                 provider_identity=provider_identity(s),
                 build_revision=s.qa_build_revision,
