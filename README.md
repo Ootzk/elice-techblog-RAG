@@ -438,7 +438,17 @@ agentic RAG 교체 후 BM25·사용자 사전·도구 계약·MCP·agent 그래�
 같은 인덱스와 홈서버 BGE-M3에 실제 두 도구를 연결하고 planner·답변을 모의 응답으로 대체해
 검색 → 중복 제거 → 출처 선택 → Citation 검증까지의 agent 그래프를 확인했습니다.
 Knowledge 이미지(`linux/arm64`) 빌드와 컨테이너 안의 Kiwi·MCP 로딩도 확인했습니다.
-실제 엘리스 Serverless 모델이 planner JSON 프로토콜을 지키는지와 agentic 검색의 품질은 아직 검증하지 않았습니다.
+2026-11-09 dev 구성에서 설정한 엘리스 Serverless `gpt-6.1-terra`로 질문 3개를 호출해 planner JSON 프로토콜과
+Citation 검증이 끝까지 동작하는 것을 확인했습니다. 기본 도구 호출 한도는 4입니다.
+
+| 질문 | 경로 | 결과 | 종료 | 도구 호출 | 총 토큰 |
+| --- | --- | --- | --- | --- | --- |
+| B300 GPU 가상화 동작 방식 | CLI `ask` | `answered`, 인용 8개 | `tool_budget` | keyword 4회 | 18,771 |
+| Whisper-large-v3 비용 절감 | CLI `ask` | `answered`, 인용 2개 | `planner_answer` | keyword 2회 | 7,516 |
+| Corpus에 없는 레시피 질문 | 대화 API·worker | `insufficient_evidence`(`model_abstained`) | `tool_budget` | keyword 3회·meaning 1회 | 14,469 |
+
+세 질문 중 두 번은 planner가 스스로 답변을 결정하지 않고 도구 호출 한도까지 검색했고, `keyword_search`를 주로 골랐습니다.
+이 확인 뒤 planner에 보이는 `top_k` 상한을 요청 값으로 맞췄습니다. 이는 동작 확인이며 Gold Set 품질 평가가 아닙니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
