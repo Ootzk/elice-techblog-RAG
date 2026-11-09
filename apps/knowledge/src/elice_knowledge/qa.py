@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from elice_knowledge.generation import GenerationResponseError
 from elice_knowledge.settings import Settings
 
-PROMPT_VERSION = "elice-agentic-citation-qa-v1"
+PROMPT_VERSION = "elice-citation-qa-v1"
 ABSTENTION = "제공된 문서에서 답변에 필요한 근거를 확인하지 못했습니다."
 SYSTEM_PROMPT = """당신은 한국어 엘리스 테크블로그 문서에 근거해 답변하는 도우미입니다.
 제공된 sources만 근거로 사용하고 외부 지식으로 빈칸을 채우지 마세요.

@@ -477,36 +477,6 @@ def test_revoked_code_queued_work_is_interrupted_without_generation(service):
     assert row == {"status": "interrupted", "error": "access_code_inactive"}
 
 
-def test_retired_anonymous_cookies_are_rejected_and_never_merge_into_code_history(service):
-    from elice_knowledge.service_store import token_hash
-
-    token = "retired-anonymous-cookie"
-    session_id, conversation_id = uuid4(), uuid4()
-    with service.connection() as conn:
-        conn.execute(
-            """INSERT INTO chat_sessions(id,token_hash,csrf_hash,expires_at)
-            VALUES (%s,%s,%s,now()+interval '1 day')""",
-            (session_id, token_hash(token), token_hash("retired-csrf")),
-        )
-        conn.execute(
-            """INSERT INTO chat_conversations(id,session_id,profile_key)
-            VALUES (%s,%s,%s)""",
-            (conversation_id, session_id, PROFILE),
-        )
-    retired = TestClient(create_app(service.settings))
-    retired.cookies.set("knowledge_session", token)
-    assert retired.get(f"/api/conversations/{conversation_id}").status_code == 401
-    assert retired.get("/api/auth/session").status_code == 401
-    assert retired.get("/api/admin/access-codes").status_code == 401
-    for code in [service.test_guest_code, "test-admin-login-code"]:
-        assert (
-            browser(service, code).get(f"/api/conversations/{conversation_id}").status_code == 404
-        )
-    assert (
-        retired.post("/api/auth/session", json={"code": "retired-shared-code"}).status_code == 401
-    )
-
-
 def test_admin_html_is_protected_and_cannot_be_accessed_with_guest_cookie(service, tmp_path):
     (tmp_path / "index.html").write_text("<html>admin app shell</html>")
     service.settings.web_dist_dir = tmp_path

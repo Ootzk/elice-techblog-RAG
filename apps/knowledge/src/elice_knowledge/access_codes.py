@@ -19,18 +19,6 @@ def initialize_access_codes(conn):
         id uuid PRIMARY KEY, access_code_id uuid NOT NULL REFERENCES access_codes(id),
         actor_id uuid REFERENCES access_codes(id), action text NOT NULL, details jsonb NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now())""")
-    conn.execute("""ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS
-        access_code_id uuid REFERENCES access_codes(id)""")
-    conn.execute("""ALTER TABLE chat_conversations ADD COLUMN IF NOT EXISTS
-        access_code_id uuid REFERENCES access_codes(id)""")
-    conn.execute("ALTER TABLE chat_conversations ALTER COLUMN session_id DROP NOT NULL")
-    conn.execute("""CREATE INDEX IF NOT EXISTS conversations_code_owner
-        ON chat_conversations(access_code_id,updated_at DESC,id)""")
-
-    if not conn.execute("""SELECT 1 FROM pg_constraint WHERE
-        conrelid='chat_conversations'::regclass AND conname='conversation_owner'""").fetchone():
-        conn.execute("""ALTER TABLE chat_conversations ADD CONSTRAINT conversation_owner
-            CHECK(num_nonnulls(session_id,access_code_id)=1)""")
 
 
 PUBLIC_FIELDS = (

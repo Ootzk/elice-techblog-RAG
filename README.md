@@ -430,7 +430,7 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
 수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 150개(PostgreSQL 통합 테스트 36개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
-agentic RAG 교체 후 BM25·사용자 사전·도구 계약·MCP·agent 그래프 테스트를 더해 177개(PostgreSQL 통합 테스트 37개 포함)가
+agentic RAG 교체 후 BM25·사용자 사전·도구 계약·MCP·agent 그래프 테스트를 더하고 폐기된 익명 세션 테스트를 정리해 176개(PostgreSQL 통합 테스트 36개 포함)가
 맥북의 임시 `pgvector/pgvector:pg17` 컨테이너에서 통과했습니다. agent 테스트는 모의 Serverless 응답을 사용합니다.
 개발 Corpus의 H2 인덱스(청크 454개)에서 BM25 검색이 B300·Whisper·Qwen 질의에 해당 글의 청크를 반환했습니다.
 프로세스의 첫 검색은 Kiwi 로딩과 색인 생성으로 약 3초, 이후 검색은 캐시를 재사용했습니다.
