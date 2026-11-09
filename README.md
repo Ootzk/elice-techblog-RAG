@@ -271,7 +271,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ### 서버 실행과 질문 예시
 
 대화 화면·세션/작업 API와 관리자용 `POST /qa`를 제공합니다.
-공유 접속과 평가 실행은 [대화 서비스 운영 문서](docs/chat-service-operations.md)를 참고하세요. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
+코드 로그인·관리자 화면과 평가 실행은 [대화 서비스 운영 문서](docs/chat-service-operations.md)를 참고하세요. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
 생성 백엔드는 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions이며,
 아직 모델·endpoint·API Key를 설정하지 않은 상태에서는 HTTP 503과 `generation_not_configured`를 반환합니다.
 수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
@@ -375,7 +375,7 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
-수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 139개(PostgreSQL 통합 테스트 25개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 150개(PostgreSQL 통합 테스트 36개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
@@ -434,7 +434,7 @@ MLflow Dataset 입력을 고정해 대화 서비스와 같은 QA 실행 경로�
 ### 서비스와 데이터 흐름
 
 구현한 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
-Open WebUI 프런트엔드 일부를 추출해 공유 코드 인증·세션별 대화·출처 표시를 구현했습니다.
+Open WebUI 프런트엔드 일부를 추출해 관리자/방문자 코드 인증·코드별 대화 복구·관리자 코드 관리·출처 표시를 구현했습니다.
 [실행 방법과 Dataset 평가](docs/chat-service-operations.md)를 함께 참고하세요.
 해당 UI와 대화·평가 API는 설계 단계이며 아직 구현하지 않았습니다.
 
