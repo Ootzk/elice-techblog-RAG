@@ -39,7 +39,7 @@
   서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
 - 활성 release는 `release/v0.1.0`이며, 구현 범위는 아래 milestone 기준을 따른다.
 
-## v0.1.0 — 최소 서비스 골격과 문서 수집·청킹
+## v0.1.0 — 최소 서비스 골격과 문서 수집·검색
 
 - `apps/knowledge/`에 서비스 패키지·의존성·Dockerfile을 구성한다.
   사용자 승인으로 Python 3.12·uv·FastAPI를 사용한다.
@@ -59,7 +59,11 @@
 - 사용자 지시로 저장된 원문에 H2 우선 청킹과 긴 일반 텍스트의 문장 분할을 추가한다.
   정책 키와 문서 버전별 결과 키를 분리해 PostgreSQL JSONB로 보관하고, 기존 결과는 덮어쓰지 않는다.
   MarkdownNodeParser·SentenceSplitter를 사용하고 표·코드는 추가 분할에서 보호한다.
-- 본문 임베딩·검색·QA, Gold Set 평가, 프런트엔드와
+- 사용자 지시로 청크 임베딩·pgvector 저장·검색 CLI를 추가한다. 공통 Embedding 어댑터를
+  LlamaIndex BaseEmbedding으로 연결하고 PGVectorStore·VectorStoreIndex를 사용한다.
+  임베딩 프로필별로 청크 벡터를 재사용하며 스냅샷·정책별 완료 인덱스만 검색에 노출한다.
+  입력 초과는 truncate=false로 거부하고, 실패 배치는 저장하지 않는다.
+- QA, Gold Set 평가, 프런트엔드와
   엘리스클라우드 배포는 후속 milestone에서 진행한다.
 
 ## 코드와 설정 배치

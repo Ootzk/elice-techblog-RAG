@@ -84,7 +84,8 @@ docker compose exec knowledge python -m elice_knowledge init-db
 
 Ingest는 Knowledge 패키지 안의 재실행 가능한 CLI입니다. 초기 전체 수집과 이후 갱신에
 같은 명령을 사용하며, 현재는 수동 실행합니다. 청킹은 별도 CLI로 실행하고,
-스케줄러·본문 임베딩·검색 색인은 아직 포함하지 않습니다.
+Ingest 자체는 임베딩·검색 색인을 수행하지 않으며, 별도의 `index`·`search` CLI로 연결합니다.
+스케줄러는 아직 포함하지 않습니다.
 
 본문 HTML 전체를 한 개의 LlamaIndex `Document`로 전달하고,
 `IngestionPipeline(transformations=[HTMLNodeParser(...)])`가 문단·태그 탐색과 노드 분리를 처리합니다.
@@ -190,7 +191,8 @@ H2가 없으면 가장 상위에 있는 본문 제목을 경계로 사용하며,
 셀 병합이 있는 표는 HTML로, 다른 표는 Markdown으로 보존하며 코드의 공백과 줄바꿈은 유지합니다.
 크기 제한을 넘는 구조화 블록은 `oversized=true`로 기록합니다.
 `--overflow none`은 길이 분할을 생략합니다. 원문과 제목 구조는 유지하지만 큰 청크가 생길 수 있습니다.
-크기 제한을 넘는 청크의 임베딩 처리와 BGE-M3 입력 길이 검증은 후속 작업입니다.
+모델에 전달할 때는 본문과 제목 메타데이터를 합친 전체 입력을 `truncate=false`로 요청합니다.
+Ollama가 허용 길이를 넘었다고 응답하면 해당 배치를 저장하지 않고 색인을 중단합니다.
 
 정책별 결과는 PostgreSQL에서 key-value 방식으로 보관합니다.
 
@@ -221,6 +223,44 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 `tools/sql/corpus-chunk-policies.sql`에서 정책 키와 설정을 확인하고,
 `corpus-chunk-sets.sql`과 `corpus-chunks.sql`로 정책별 결과와 실제 본문을 조회할 수 있습니다.
 청킹은 Embedding·MLflow를 호출하지 않습니다. Docker 이미지는 빌드 때 토크나이저 데이터를 포함합니다.
+
+검색용 임베딩은 기존 Ollama 어댑터를 LlamaIndex `BaseEmbedding`으로 연결하고,
+벡터 저장·검색은 `PGVectorStore`와 `VectorStoreIndex`를 사용합니다.
+벡터는 임베딩 프로필별 PostgreSQL 테이블에 저장하며 같은 프로필 안에서는
+청크 ID로 재사용합니다. 다른 청킹 정책·문서 버전의 청크는 별도 ID로 유지합니다.
+프로필에는 모델 digest·차원·양자화·정규화 등의 백엔드 정보와 문서/질의 입력 계약을 포함하며,
+서버 접속 주소는 포함하지 않습니다. 주소가 같아도 모델 프로필이 달라지면 다른 테이블을 사용합니다.
+문서는 제목·제목 경로와 청크 본문, 질의는 앞뒤 공백을 제거한 질문을 임베딩하고 별도 접두사는 붙이지 않습니다.
+
+```bash
+# 새 저장 테이블을 추가합니다. 기존 Corpus·청킹 결과는 유지합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge init-db
+# chunk 출력이나 corpus-chunk-policies.sql에서 확인한 정책 키를 지정합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge index --policy-key '<policy_key>'
+# index 출력이나 corpus-vector-indexes.sql에서 확인한 인덱스 키를 지정합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge search 'B300 GPU 가상화는 어떻게 동작하나요?' --index-key '<index_key>' --top-k 5
+```
+
+`index`의 `--snapshot-id` 기본값은 최신 Corpus 스냅샷입니다. 지정한 스냅샷의 모든 문서에
+해당 정책의 청킹 결과가 있어야 하며, 색인 과정에서 정책을 바꾸거나 자동으로 청킹하지 않습니다.
+표준 오류에는 배치 진행 개수, 표준 출력에는 인덱스 키·스냅샷/정책/프로필 키와 신규/재사용 청크 수를 출력합니다.
+같은 임베딩 프로필의 색인은 DB 세션 잠금으로 직렬화하고, 추론 중에는 DB 트랜잭션을 유지하지 않습니다.
+완료한 배치는 유지하여 실패 후 재실행 시 재사용하고, 추론 전후 모델 프로필이 달라지면 중단합니다.
+모든 청크의 벡터를 확인한 뒤에만 `corpus_vector_indexes`에 검색 가능한 인덱스를 등록합니다.
+
+청크 본문의 `cl100k_base` 토큰 수는 BGE-M3의 입력 한도가 아닙니다.
+허용 길이 여부는 [Ollama의 truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정하며,
+초과 시 CLI는 `EmbeddingInputTooLong`과 안전한 이유 코드를 출력합니다. 표·코드를 자동으로 잘라 재시도하지 않습니다.
+더 작은 정책을 적용하거나 큰 구조화 블록의 처리 방식을 별도로 정한 뒤 다시 실행해야 합니다.
+
+`search`는 인덱스 키로 스냅샷·정책·모델 프로필을 고정하고 동일한 임베딩 프로필의 질의 벡터를 사용합니다.
+선택한 스냅샷의 문서 버전과 청킹 정책을 메타데이터 필터로 제한하여 과거/다른 정책의 결과가 섞이지 않게 합니다.
+현재는 cosine distance 기반의 정확 검색이며 근사 검색 인덱스는 만들지 않습니다.
+결과는 유사도 내림차순으로 청크 ID·본문·제목·섹션 경로·원문 URL/앵커·문서 버전을 반환합니다.
+유사도는 답변의 정확도나 신뢰 확률이 아니며, 답변 생성·reranking·검색 품질 평가는 아직 구현하지 않았습니다.
+프로필이 달라졌거나 벡터가 누락된 인덱스는 검색을 실패 처리합니다.
+색인과 검색은 MLflow를 호출하지 않으며, 연결 검증용 `smoke`와 별개입니다.
+프로필과 검색 가능한 인덱스는 `tools/sql/corpus-embedding-profiles.sql`·`corpus-vector-indexes.sql`에서 확인합니다.
 
 ### 서버 실행과 질문 예시
 
@@ -264,21 +304,25 @@ uv run --project apps/knowledge ruff format --check apps/knowledge
 uv run --project apps/knowledge pytest apps/knowledge/tests -q
 ```
 
-PostgreSQL 통합 테스트 9개는 `TEST_DATABASE_URL`을 설정했을 때 실행합니다.
+PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실행합니다.
 테스트마다 임시 스키마를 만들고 종료 후 삭제하므로 해당 권한이 필요하며,
-설정하지 않으면 이 9개만 건너뜁니다. CI는 전용 PostgreSQL 서비스에서 실행합니다.
+설정하지 않으면 이 15개만 건너뜁니다. CI는 전용 PostgreSQL 서비스에서 실행합니다.
 
 2026-11-09 기준 맥북 Colima(`linux/arm64`)의 dev 구성에서 이미지 빌드와 두 컨테이너의
 기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
-수집·청킹을 포함한 테스트 76개(PostgreSQL 통합 테스트 9개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+수집·청킹·벡터 검색을 포함한 테스트 86개(PostgreSQL 통합 테스트 15개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
 같은 27개 문서 버전에 H2 정책 454개·모든 제목 정책 479개 청크를 생성해 문서별 결과 54개를
 정책별 키에 저장했습니다. H2 정책 재실행은 27개 결과를 모두 재사용했습니다.
 두 정책 모두 표 2개·코드 1개를 크기 초과 상태로 온전히 보존했으며, 추가한 조회 SQL 3개도 실행했습니다.
+H2 정책의 454개 청크를 홈서버 BGE-M3로 임베딩해 1024차원 벡터 454개와 검색 인덱스 1개를 저장했습니다.
+재실행은 신규 0개·재사용 454개였으며, B300·Qwen·Whisper 관련 질문에서 해당 글의 청크가 검색됐습니다.
+큰 표·코드 3개도 입력 한도 내에서 처리됐고, 별도의 길이 초과 입력은 잘림 없이 거부되는 것을 확인했습니다.
+벡터 프로필·인덱스 조회 SQL 2개도 실행했습니다. 이는 동작 확인이며 Gold Set 검색 품질 평가가 아닙니다.
 MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 실행은 아직 검증하지 않았습니다.
 
 ### 평가 실행
@@ -310,13 +354,13 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 | 개발용 Embedding 추론 | 홈서버 Ollama |
 | 실험·평가 관리 | MLflow Dataset, Evaluation Run, Prompt와 AI endpoint 설정 |
 | Knowledge 서비스 | Python 3.12 + uv + FastAPI |
-| Ingest 문서 처리 | LlamaIndex Core + PostgreSQL Docstore |
+| 문서 처리·청킹·검색 | LlamaIndex Core + PostgreSQL Docstore·PGVectorStore |
 
 ## 3. 시스템 아키텍처
 
 ### 서비스와 데이터 흐름
 
-아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹을 구현했으며,
+아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹·벡터 검색을 구현했으며,
 Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
 
 ```mermaid
@@ -424,8 +468,8 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
 
-현재 구현은 Knowledge 서비스의 기동·외부 인프라 연결 검증, 블로그 수집·문서 버전 관리와 정책별 청킹 범위입니다.
-본문 임베딩·검색·QA, Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
+현재 구현은 서비스 기동·외부 인프라 연결 검증, 문서 수집·버전 관리·정책별 청킹과 벡터 검색 범위입니다.
+QA·Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
 임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
