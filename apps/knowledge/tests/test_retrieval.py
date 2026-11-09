@@ -161,3 +161,29 @@ def test_keyword_and_dense_search_share_one_verified_index_view(retrieval):
     assert index.vectors_verified and dense[0]["chunk_id"] in {m["chunk_id"] for m in sparse}
     with pytest.raises(ValueError, match="Unknown"):
         repo.open_index("0" * 64)
+
+
+class CountingEmbedder(FakeEmbedder):
+    def __init__(self):
+        super().__init__()
+        self.profile_calls = 0
+
+    def profile(self):
+        self.profile_calls += 1
+        return super().profile()
+
+
+def test_repeated_dense_search_on_open_index_checks_profile_once_per_search(retrieval):
+    repo, _, _, snapshot, policy, _ = retrieval
+    backend = CountingEmbedder()
+    key = repo.index(policy.key, backend, snapshot)["index_key"]
+    index = repo.open_index(key)
+    backend.profile_calls = 0
+    repo.dense_search(index, "GPU", backend, top_k=2)
+    assert backend.profile_calls == 2
+    repo.dense_search(index, "GPU", backend, top_k=2)
+    assert backend.profile_calls == 3
+    # A model swap between searches is still caught by the post-search check.
+    backend.digest = "swapped"
+    with pytest.raises(EmbeddingError, match="profile changed"):
+        repo.dense_search(index, "GPU", backend, top_k=2)

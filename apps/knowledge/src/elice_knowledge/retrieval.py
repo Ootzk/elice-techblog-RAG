@@ -221,11 +221,23 @@ class RetrievalStore:
         _, versions, nodes = self.load_chunks(snapshot_id, policy_key)
         if len(nodes) != count:
             raise ValueError("Stored chunk set does not match the published index")
-        return OpenIndex(index_key, snapshot_id, policy_key, pid, profile, versions, nodes)
+        return OpenIndex(
+            index_key,
+            snapshot_id,
+            policy_key,
+            pid,
+            profile,
+            versions,
+            nodes,
+            profile_confirmed=backend is not None,
+        )
 
     def dense_search(self, index: "OpenIndex", query: str, backend: Embedder, top_k=5):
         _check_query(query, top_k)
-        _check_profile(backend, index.profile)
+        # The previous search's post-check already confirmed the model, so each
+        # later search on the same open index costs one profile request, not two.
+        if not index.profile_confirmed:
+            _check_profile(backend, index.profile)
         vectors = self.vectors(index.profile_key, index.profile)
         try:
             if not index.vectors_verified:
@@ -249,6 +261,7 @@ class RetrievalStore:
             )
             matches = retriever.retrieve(query.strip())
             _check_profile(backend, index.profile)
+            index.profile_confirmed = True
         finally:
             asyncio.run(vectors.close())
         return search_output(index, query, [(m.node, m.score) for m in matches])
@@ -268,6 +281,7 @@ class OpenIndex:
     versions: list[str]
     nodes: list[TextNode]
     vectors_verified: bool = False
+    profile_confirmed: bool = False
 
 
 def _check_query(query: str, top_k: int):
