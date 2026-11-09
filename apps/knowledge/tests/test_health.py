@@ -4,6 +4,12 @@ from elice_knowledge.main import create_app
 from elice_knowledge.settings import Settings
 
 
+def test_openapi_version_comes_from_installed_package(monkeypatch):
+    monkeypatch.setattr("elice_knowledge.main.version", lambda name: "0.2.1")
+    app = create_app(Settings(_env_file=None))
+    assert app.openapi()["info"]["version"] == "0.2.1"
+
+
 def test_live_works_without_configuration_and_ready_reports_each_dependency():
     client = TestClient(create_app(Settings(_env_file=None)))
     assert client.get("/health/live").json() == {"status": "ok"}

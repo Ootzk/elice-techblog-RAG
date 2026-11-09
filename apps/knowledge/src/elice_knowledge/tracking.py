@@ -1,3 +1,5 @@
+from importlib.metadata import version
+
 from mlflow import MlflowClient
 from mlflow.exceptions import MlflowException
 
@@ -36,7 +38,7 @@ def record_connectivity(settings: Settings, result: dict, profile: dict) -> str:
         tags={
             "mlflow.runName": "infrastructure-connectivity",
             "purpose": "connectivity-only",
-            "app.version": "0.1.0",
+            "app.version": version("elice-knowledge"),
             "app.env": settings.app_env,
         },
     )
