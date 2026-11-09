@@ -15,6 +15,8 @@ export type Turn = {
 };
 export type Conversation = { id: string; title: string; turns: Turn[] };
 export type Item = { id: string; title: string; updated_at: string };
+export type Identity = { id: string; label: string; role: 'admin' | 'guest' | 'legacy' };
+export type Session = { csrf_token: string; expires_at: string; identity: Identity };
 let csrf = '';
 export function setCsrf(value: string) {
 	csrf = value;
@@ -43,7 +45,10 @@ export function errorText(error: unknown): string {
 		return (
 			(
 				{
-					invalid_access_code: '공유 코드가 올바르지 않습니다.',
+					invalid_access_code: '로그인 코드가 올바르지 않거나 만료·폐기되었습니다.',
+					admin_required: '관리자 코드로 로그인해야 합니다.',
+					code_cannot_be_extended: '폐기된 코드는 연장할 수 없습니다.',
+					admin_code_requires_cli: '관리자 코드는 서버에서 관리합니다.',
 					login_rate_limited: '접속 시도가 많습니다. 잠시 후 다시 시도해 주세요.',
 					chat_rate_limited: '시간당 질문 한도에 도달했습니다. 잠시 후 다시 이용해 주세요.',
 					conversation_busy: '이 대화의 답변을 먼저 기다려 주세요.',

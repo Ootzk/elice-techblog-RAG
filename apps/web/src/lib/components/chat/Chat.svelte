@@ -1,9 +1,35 @@
 <!-- Open WebUI Chat.svelte shell, reduced to this service's chat API; see UPSTREAM.md. -->
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { api, ApiError, errorText, setCsrf, type Conversation, type Item } from '#lib/api.js';
+	import {
+		api,
+		ApiError,
+		errorText,
+		setCsrf,
+		type Conversation,
+		type Item,
+		type Identity,
+		type Session
+	} from '#lib/api.js';
 	import Messages from './Messages.svelte';
 	import MessageInput from './MessageInput.svelte';
+	let identity: Identity | null = null;
+	let wideScreen = false;
+	let desktopSidebarHidden = false;
+	let menuButton: HTMLButtonElement;
+	$: sidebarVisible = wideScreen ? !desktopSidebarHidden : sidebar;
+	async function toggleSidebar() {
+		if (wideScreen) desktopSidebarHidden = !desktopSidebarHidden;
+		else sidebar = !sidebar;
+		await tick();
+		if (sidebarVisible && !wideScreen)
+			document.querySelector<HTMLElement>('#chat-sidebar a')?.focus();
+		else menuButton?.focus();
+	}
+	function closeMobileSidebar() {
+		sidebar = false;
+		menuButton?.focus();
+	}
 	let ready = false,
 		authenticated = false,
 		code = '',
@@ -18,23 +44,52 @@
 	let pending: { request_id: string; question: string; conversation_id: string } | null = null;
 	let timer: ReturnType<typeof setTimeout>;
 	let navigation = 0;
+	let authEpoch = 0;
+	function clearConversationState() {
+		authEpoch++;
+		navigation++;
+		clearTimeout(timer);
+		current = null;
+		items = [];
+		pending = null;
+		prompt = '';
+		try {
+			sessionStorage.removeItem('pending-turn');
+		} catch {
+			/* Storage can be unavailable. */
+		}
+	}
 	$: generating = current?.turns.some((t) => ['queued', 'running'].includes(t.status)) ?? false;
 	async function failure(e: unknown) {
 		if (e instanceof ApiError && e.status === 401) {
 			authenticated = false;
+			identity = null;
+			clearConversationState();
 			setCsrf('');
 			error = '세션이 만료되었습니다. 다시 접속해 주세요.';
 		} else error = errorText(e);
 	}
 	async function refreshList() {
-		items = (await api<{ items: Item[] }>('/conversations')).items;
+		const epoch = authEpoch;
+		try {
+			const data = await api<{ items: Item[] }>('/conversations');
+			if (epoch === authEpoch && authenticated) items = data.items;
+		} catch (e) {
+			if (epoch === authEpoch) throw e;
+		}
 	}
 	async function open(id: string) {
 		clearTimeout(timer);
 		error = '';
 		sidebar = false;
 		const sequence = ++navigation;
-		const selected = await api<Conversation>(`/conversations/${id}`);
+		let selected: Conversation;
+		try {
+			selected = await api<Conversation>(`/conversations/${id}`);
+		} catch (e) {
+			if (sequence !== navigation) return;
+			throw e;
+		}
 		if (sequence !== navigation) return;
 		current = selected;
 		history.replaceState({}, '', `/c/${id}`);
@@ -44,12 +99,13 @@
 		poll(id);
 	}
 	function poll(id: string) {
+		const epoch = authEpoch;
 		clearTimeout(timer);
 		if (!current?.turns.some((t) => ['queued', 'running'].includes(t.status))) return;
 		timer = setTimeout(async () => {
 			try {
 				const next = await api<Conversation>(`/conversations/${id}`);
-				if (current?.id !== id) return;
+				if (epoch !== authEpoch || current?.id !== id) return;
 				const nearBottom =
 					scroll && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
 				current = next;
@@ -57,6 +113,7 @@
 				if (nearBottom && scroll) scroll.scrollTop = scroll.scrollHeight;
 				poll(id);
 			} catch (e) {
+				if (epoch !== authEpoch) return;
 				await failure(e);
 				if (authenticated) timer = setTimeout(() => poll(id), 3000);
 			}
@@ -64,8 +121,9 @@
 	}
 	async function boot() {
 		try {
-			const session = await api<{ csrf_token: string }>('/auth/session');
+			const session = await api<Session>('/auth/session');
 			setCsrf(session.csrf_token);
+			identity = session.identity;
 			authenticated = true;
 			await refreshList();
 			const match = location.pathname.match(/^\/c\/([a-f0-9-]+)$/);
@@ -88,9 +146,12 @@
 		busy = true;
 		error = '';
 		try {
-			const session = await api<{ csrf_token: string }>('/auth/session', 'POST', { code });
+			const session = await api<Session>('/auth/session', 'POST', { code });
+			clearConversationState();
+			history.replaceState({}, '', '/');
 			code = '';
 			setCsrf(session.csrf_token);
+			identity = session.identity;
 			authenticated = true;
 			await refreshList();
 		} catch (e) {
@@ -162,9 +223,10 @@
 	async function logout() {
 		try {
 			await api('/auth/session', 'DELETE');
-			clearTimeout(timer);
+			clearConversationState();
 			authenticated = false;
 			current = null;
+			identity = null;
 			items = [];
 			pending = null;
 			sessionStorage.removeItem('pending-turn');
@@ -175,11 +237,26 @@
 		}
 	}
 	onMount(() => {
+		const media = matchMedia('(min-width: 768px)');
+		function resize() {
+			wideScreen = media.matches;
+			sidebar = false;
+		}
+		resize();
+		media.addEventListener('change', resize);
 		void boot();
-		return () => clearTimeout(timer);
+		return () => {
+			clearTimeout(timer);
+			media.removeEventListener('change', resize);
+		};
 	});
 </script>
 
+<svelte:window
+	on:keydown={(event) => {
+		if (event.key === 'Escape' && !wideScreen && sidebar) closeMobileSidebar();
+	}}
+/>
 <svelte:head
 	><title>엘리스 테크블로그 · Open WebUI</title><meta
 		name="description"
@@ -204,7 +281,7 @@
 				엘리스 테크블로그를 바탕으로 답하고,<br />확인할 수 있는 출처를 함께 보여드려요.
 			</p>
 			<form on:submit|preventDefault={login} class="space-y-3">
-				<label for="access-code" class="text-sm font-medium">공유 코드</label>
+				<label for="access-code" class="text-sm font-medium">로그인 코드</label>
 				<input
 					id="access-code"
 					type="password"
@@ -221,7 +298,7 @@
 			</form>
 			{#if error}<p class="text-sm text-red-700 mt-4" role="alert">{error}</p>{/if}
 			<p class="text-xs text-gray-400 mt-6 leading-5">
-				이 브라우저의 대화만 표시됩니다. 세션 만료 후 기록은 정리됩니다.
+				같은 코드로 다시 로그인하면 이전 대화를 볼 수 있습니다. 개인별로 받은 코드를 사용해 주세요.
 			</p>
 			<button class="text-xs text-gray-400 underline mt-4" on:click={() => (about = !about)}
 				>서비스 정보 · 라이선스</button
@@ -230,44 +307,59 @@
 	</main>
 {:else}
 	<div class="flex h-screen max-h-[100dvh]">
-		{#if sidebar}<button
+		{#if sidebarVisible && !wideScreen}<button
 				class="fixed inset-0 bg-black/20 z-20 md:hidden"
 				aria-label="메뉴 닫기"
-				on:click={() => (sidebar = false)}
+				on:click={closeMobileSidebar}
 			></button>{/if}
-		<aside
-			class="{sidebar
-				? 'flex fixed inset-y-0 left-0 z-30'
-				: 'hidden'} md:relative md:flex w-64 shrink-0 bg-[#f8f9f7] border-r border-gray-100 flex-col p-4"
-		>
-			<a
-				href="/"
-				on:click|preventDefault={newChat}
-				class="flex gap-2 items-center font-semibold px-2 py-2"
-				><img src="/open-webui-logo.png" class="size-7" alt="" />Open WebUI</a
+		{#if sidebarVisible}
+			<aside
+				id="chat-sidebar"
+				aria-label="대화 및 계정 메뉴"
+				class="{wideScreen
+					? 'relative'
+					: 'fixed inset-y-0 left-0 z-30 shadow-xl'} flex w-64 shrink-0 bg-[#f8f9f7] border-r border-gray-100 flex-col p-4"
 			>
-			<button
-				on:click={newChat}
-				class="text-left py-3 px-3 rounded-xl hover:bg-gray-200/50 mt-4 font-medium text-sm"
-				>＋ 새 대화</button
-			>
-			<p class="text-[11px] text-gray-400 px-3 mt-7 mb-2">이 브라우저의 대화</p>
-			<nav class="flex-1 overflow-y-auto" aria-label="이전 대화">
-				{#each items as item}<button
-						on:click={() => open(item.id).catch(failure)}
-						class="w-full text-left text-sm truncate px-3 py-2.5 rounded-xl {current?.id === item.id
-							? 'bg-gray-200/60'
-							: 'hover:bg-gray-200/30'}">{item.title}</button
-					>{/each}
-				{#if !items.length}<p class="text-xs text-gray-400 px-3 py-2">
-						대화를 시작하면 여기에 표시됩니다.
-					</p>{/if}
-			</nav>
-			<button class="text-xs text-gray-500 text-left p-2" on:click={() => (about = !about)}
-				>서비스 정보 · 라이선스</button
-			>
-			<button class="text-xs text-gray-500 text-left p-2" on:click={logout}>로그아웃</button>
-		</aside>
+				<button
+					class="self-end text-xs text-gray-500 px-2 py-1 mb-1 hover:bg-gray-100 rounded"
+					on:click={toggleSidebar}
+					aria-label="대화 메뉴 닫기">메뉴 접기 ←</button
+				>
+				<a
+					href="/"
+					on:click|preventDefault={newChat}
+					class="flex gap-2 items-center font-semibold px-2 py-2"
+					><img src="/open-webui-logo.png" class="size-7" alt="" />Open WebUI</a
+				>
+				<button
+					on:click={newChat}
+					class="text-left py-3 px-3 rounded-xl hover:bg-gray-200/50 mt-4 font-medium text-sm"
+					>＋ 새 대화</button
+				>
+				<p class="text-[11px] text-gray-400 px-3 mt-7 mb-2">내 대화</p>
+				<nav class="flex-1 overflow-y-auto" aria-label="이전 대화">
+					{#each items as item}<button
+							on:click={() => open(item.id).catch(failure)}
+							class="w-full text-left text-sm truncate px-3 py-2.5 rounded-xl {current?.id ===
+							item.id
+								? 'bg-gray-200/60'
+								: 'hover:bg-gray-200/30'}">{item.title}</button
+						>{/each}
+					{#if !items.length}<p class="text-xs text-gray-400 px-3 py-2">
+							대화를 시작하면 여기에 표시됩니다.
+						</p>{/if}
+				</nav>
+				<p class="text-xs text-gray-400 px-2 pt-3 truncate">{identity?.label}</p>
+				<button class="text-xs text-gray-500 text-left p-2" on:click={() => (about = !about)}
+					>서비스 정보 · 라이선스</button
+				>
+				<button
+					disabled={busy}
+					class="text-xs text-gray-500 text-left p-2 disabled:opacity-40"
+					on:click={logout}>로그아웃</button
+				>
+			</aside>
+		{/if}
 		<div
 			class="h-screen max-h-[100dvh] w-full max-w-full min-w-0 flex flex-col"
 			id="chat-container"
@@ -275,24 +367,43 @@
 		>
 			<div class="w-full h-full flex flex-col">
 				<header
-					class="h-16 shrink-0 flex items-center justify-between px-4 md:px-7 border-b border-gray-100"
+					class="min-h-16 shrink-0 flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-7 border-b border-gray-100"
 				>
 					<div class="flex items-center gap-3">
 						<button
-							class="md:hidden p-1"
-							aria-label="대화 메뉴 열기"
-							on:click={() => (sidebar = !sidebar)}>☰</button
+							bind:this={menuButton}
+							class="flex shrink-0 items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+							aria-label={sidebarVisible ? '대화 및 계정 메뉴 접기' : '대화 및 계정 메뉴 열기'}
+							aria-expanded={sidebarVisible}
+							aria-controls="chat-sidebar"
+							on:click={toggleSidebar}
 						>
+							<svg
+								class="size-4"
+								viewBox="0 0 20 20"
+								fill="none"
+								stroke="currentColor"
+								stroke-width="1.5"
+								aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" stroke-linecap="round" /></svg
+							>메뉴
+						</button>
 						<div>
 							<h1 class="text-sm font-semibold">엘리스 테크블로그</h1>
 							<p class="text-[11px] text-gray-400">한국어 기술 문서 기반 대화</p>
 						</div>
 					</div>
-					{#if current}<button
-							class="text-xs text-gray-400 hover:text-red-700 disabled:opacity-30"
-							disabled={generating || busy}
-							on:click={remove}>대화 삭제</button
-						>{/if}
+					<div class="flex items-center gap-3">
+						{#if identity?.role === 'admin'}<a
+								href="/admin/authentication"
+								class="rounded-lg border border-[#d9e2d4] bg-[#eff4eb] px-3 py-2 text-sm font-medium text-[#3f5840] hover:bg-[#e1ebdc]"
+								>관리자 ↗</a
+							>{/if}
+						{#if current}<button
+								class="text-xs text-gray-400 hover:text-red-700 disabled:opacity-30"
+								disabled={generating || busy}
+								on:click={remove}>대화 삭제</button
+							>{/if}
+					</div>
 				</header>
 				<div bind:this={scroll} class="flex-1 overflow-y-auto min-h-0 px-5 md:px-8">
 					<div class="max-w-3xl mx-auto">
