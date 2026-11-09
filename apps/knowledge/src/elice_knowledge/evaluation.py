@@ -1,4 +1,4 @@
-"""Freeze MLflow Dataset inputs, execute shared QA, and record deterministic scores."""
+"""Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -6,7 +6,10 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from elice_knowledge.corpus import digest
+from elice_knowledge.evaluation_bundle import create_bundle
 from elice_knowledge.execution import execute
+from elice_knowledge.judges import evaluate_answers, frozen_judges
+from elice_knowledge.performance import summarize as performance_summary
 from elice_knowledge.qa import QARequest
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client as tracking_client
@@ -33,7 +36,10 @@ def dataset_snapshot(settings, dataset_id):
         # Only inputs are validated as QA input. Expectations never enter QA.
         request = QARequest(index_key="0" * 64, **record.inputs)
         expected = record.expectations or {}
-        if type(expected.get("answerable")) is not bool:
+        iron = bool(expected.get("expected_behavior"))
+        if iron and not all(expected.get(k) for k in ("required_points", "failure_conditions")):
+            raise ServiceError("dataset_requires_iron_rubric", 422)
+        if not iron and type(expected.get("answerable")) is not bool:
             raise ServiceError("dataset_requires_answerable_expectation", 422)
         evidence = expected.get("evidence", [])
         if (
@@ -42,7 +48,7 @@ def dataset_snapshot(settings, dataset_id):
                 not isinstance(e, dict) or not e.get("url") or not str(e.get("quote", "")).strip()
                 for e in evidence
             )
-            or (expected["answerable"] and not evidence)
+            or (expected.get("answerable") and not evidence)
         ):
             raise ServiceError("dataset_requires_evidence_quotes", 422)
         records.append(
@@ -60,7 +66,11 @@ def dataset_snapshot(settings, dataset_id):
         raise ServiceError("empty_dataset", 422)
     if len({r["id"] for r in records}) != len(records):
         raise ServiceError("duplicate_dataset_record", 422)
+    kinds = {"iron" if r["expectations"].get("expected_behavior") else "gold" for r in records}
+    if len(kinds) != 1:
+        raise ServiceError("mixed_dataset_rubrics", 422)
     return {
+        "kind": kinds.pop(),
         "dataset_id": dataset_id,
         "name": dataset.name,
         "digest": digest(records),
@@ -86,6 +96,10 @@ def enqueue_evaluation(store, request):
         records = [r for r in records if r["id"] in wanted]
     if len(records) > 200:
         raise ServiceError("evaluation_too_large", 422)
+    kind = snapshot.get("kind", "gold")
+    judges = frozen_judges(store.settings, kind) if store.settings.evaluation_judges_enabled else []
+    if kind == "iron" and not judges:
+        raise ServiceError("iron_requires_judges", 422)
     job_id = uuid4()
     with store.connection() as conn:
         conn.execute(
@@ -93,7 +107,14 @@ def enqueue_evaluation(store, request):
             (
                 job_id,
                 job_id,
-                Jsonb({"profile_key": request.qa_profile_key, "scorer_key": SCORER_KEY}),
+                Jsonb(
+                    {
+                        "profile_key": request.qa_profile_key,
+                        "scorer_key": SCORER_KEY,
+                        "dataset_kind": kind,
+                        "judges": judges,
+                    }
+                ),
             ),
         )
         conn.execute(
@@ -112,7 +133,9 @@ def enqueue_evaluation(store, request):
 
 def score(result, expectations):
     answerable = result["status"] == "answered"
-    values = {"answerability_correct": float(answerable == expectations["answerable"])}
+    values = {}
+    if "answerable" in expectations:
+        values["answerability_correct"] = float(answerable == expectations["answerable"])
     evidence = expectations.get("evidence", [])
 
     def url(value):
@@ -121,7 +144,7 @@ def score(result, expectations):
 
     if evidence:
         retrieved = result.get("retrieved_sources", [])
-        values["evidence_recall_at_k"] = sum(
+        values["evidence_recall"] = sum(
             any(
                 url(e["url"]) == url(s["url"])
                 and " ".join(e["quote"].split()) in " ".join(s["text"].split())
@@ -159,6 +182,9 @@ def run_evaluation(store, job):
         }.items():
             tracking.log_param(run_id, key, value)
         profile = store.profile(evaluation["profile_key"])
+        judge_specs = job["payload"].get("judges", [])
+        tracking.log_dict(run_id, judge_specs, "judge-versions.json")
+        tracking.set_tag(run_id, "dataset_kind", job["payload"].get("dataset_kind", "gold"))
         tracking.log_dict(run_id, profile, "qa-profile.json")
         for name, prompt in profile["prompts"].items():
             tracking.log_param(run_id, f"prompt.{name}.uri", prompt["uri"])
@@ -168,7 +194,7 @@ def run_evaluation(store, job):
         cases = []
         for record in evaluation["records"]:
             store.heartbeat(job, f"evaluating:{len(cases)}/{len(evaluation['records'])}")
-            output = execute(store, evaluation["profile_key"], **record["inputs"])
+            output = execute(store, evaluation["profile_key"], **record["inputs"], mode="offline")
             scores = score(output["result"], record["expectations"]) if not output["error"] else {}
             case = {"record_id": record["id"], **output, "scores": scores}
             with store.connection() as conn:
@@ -188,12 +214,40 @@ def run_evaluation(store, job):
                 )
             cases.append(case)
         failed = sum(bool(c["error"]) for c in cases)
+        tracking.log_dict(
+            run_id, create_bundle(run_id, evaluation, profile, cases), "evaluation-bundle.json"
+        )
+        judge_metrics = {}
+        if judge_specs:
+            judge_metrics, judgments = evaluate_answers(
+                store.settings, run_id, evaluation["records"], cases, judge_specs
+            )
+            by_id = {row["record_id"]: row for row in judgments}
+            for case in cases:
+                if case["record_id"] in by_id:
+                    case["judges"] = by_id[case["record_id"]]["judges"]
+                    case["scores"].update(
+                        {
+                            name: float(value["value"])
+                            for name, value in case["judges"].items()
+                            if value["value"] is not None
+                        }
+                    )
+                    with store.connection() as conn:
+                        conn.execute(
+                            "UPDATE evaluation_cases SET scores=%s "
+                            "WHERE evaluation_id=%s AND record_id=%s",
+                            (Jsonb(case["scores"]), job["id"], case["record_id"]),
+                        )
         summary = {
+            **performance_summary(cases),
+            "judge_metrics": judge_metrics,
             "cases": len(cases),
             "completed": len(cases) - failed,
             "failed": failed,
             "failure_rate": failed / len(cases),
             "mlflow_run_id": run_id,
+            **judge_metrics,
         }
         for name in {k for c in cases for k in c["scores"]}:
             values = [c["scores"][name] for c in cases if name in c["scores"]]

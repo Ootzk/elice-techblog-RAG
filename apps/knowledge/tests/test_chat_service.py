@@ -143,6 +143,16 @@ def test_duplicate_turn_busy_quota_and_worker_history(service, monkeypatch):
     assert process_one(service)
     assert not process_one(service)
     assert client.get(f"/api/turns/{turn_id}").json()["result"]["answer"] == "답변입니다."
+    with service.connection() as conn:
+        execution = conn.execute("SELECT result FROM qa_jobs WHERE id=%s", (turn_id,)).fetchone()[
+            "result"
+        ]
+    timings = execution["timings"]
+    assert timings["queue_wait_ms"] >= 0
+    assert timings["worker_duration_ms"] >= execution["duration_ms"]
+    assert timings["server_duration_ms"] == pytest.approx(
+        timings["queue_wait_ms"] + timings["worker_duration_ms"]
+    )
     assert len(seen) == 1
     assert submit(client, conversation, question="그것은?").status_code == 202
     process_one(service)
@@ -304,7 +314,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
     result = client.get(f"/api/evaluations/{job_id}").json()
     assert result["status"] == "completed"
-    assert result["summary"]["evidence_recall_at_k"] == 1
+    assert result["summary"]["evidence_recall"] == 1
     assert (
         client.get(f"/api/evaluations/{job_id}/cases").json()["items"][0]["scores"][
             "answerability_correct"
@@ -322,9 +332,9 @@ def test_scorer_requires_url_and_actual_quote():
         "status": "answered",
         "retrieved_sources": [{"url": "https://elice.io/ko/a#h2", "text": "실제\n 근거"}],
     }
-    assert score(result, expectations)["evidence_recall_at_k"] == 1
+    assert score(result, expectations)["evidence_recall"] == 1
     result["retrieved_sources"][0]["text"] = "무관한 내용"
-    assert score(result, expectations)["evidence_recall_at_k"] == 0
+    assert score(result, expectations)["evidence_recall"] == 0
 
 
 def test_global_worker_concurrency_and_profile_drift(service):
@@ -637,3 +647,115 @@ def test_experiment_profile_api_pins_prompt_selectors(service, monkeypatch):
         TestClient(create_app(service.settings)).post("/api/qa-profiles", json={}).status_code
         == 401
     )
+
+
+def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypatch):
+    service.settings.evaluation_judges_enabled = True
+    record = {
+        "id": "r1",
+        "inputs": {"question": "Q", "history": []},
+        "expectations": {"answerable": False},
+    }
+    monkeypatch.setattr(
+        "elice_knowledge.evaluation.dataset_snapshot",
+        lambda *a: {"kind": "gold", "digest": "d" * 64, "records": [record]},
+    )
+    specs = [{"name": "qa-gold-chatgpt", "version": 1}]
+    monkeypatch.setattr("elice_knowledge.evaluation.frozen_judges", lambda *a: specs)
+
+    class Tracking:
+        def get_experiment_by_name(self, *a):
+            return SimpleNamespace(experiment_id="exp")
+
+        def create_run(self, *a, **kw):
+            return SimpleNamespace(info=SimpleNamespace(run_id="mlflow-judged"))
+
+        def __getattr__(self, name):
+            return lambda *a, **kw: None
+
+    monkeypatch.setattr("elice_knowledge.evaluation.tracking_client", lambda *a: Tracking())
+    monkeypatch.setattr(
+        "elice_knowledge.execution.run_qa",
+        lambda *a: QAResponse(
+            status="insufficient_evidence",
+            answer="근거 부족",
+            index_key="b" * 64,
+            reason="insufficient",
+        ),
+    )
+    seen = []
+
+    def judge(settings, run_id, records, cases, frozen):
+        seen.append(frozen)
+        assert cases[0]["error"] is None
+        return {}, [
+            {
+                "record_id": "r1",
+                "judges": {
+                    "qa-gold-chatgpt": {"value": False, "rationale": "missing", "version": 1}
+                },
+            }
+        ]
+
+    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_answers", judge)
+    job_id = enqueue_evaluation(
+        service,
+        EvaluationRequest(
+            dataset_id="dataset",
+            dataset_digest="d" * 64,
+            qa_profile_key=PROFILE,
+            scorer_profile_key=SCORER_KEY,
+        ),
+    )
+    specs[0]["version"] = 2
+    process_one(service)
+    assert seen[0][0]["version"] == 1
+    with service.connection() as conn:
+        case = conn.execute(
+            "SELECT scores FROM evaluation_cases WHERE evaluation_id=%s", (job_id,)
+        ).fetchone()
+        job = conn.execute("SELECT status FROM qa_jobs WHERE id=%s", (job_id,)).fetchone()
+    assert job["status"] == "completed"
+    assert case["scores"]["qa-gold-chatgpt"] == 0.0
+
+
+@pytest.mark.parametrize("changed_field", ["code_identity", "provider_identity"])
+def test_existing_chat_refreshes_stale_profile_after_deployment(
+    service, monkeypatch, changed_field
+):
+    client = browser(service)
+    conversation = new_conversation(client)
+    fresh_key = "c" * 64
+    with service.connection() as conn:
+        config = conn.execute("SELECT config FROM qa_profiles WHERE key=%s", (PROFILE,)).fetchone()[
+            "config"
+        ]
+        conn.execute(
+            "INSERT INTO qa_profiles(key,config) VALUES (%s,%s)", (fresh_key, Jsonb(config))
+        )
+        stale = {**config, changed_field: "old-deployment"}
+        conn.execute("UPDATE qa_profiles SET config=%s WHERE key=%s", (Jsonb(stale), PROFILE))
+    monkeypatch.setattr(ServiceStore, "active_profile", lambda self: fresh_key)
+    monkeypatch.setattr(
+        "elice_knowledge.execution.run_qa",
+        lambda settings, request, prompts: QAResponse(
+            status="answered",
+            answer="배포 후 답변",
+            index_key=request.index_key,
+            generation_model="test-model",
+        ),
+    )
+    turn = submit(client, conversation)
+    assert turn.status_code == 202
+    assert process_one(service)
+    assert (
+        client.get("/api/turns/" + turn.json()["id"]).json()["result"]["answer"] == "배포 후 답변"
+    )
+    with service.connection() as conn:
+        conv = conn.execute(
+            "SELECT profile_key FROM chat_conversations WHERE id=%s", (conversation,)
+        ).fetchone()
+    assert conv["profile_key"] == fresh_key
+    # Frozen evaluation profiles must continue to reject changed execution conditions.
+    with pytest.raises(ServiceError, match="qa_profile_.*_changed"):
+        service.profile(PROFILE)

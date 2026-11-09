@@ -151,10 +151,54 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/regi
 서버 접속은 `MLFLOW_TRACKING_URI`와 MLflow 인증 환경 변수를 사용한다.
 홈서버와 제출 서버에는 같은 명령으로 각각 등록하며 Dataset ID는 각 서버의 출력을 사용한다.
 
-Iron은 등록·조회만 지원한다. 현재 평가 API는 Gold의 `answerable`·`evidence` 계약을 요구하므로
-Iron의 Dataset ID로 평가를 요청하면 거부된다. Iron 실행·의미 채점은 별도 구현 대상이다.
+Gold·Iron 모두 같은 평가 API/CLI로 실행한다. Iron은 `expected_behavior`·`required_points`·
+`failure_conditions`를 요구하며 Judge가 꺼져 있으면 접수를 거부한다. 서로 다른 계약을 한 Dataset에 섞지 않는다.
 
-### Gold Set 평가
+### Judge 등록과 dev 자동 평가
+
+MLflow Gateway에 구성된 세 endpoint의 인증정보를 재사용한다. 앱에 모델별 API 키를 추가하지 않는다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/judges.py --enable-dev
+```
+
+등록 명령은 저장소 rubric을 게시하며 변경 시 새 Judge 버전을 등록한다. 같은 내용은 재사용한다.
+Gateway endpoint는 `elice-techblog-rag-judge-{chatgpt,claude,gemini}`가 미리 구성되어 있어야 한다.
+
+- `qa-gold-{correctness,completeness,groundedness,relevance}-{모델}`: 네 품질 차원을 분리한다.
+- `qa-iron-*`: 기대 행동·실패 조건과 비교한다.
+- `qa-online-{groundedness,relevance}-{모델}`: 모범 답안 없이 실제 생성 문맥과 질문 적합성을 분리한다.
+
+`compose.dev.yaml`은 API와 worker의 `EVALUATION_JUDGES_ENABLED=true`를 설정한다.
+호스트에서 worker를 실행하면 환경 변수도 직접 설정한다. prod 기본값은 false다.
+Gold/Iron 접수 시 모든 해당 Judge의 등록 버전을 고정하고, QA 완료 후
+`mlflow.genai.evaluate()`로 채점한다. Judge 오류·누락 판정은 평가 실패로 처리한다.
+Run의 `judge-versions.json`, `judge-results.json`에 버전·문항 ID·판정·이유를 남기고
+Evaluation runs에서 상세 결과를 확인한다. 사례 API의 scores에는 적용 가능한 판정만 0/1로 제공한다. N/A는 0/1로 바꾸지 않는다.
+
+online Judge는 `environment=dev`·`evaluation_mode=online`·`quality_contract=dimension-v1`이며 정상 종료한 Trace를 100% 자동 평가한다.
+일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 `techblog-qa` 루트 Trace를 기록한다.
+LangGraph 노드와 분기는 `mlflow.langchain.autolog(run_tracer_inline=True)`로 자동 추적한다.
+LlamaIndex autologging은 중복 방지를 위해 끄고, 직접 구현한 경계만 다음 span으로 보완한다.
+
+| Span | 유형 | 기록 내용 |
+| --- | --- | --- |
+| `plan`·`act`·`answer`·`clarify`, 조건 분기 | 자동 그래프 추적 | 노드 입출력·시간·오류, planner의 선택과 사용한 도구 수 |
+| `generation.chat` | LLM | 실제 메시지·응답·모델·토큰 사용량. 부모 노드로 planner/최종 생성을 구분 |
+| `keyword_search`·`meaning_search` | TOOL | 도구 인자·반환값·실패 상태 |
+| `retrieval.keyword_search`·`retrieval.meaning_search` | RETRIEVER | 실제 검색어·top_k·청크 본문·출처·점수 |
+| `retrieval.final_context` | RETRIEVER | 토큰 예산을 적용한 뒤 최종 생성에 전달한 근거 |
+| `planner.parse` | PARSER | planner JSON과 파싱한 결정 |
+| `answer.parse_and_validate` | PARSER | 생성 결과 파싱·인용문 검증, 응답 상태와 검증 결과 |
+
+설정 객체·HTTP 인증 헤더·endpoint 주소는 내보내지 않는다. 검색 내부 오류는 오류 코드만 기록한다.
+Trace 저장 실패는 대화를 중단하지 않는다. MLflow 추적을 끄면 Trace도 기록하지 않는다.
+데이터셋 QA는 `evaluation_mode=offline`으로 기록해 online Judge와 중복 채점하지 않는다.
+MLflow 서버는 비동기로 채점하며 기본적으로 Trace 시작 후 약 5분 뒤 대상이 되므로 즉시 점수가 보이지 않을 수 있다.
+[자동 평가 문서](https://mlflow.org/docs/latest/genai/eval-monitor/automatic-evaluations/)를 참고한다.
+사람 라벨 입력과 반복 채점을 이용한 분석 명령은 아래를 따른다. 실제 Human Alignment 검증은 별도로 수행해야 한다.
+
+### Gold / Iron Set 평가
 
 MLflow Gold Dataset의 각 레코드는 다음 형식을 사용한다.
 
@@ -197,25 +241,144 @@ CLI 기본 동작은 metadata만 읽으며 생성하지 않는다. 접수 후 �
 | `GET /api/evaluations/{id}` | 상태·집계·MLflow Run ID |
 | `GET /api/evaluations/{id}/cases?limit=50&offset=0` | 사례별 실행·검색 결과·점수·오류 |
 
+일반 대화는 코드·생성 endpoint 변경으로 기존 QA 프로필이 만료되면 다음 질문 처리 시 현재 활성 프로필로 갱신한다.
+기존 대화 이력과 이전 실행의 프로필은 보존하며 실패한 질문을 자동 재실행하지 않는다.
+Dataset 평가는 프로필을 갱신하지 않고 실행 조건 불일치를 오류로 처리한다.
+
 대화·평가·ask CLI는 `execution.execute`를 공유하고 `qa_runs`에 입력·출력·지연을 저장한다.
 MLflow에는 Dataset ID/해시·QA/scorer 프로필·사례별 출력·집계 JSON과 지표를 남긴다.
 MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공으로 표시하지 않는다.
 
 첫 scorer `evidence-v1`은 다음 두 지표만 계산한다.
 
-- `evidence_recall_at_k`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
+- `evidence_recall`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
 - `answerability_correct`: answered 여부가 기대 answerable과 일치하는지.
 
-agentic QA의 `evidence_recall_at_k`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
+agentic QA의 `evidence_recall`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
 기대 근거가 없는 문항은 이 회수율의 채점 대상에서 제외한다. `answerability_correct`는 답변 내용이
 틀려도 answered 상태만 맞으면 통과할 수 있으므로 의미적 정확성과 혼동하지 않는다.
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.
 이 지표는 의미적 답변 정확성·충실도를 검증하지 않는다.
 Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했다.
-실제 Gold 기준 평가, Judge/rubric 및 사람 판단과의 정합성 검증, Iron 실행·채점은 후속 작업이다.
+Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아직 수행하지 않았다.
 등록 CLI는 생성이나 평가를 호출하지 않는다.
 
+### 차원별 판정과 고정 답안 검수
+
+Gold는 모델당 네 Judge, Iron은 모델당 한 Judge, online은 모델당 두 Judge를 사용한다.
+따라서 Gold는 문항당 최대 12회, Iron은 3회, dev 일반 대화는 6회 Judge 호출이 발생한다.
+기존 Gateway endpoint·키는 공유하며 문항별 적용 불가 차원은 호출 전 제외할 수 있다.
+이전 종합 Judge 정의는 과거 결과의 추적을 위해 보존하지만 새 프로필은 참조하지 않으며 이전 online 자동 평가는 중지한다.
+
+- Correctness: 검수한 기준 답안·금지 주장·기대 근거와 답변의 핵심 사실을 비교한다. 누락은 별도 차원이다.
+- Completeness: `required_points`만 체크한다. 답변 가능한 문항의 불필요한 유보는 필수 내용 누락으로 본다.
+- Groundedness: `generation_sources`만 근거로 전달한다. Gold 기대 답안과 누적 `retrieved_sources`는 전달하지 않는다.
+- Relevance: 질문·고정 이력의 요청 대응만 평가한다. 적절한 명확화·범위 안내·거절도 관련 응답일 수 있다.
+
+판정은 `yes`·`no`·`not_applicable`이며 사람 검수 라벨은 각각 `pass`·`fail`·`not_applicable`이다.
+Iron은 기존 Boolean을 pass/fail로 변환한다. 오류·판정 누락은 `error`로 보존하고 Run을 실패 처리한다.
+차원·모델별 통과율과 `_scored_cases`·`_not_applicable_cases`·`_error_cases`를 기록한다.
+적용 가능한 정상 판정이 없으면 통과율을 만들지 않는다. 모든 차원을 하나의 총점으로 합치지 않는다.
+
+QA 응답은 생성 직전에 문맥 예산을 적용한 정확한 `generation_sources`를 보존한다.
+루트 Trace도 답변·인용·생성 문맥만 Judge 입력으로 노출하고, 누적 후보는 도구/그래프 span과 DB에 남긴다.
+이전 구현처럼 생성 문맥이 없는 저장 답변을 재채점하면 grounding 입력 오류로 거부한다.
+
+단일 명령으로 전체 평가를 기다리고 JSON 보고서를 저장한다. 기존 파일은 덮어쓰지 않는다.
+실패·중단한 평가도 보고서를 저장하고 CLI는 실패로 종료한다. `--timeout`은 대기만 종료하며 작업을 취소하지 않는다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/evaluate.py \
+  --dataset-id '<dataset-id>' --submit --report artifacts/evaluation/report.json
+```
+
+원본 Run의 `evaluation-bundle.json`에는 선택한 문항의 기대 조건·QA 프로필·고정 답변·최종 문맥과 내용 해시가 들어간다.
+Judge 실패 시에도 이 파일을 남기므로 QA 생성 없이 새 Judge Run으로 재채점할 수 있다.
+
+```bash
+# 모델 이름과 기존 Judge 판정을 숨긴 검수 자료와 빈 라벨 JSONL. 모델 호출 없음.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py export \
+  --source-run-id '<source-run-id>' --rater reviewer --output-dir artifacts/evaluation/human-review
+# 고정 답안에 사용할 Judge 버전과 대상 수 미리보기. --submit 전에는 모델 호출 없음.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py judge \
+  --source-run-id '<source-run-id>' --repeat 3 --output-dir artifacts/evaluation/rejudge
+# 위 명령에 --submit을 붙이면 모델 호출을 수행한다. 각 반복은 별도 Run이며 QA는 재생성하지 않는다.
+```
+
+검수자는 `review-packet.json`의 차원별 rubric·질문·답변·허용된 근거만 읽고,
+`human-labels.jsonl`의 `label`을 pass/fail/not_applicable로 입력하고 이유를 적는다.
+미검수는 null로 두며 불확실성·누락 데이터를 N/A로 바꾸지 않는다. 문항 ID·답변 해시·protocol은 수정하지 않는다.
+이름과 `round`로 평가자·반복을 구분한다. 비교 전까지 다른 Judge의 결과를 보지 않는다. 다른 검수자는 별도 디렉터리로 export한다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
+  --source-run-id '<source-run-id>' \
+  --judge-run-id '<source-run-id>' --judge-run-id '<rejudge-run-id>' \
+  --human-labels artifacts/evaluation/human-review/human-labels.jsonl \
+  --output-dir artifacts/evaluation/agreement
+```
+
+`agreement.json`은 차원별 모델–모델·모델–사람 일치율, Cohen’s kappa, 유효 쌍 수·혼동행렬을 제공한다.
+같은 Judge 버전의 반복은 repeat_consistency, 버전이 달라진 비교는 judge_revision으로 구분한다.
+N/A·오류·미입력은 이진 kappa에서 제외하고 적용 가능 여부의 일치율·제외 건수를 따로 표시한다.
+유효 쌍이 2개 미만이거나 양쪽이 동일한 상수 라벨이면 kappa는 null로 남긴다.
+라벨 불균형과 작은 표본의 영향을 받으므로 kappa 하나나 다수결을 정답·신뢰성의 증거로 쓰지 않는다.
+[정의](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.cohen_kappa_score.html)를 참고한다.
+
+analyze에 `--log`를 붙이면 분석·라벨을 별도 MLflow Run에 저장하고 실제 사람 라벨을 원본 QA Trace의 HUMAN assessment로 기록한다.
+모든 비교는 동일한 source bundle과 답변 해시에 묶인다. 원본 기대 조건·QA 답변·기존 Judge 판정은 덮어쓰지 않는다.
+사람 라벨을 실제로 입력하기 전에는 Human Alignment가 검증된 것으로 보고하지 않는다.
+
+### 자원·시간 지표
+
+QA 응답의 `llm_call_count`·`tool_call_count`와 `usage`는 한 질문의 planner 및 최종 생성을 합산한다.
+Judge 사용량은 이 집계에 포함하지 않는다. `usage`는 기존 Chat Completions 이름
+`prompt_tokens`·`completion_tokens`·`total_tokens`와 캐시 입력인 `cached_tokens`를 사용한다.
+`prompt_tokens_details.cached_tokens`가 유효한 정수일 때만 추출하며, input/total에 더하지 않는다.
+
+필드별 `usage_reported_calls`로 제공한 호출 수를 기록하고, 모든 호출이 보고한 항목만 질문 총량에 넣는다.
+누락·null·잘못된 값은 0으로 채우지 않는다. 호출별 LLM span에는 제공된 값만 기록하고,
+캐시 입력은 MLflow 표준 `cache_read_input_tokens`로 전달한다. Trace의 자동 토큰 집계는 보고된 호출을
+기준으로 하므로, 질문 전체의 완전성은 QA 응답의 coverage를 함께 확인한다.
+
+평가 Run에는 성공한 QA 사례를 대상으로 다음 지표를 기록한다.
+
+| 지표 접두사 | 값과 집계 |
+| --- | --- |
+| `qa_duration_ms` | QA 실행 시간의 `_mean`·`_median`·`_max`·`_measured_cases` |
+| `failed_qa_duration_ms` | 실패한 QA의 시간을 위와 같은 방식으로 별도 집계 |
+| `input_tokens`·`cached_input_tokens`·`output_tokens`·`total_tokens` | 위 집계와 `_total`. 완전히 보고한 질문만 대상 |
+| `llm_call_count`·`tool_call_count` | 질문당 호출 수의 위 집계와 `_total` |
+| `cache_hit_ratio` | 캐시와 입력이 모두 보고된 같은 질문 집합에서 캐시 입력 합 / 전체 입력 합 |
+| `cache_hit_ratio_measured_cases` | 위 비율의 계산 대상 질문 수 |
+
+측정값이 없는 항목은 건수만 0으로 기록하고 평균·합계·비율을 만들지 않는다.
+`qa_duration_ms`는 프로필을 확인한 뒤 공통 QA 실행에 들어가서 완료할 때까지이며,
+추적 설정·종료를 포함하지만 큐 대기와 QA 결과 DB 저장은 제외한다.
+질문별 원시 값은 `evaluation-results.json`과 사례 API에서 확인한다.
+
+일반 대화 작업의 DB 결과에는 `timings.queue_wait_ms`(접수부터 worker claim까지),
+`worker_duration_ms`(claim 후 처리 시작부터 답변 준비까지), 두 값의 합인 `server_duration_ms`를 남긴다.
+worker 시간에는 프로필 갱신·이력 조회·QA 실행·QA 결과 저장이 포함된다.
+이 값은 작업 완료 DB 갱신과 브라우저 polling/렌더링 시간을 포함하지 않으므로 사용자 체감 시간과 구분한다.
+큐 대기 시간은 QA 루트 span의 `elice.queue_wait_ms`에도 기록한다.
+
+아직 원화/달러 비용·첫 토큰 시간(TTFT)·브라우저 기준 응답 시간은 산출하지 않는다.
+비교 실험에서는 질문·모델·자원 한도·캐시 상태와 측정 건수를 같이 확인한다.
+소규모 세트의 기본 집계는 평균·중앙값·최댓값이며 p95는 산출하지 않는다.
+
+MLflow 지표 이름은 key다. 코드에서 새 이름을 기록해도 이전 Run의 key가 자동으로 변경되지 않는다.
+이후 실행에는 `evidence_recall`을 사용하고, 과거 `evidence_recall_at_k` 기록은 보존한다.
+
 ## 검증 한계
+
+Judge 연동은 Gold·Iron의 고정 모범 답안 샘플 각 1개에 모델 3개가 판정·이유를 남기는지 확인했다.
+실제 QA 샘플로 질문·답변·검색 근거의 Trace 저장과 online Judge 3개의 서버 자동 판정을 확인했다.
+span 보강 후 별도 실제 질문에서는 답변 생성과 36개 span의 서버 저장·부모 자식 연결·LLM 토큰 집계를 확인했다.
+자원 계측 보강 후 실제 QA 샘플에서 토큰·캐시 사용량·호출 수·지연을 확인하고, 성능 요약 Run의 저장·재조회를 검증했다.
+차원 분리 후에는 Gold 한 문항을 실제 QA→12개 Judge→JSON 보고서로 실행하고, 동일 답안 재채점·블라인드 검수 파일 출력을 확인했다.
+이는 연결·rubric 실행 검증이며 전수 기준 평가나 Judge 신뢰도 측정 결과가 아니다.
+격리된 임시 PostgreSQL DB를 포함한 Python 테스트 226개, lint와 개발 이미지 빌드·기동을 확인했다.
 
 브라우저 연결이 없어 실제 화면 클릭·모바일 배치는 확인하지 못했다.
 대화 UI의 정적 빌드·Docker HTTP 검증과 Dataset 등록의 파일 검증·원격 내용 대조·재등록을 확인했다.

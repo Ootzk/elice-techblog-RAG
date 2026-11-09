@@ -252,7 +252,10 @@ def mount_service(app, settings):
 
     @router.get("/scorer-profiles", dependencies=[Depends(admin)])
     def scorers():
-        return {"items": [{"key": SCORER_KEY, "config": SCORER}]}
+        return {
+            "items": [{"key": SCORER_KEY, "config": SCORER}],
+            "judges_enabled": settings.evaluation_judges_enabled,
+        }
 
     @router.get("/evaluation-datasets/{dataset_id}", dependencies=[Depends(admin)])
     def dataset(dataset_id: str):

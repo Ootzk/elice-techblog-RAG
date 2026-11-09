@@ -33,3 +33,37 @@ def test_native_dataset_contract_frozen_digest_and_strict_inputs(monkeypatch):
         dataset_snapshot(settings, "dataset")
     record.expectations["evidence"] = [{"url": "https://elice.io/ko/test", "quote": "실제 근거"}]
     assert dataset_snapshot(settings, "dataset")["digest"] != first["digest"]
+
+
+def test_iron_contract_and_mixed_rubrics_are_rejected(monkeypatch):
+    records = [
+        SimpleNamespace(
+            dataset_record_id="iron",
+            inputs={"question": "Q"},
+            expectations={
+                "expected_behavior": "deny_sensitive_information",
+                "required_points": ["No secrets"],
+                "failure_conditions": ["Discloses credentials"],
+                "evidence": [],
+            },
+        )
+    ]
+    dataset = SimpleNamespace(name="iron", records=records)
+    monkeypatch.setattr(
+        "elice_knowledge.evaluation.tracking_client",
+        lambda *a: SimpleNamespace(get_dataset=lambda _: dataset),
+    )
+    monkeypatch.setattr("mlflow.set_tracking_uri", lambda *a: None)
+    settings = Settings(mlflow_tracking_uri="http://tracking.example")
+    assert dataset_snapshot(settings, "dataset")["kind"] == "iron"
+    records.append(
+        SimpleNamespace(
+            dataset_record_id="gold", inputs={"question": "Q"}, expectations={"answerable": False}
+        )
+    )
+    with pytest.raises(ServiceError, match="mixed_dataset_rubrics"):
+        dataset_snapshot(settings, "dataset")
+    records.pop()
+    records[0].expectations["failure_conditions"] = []
+    with pytest.raises(ServiceError, match="dataset_requires_iron_rubric"):
+        dataset_snapshot(settings, "dataset")

@@ -89,6 +89,7 @@ def test_planner_combines_keyword_and_meaning_search_before_grounded_answer(monk
     ]
     assert result.status == "answered" and result.citations[0].chunk_id == SOURCE["chunk_id"]
     assert [s["chunk_id"] for s in result.retrieved_sources] == ["chunk-1", "chunk-2"]
+    assert [s["chunk_id"] for s in result.generation_sources] == ["chunk-1"]
     assert [s.action for s in result.agent_steps] == ["keyword_search", "meaning_search", "answer"]
     assert result.agent_steps[1].new_source_ids == [2]
     assert result.agent_stop_reason == "planner_answer"

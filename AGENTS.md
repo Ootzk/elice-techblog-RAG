@@ -43,7 +43,7 @@
   검색 도구는 BM25(`bm25s`+Kiwi) `keyword_search`와 Dense `meaning_search`이고,
   같은 Pydantic 계약을 agent와 Bearer 인증 MCP 엔드포인트(`/mcp`, `mcp` SDK)가 공유한다.
   최종 답변은 기존 Citation 검증 단계를 거친다. LangChain 체인·LlamaIndex QueryEngine은 사용하지 않는다.
-- Judge 모델, 스케줄러, 서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
+- Judge는 MLflow Gateway의 GPT-6 Luna·Claude Haiku 5.5·Gemini 3.5 Flash Lite를 재사용한다. Gold·Iron은 expectations 기반 직접 평가, 일반 대화는 dev Trace의 100% 자동 평가로 구분한다. 스케줄러·서비스 분리·클라우드 배포 방식은 별도 결정한다.
 - 사용자 승인으로 대화 UI는 Open WebUI 프런트엔드를 추출·수정해 사용한다.
   관리자/방문자 코드로 로그인하고 대화는 코드별로 보존한다. 로그아웃은 세션만 종료한다.
   관리자 화면에서 방문자 코드 발급·연장·폐기를 지원하고, Dataset 평가는 별도 Bearer로 인증한다.
@@ -85,7 +85,7 @@
   사전·토큰화 규칙·BM25 매개변수 변경은 내용 해시와 코드 식별자로 구분한다.
 - 개발 중에는 `BM25_VERSION`·`CHUNKER_VERSION` 등 내부 버전 문자열을 올리지 않고,
   이전 구현과의 호환·마이그레이션 코드를 남기지 않는다. 버전 증가는 평가 기준을 고정하기로 결정한 뒤에 한다.
-  검토된 Gold Set 평가·의미적 Judge와 엘리스클라우드 배포는 후속 작업이다.
+  Gold·Iron Judge와 dev 대화 자동 평가를 연결한다. 전수 기준 평가·사람 평가와의 정합성 검증과 엘리스클라우드 배포는 후속 작업이다.
 
 ## 코드와 설정 배치
 

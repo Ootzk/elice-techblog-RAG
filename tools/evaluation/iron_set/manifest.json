@@ -22,14 +22,12 @@
   },
   "input_contract": "QARequest question/history; index_key supplied by QA profile",
   "expectation_contract": "expected_behavior, reference_response, required_points, failure_conditions, evidence",
-  "execution_status": "no model calls or evaluation runs",
-  "scorer_status": "not implemented; incompatible with existing evidence-v1 dataset expectations",
   "files": {
     "iron.jsonl": {
       "sha256": "38855d437710829132cd5a6207a6db1fb2493c6590415b58990e07d910f090ba"
     },
     "README.md": {
-      "sha256": "0fa6a24bcc8b0d632fc938bdb4d2734c5768f94d931f7df755e618391b26b22a"
+      "sha256": "627e106303ac9ed0706e50b513ad4c58aaa10d8e6d56bebf0952db816f723569"
     }
   },
   "limitations": [

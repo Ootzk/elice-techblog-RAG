@@ -38,6 +38,7 @@ from elice_knowledge.tools import (
     ToolInputError,
     ToolUnavailable,
 )
+from elice_knowledge.tracing import active_attributes, child_span, finish_span, graph_tracing
 
 PREVIEW_CHARS = 400
 CLARIFICATION = "어떤 대상에 대한 질문인지 조금 더 알려주세요."
@@ -167,6 +168,9 @@ def build_agent_graph(settings: Settings, llm, tools, prompts: dict[str, Resolve
 
     def plan(state: AgentState) -> dict:
         used = sum(step.action in TOOL_NAMES for step in state["steps"])
+        active_attributes(
+            {"elice.agent.tool_calls_used": used, "elice.prompt.digest": prompts[PLANNER].digest}
+        )
         if used >= settings.qa_agent_max_tool_calls:
             return {"decision": None, "stop_reason": "tool_budget"}
         messages = planner_messages(state, settings, parser, tools.max_top_k, prompts[PLANNER])
@@ -178,10 +182,13 @@ def build_agent_graph(settings: Settings, llm, tools, prompts: dict[str, Resolve
         if not _same_model(model, settings.generation_model):
             raise GenerationResponseError("Agent model changed")
         try:
-            decision = parser.parse(response.message.content)
+            with child_span("planner.parse", "PARSER", {"text": response.message.content}) as span:
+                decision = parser.parse(response.message.content)
+                finish_span(span, decision.model_dump())
         except (ValueError, TypeError):
             raise GenerationResponseError("Invalid agent decision") from None
         usage = response.additional_kwargs.get("usage", {})
+        active_attributes({"elice.agent.action": decision.action})
         step = AgentStep(
             action=decision.action,
             arguments=decision.arguments,
@@ -292,11 +299,15 @@ def run_qa(
         llm = EliceServerlessLLM(settings, client)
         tools = KnowledgeTools(settings, request.index_key, client, max_top_k=request.top_k)
         graph = build_agent_graph(settings, llm, tools, prompts)
-        state = graph.invoke(
-            {"request": request, "steps": [], "sources": [], "usage": {}, "model": None},
-            config={"recursion_limit": 2 * settings.qa_agent_max_tool_calls + 6},
-        )
+        with graph_tracing(settings):
+            state = graph.invoke(
+                {"request": request, "steps": [], "sources": [], "usage": {}, "model": None},
+                config={"recursion_limit": 2 * settings.qa_agent_max_tool_calls + 6},
+            )
     result = state["result"]
+    for name, value in llm.usage_summary().items():
+        setattr(result, name, value)
+    result.tool_call_count = sum(step.action in TOOL_NAMES for step in state["steps"])
     result.retrieved_sources = state["sources"]
     result.agent_steps = state["steps"]
     result.history_omitted_count = omitted

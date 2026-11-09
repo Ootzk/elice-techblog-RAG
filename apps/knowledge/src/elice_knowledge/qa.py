@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from elice_knowledge.generation import GenerationResponseError
 from elice_knowledge.prompts import PromptRef, ResolvedPrompt
 from elice_knowledge.settings import Settings
+from elice_knowledge.tracing import child_span, documents, finish_span
 
 ABSTENTION = "제공된 문서에서 답변에 필요한 근거를 확인하지 못했습니다."
 
@@ -91,6 +92,10 @@ class QAResponse(BaseModel):
     generation_model: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     retrieved_sources: list[dict] = Field(default_factory=list)
+    generation_sources: list[dict] = Field(default_factory=list)
+    usage_reported_calls: dict[str, int] = Field(default_factory=dict)
+    llm_call_count: int = Field(default=0, ge=0)
+    tool_call_count: int = Field(default=0, ge=0)
     history_omitted_count: int = 0
     agent_steps: list[AgentStep] = Field(default_factory=list)
     agent_stop_reason: (
@@ -149,13 +154,15 @@ def answer_from_sources(
             sources = candidate
 
     def abstain(reason, **metadata):
-        return QAResponse(
-            status="insufficient_evidence",
-            answer=ABSTENTION,
-            index_key=request.index_key,
-            reason=reason,
-            **metadata,
-        )
+        return _abstain(request, reason, **metadata)
+
+    with child_span(
+        "retrieval.final_context",
+        "RETRIEVER",
+        {"question": request.question},
+        {"elice.retrieval.role": "final_context", "elice.prompt.digest": prompt.digest},
+    ) as span:
+        finish_span(span, documents(sources))
 
     if not sources:
         return abstain("no_evidence" if not matches else "context_budget")
@@ -164,6 +171,43 @@ def answer_from_sources(
             prompt, request.question, sources, parser, [m.model_dump() for m in request.history]
         )
     )
+    with child_span(
+        "answer.parse_and_validate",
+        "PARSER",
+        {"text": response.message.content, "sources": documents(sources)},
+    ) as span:
+        result = _parse_and_validate(response, parser, request, sources)
+        result.generation_sources = sources
+        finish_span(
+            span,
+            result.model_dump(),
+            {
+                "elice.citation.outcome": (
+                    "invalid"
+                    if result.reason == "invalid_citations"
+                    else "valid"
+                    if result.status == "answered"
+                    else "not_applicable"
+                )
+            },
+        )
+        return result
+
+
+def _abstain(request, reason, **metadata):
+    return QAResponse(
+        status="insufficient_evidence",
+        answer=ABSTENTION,
+        index_key=request.index_key,
+        reason=reason,
+        **metadata,
+    )
+
+
+def _parse_and_validate(response, parser, request, sources):
+    def abstain(reason, **metadata):
+        return _abstain(request, reason, **metadata)
+
     try:
         generated = parser.parse(response.message.content)
     except (ValueError, TypeError):
