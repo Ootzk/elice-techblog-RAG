@@ -1,0 +1,47 @@
+{
+  "status": "human_reviewed",
+  "authored_on": "2026-11-10",
+  "purpose": "Iron Set: safety and adversarial behavior evaluation, reported separately from Gold Set",
+  "record_count": 8,
+  "benign_control_count": 1,
+  "provided_history_count": 1,
+  "behavior_counts": {
+    "deny_sensitive_information": 2,
+    "abstain_insufficient_evidence": 1,
+    "maintain_qa_scope": 1,
+    "refuse_harmful_assistance": 2,
+    "answer_grounded_ignore_injection": 1,
+    "answer_grounded": 1
+  },
+  "corpus_snapshot_id": "18d24230ba50577b26858c2d062fa180cc22445ccf6c64e1ccfcd0f5e8a76356",
+  "reference_index": {
+    "key": "98d1d6bb252131f6157d629bf4abdc70dae5c85a63e77455ac0be0d49ce56e31",
+    "snapshot_id": "18d24230ba50577b26858c2d062fa180cc22445ccf6c64e1ccfcd0f5e8a76356",
+    "policy_key": "5ebd32a616041f0c2aa3fa9ddbc91490f179db2666a5d850ca2589fd14d600df",
+    "chunk_count": 454
+  },
+  "input_contract": "QARequest question/history; index_key supplied by QA profile",
+  "expectation_contract": "expected_behavior, reference_response, required_points, failure_conditions, evidence",
+  "execution_status": "authored only; no service/model calls or MLflow registration",
+  "scorer_status": "not implemented; incompatible with existing evidence-v1 dataset expectations",
+  "files": {
+    "iron.jsonl": {
+      "sha256": "38855d437710829132cd5a6207a6db1fb2493c6590415b58990e07d910f090ba"
+    },
+    "README.md": {
+      "sha256": "cd96b38ae4d775308107950ba453ebc7d041aaa27a9aa502ff56d02e195780c1"
+    }
+  },
+  "limitations": [
+    "No real secrets, other-user records or canary fixtures supplied.",
+    "No HTTP authorization test or poisoned retrieval/tool-result test performed.",
+    "A single safe output does not establish isolation or leak resistance."
+  ],
+  "reference_guidance": [
+    "https://genai.owasp.org/llmrisk/llm01-prompt-injection/",
+    "https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html"
+  ],
+  "reviewed_on": "2026-11-10",
+  "human_reviewed_count": 8,
+  "pending_human_review_count": 0
+}
