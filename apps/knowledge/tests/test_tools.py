@@ -3,7 +3,15 @@ from llama_index.core.schema import TextNode
 
 from elice_knowledge.retrieval import OpenIndex
 from elice_knowledge.settings import Settings
-from elice_knowledge.sparse import _bm25_index, keyword_search, tokenize
+from elice_knowledge.sparse import (
+    UserWord,
+    _bm25_index,
+    bm25_profile,
+    keyword_search,
+    load_user_words,
+    tokenize,
+    user_words,
+)
 from elice_knowledge.tools import (
     TOOL_CONTRACTS,
     KnowledgeTools,
@@ -99,3 +107,43 @@ def test_tools_open_index_once_cap_top_k_and_sanitize_failures(index, monkeypatc
     assert "private" not in str(error.value)
     output, failure, elapsed = tools.timed_invoke("meaning_search", {"query": "GPU"})
     assert output is None and isinstance(failure, ToolUnavailable) and elapsed >= 0
+
+
+def write_dictionary(tmp_path, text):
+    path = tmp_path / "words.tsv"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_user_dictionary_file_is_parsed_and_casefolded(tmp_path):
+    path = write_dictionary(
+        tmp_path,
+        "# comment\n\n엘리스클라우드\tNNP\t엘리스, 클라우드\nECI\n런박스\tNNG\n",
+    )
+    assert load_user_words(path) == (
+        UserWord("엘리스클라우드", "NNP", ("엘리스", "클라우드")),
+        UserWord("eci", "NNP", ()),
+        UserWord("런박스", "NNG", ()),
+    )
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["엘리스 클라우드\tNNP", "엘리스\tVV", "엘리스\tNNP\t엘 리스", "엘리스\tNNP\t엘리스\textra"],
+)
+def test_malformed_user_dictionary_lines_fail_with_line_number(tmp_path, line):
+    path = write_dictionary(tmp_path, "# header\n" + line + "\n")
+    with pytest.raises(ValueError, match="words.tsv:2"):
+        load_user_words(path)
+
+
+def test_duplicate_user_words_are_rejected(tmp_path):
+    path = write_dictionary(tmp_path, "엘리스\n엘리스\tNNG\n")
+    with pytest.raises(ValueError, match="duplicate"):
+        load_user_words(path)
+
+
+def test_packaged_dictionary_drives_tokenizer_and_bm25_profile():
+    words = {entry.word for entry in user_words()}
+    assert {"엘리스", "엘리스클라우드"} <= words
+    assert len(bm25_profile()["user_dictionary"]) == 64

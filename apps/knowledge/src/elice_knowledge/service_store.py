@@ -103,6 +103,7 @@ def code_identity():
                     "agent.py",
                     "tools.py",
                     "sparse.py",
+                    "data/bm25_user_words.tsv",
                     "generation.py",
                     "retrieval.py",
                     "embedding.py",

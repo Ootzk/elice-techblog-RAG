@@ -274,7 +274,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 BM25(Lucene 방식, k1=1.5, b=0.75)로 검색합니다. 문서 입력은 Dense 색인과 같은 제목·제목 경로·청크 본문입니다.
 토큰은 [Kiwi](https://github.com/bab2min/kiwipiepy) 형태소 분석 결과에서 조사·어미·접사·기호를 제외하고,
 `b300`·`gpt-4o`처럼 영문과 숫자가 섞인 단어를 통째로 추가합니다. 단어 빈도는 중복 제거 없이 유지합니다.
-`엘리스클라우드` 같은 도메인 고유명사는 사용자 사전에 등록하고 `엘리스`·`클라우드`로도 검색되게 합니다.
+`엘리스클라우드`처럼 Kiwi가 잘못 나누는 도메인 단어는
+[사용자 사전](apps/knowledge/src/elice_knowledge/data/bm25_user_words.tsv)에 `단어<TAB>품사<TAB>구성 단어` 형식으로 등록합니다.
+품사는 `NNP`(기본)·`NNG`, 구성 단어는 쉼표로 구분하며 생략할 수 있습니다. 구성 단어도 토큰으로 추가해 `엘리스 클라우드`처럼 띄어 쓴 질의도 찾습니다.
+형식이 틀린 줄은 줄 번호와 함께 검색을 실패시킵니다. 사전 내용의 해시는 BM25 프로필과 QA 프로필에 포함되어,
+사전을 바꾸면 BM25 캐시가 다시 만들어지고 새 QA 프로필로 구분됩니다. 반영하려면 이미지를 다시 빌드합니다.
 BM25 색인은 별도 테이블 없이 처음 검색할 때 프로세스 메모리에 만들고, 청크 ID·내용 해시와 토크나이저 버전이
 같으면 재사용합니다. 질의어가 하나도 없는 청크(점수 0)는 결과에서 제외합니다. 점수는 Dense 유사도와 척도가 다릅니다.
 색인과 검색은 MLflow를 호출하지 않으며, 연결 검증용 `smoke`와 별개입니다.
@@ -426,7 +430,7 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
 수집·청킹·벡터 검색·QA·세션·worker·평가를 포함한 테스트 150개(PostgreSQL 통합 테스트 36개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
-agentic RAG 교체 후 BM25·도구 계약·MCP·agent 그래프 테스트를 더해 170개(PostgreSQL 통합 테스트 37개 포함)가
+agentic RAG 교체 후 BM25·사용자 사전·도구 계약·MCP·agent 그래프 테스트를 더해 177개(PostgreSQL 통합 테스트 37개 포함)가
 맥북의 임시 `pgvector/pgvector:pg17` 컨테이너에서 통과했습니다. agent 테스트는 모의 Serverless 응답을 사용합니다.
 개발 Corpus의 H2 인덱스(청크 454개)에서 BM25 검색이 B300·Whisper·Qwen 질의에 해당 글의 청크를 반환했습니다.
 프로세스의 첫 검색은 Kiwi 로딩과 색인 생성으로 약 3초, 이후 검색은 캐시를 재사용했습니다.

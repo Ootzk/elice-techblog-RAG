@@ -3,7 +3,10 @@
 import re
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
+from functools import cache
 from importlib.metadata import version
+from pathlib import Path
 
 from llama_index.core.schema import MetadataMode
 
@@ -16,20 +19,65 @@ BM25_PARAMETERS = {"method": "lucene", "k1": 1.5, "b": 0.75}
 # (XP/XS), copulas (VCP/VCN), punctuation and symbols. Foreign words (SL),
 # hanja (SH) and numbers (SN) remain searchable.
 _DROPPED_TAGS = ("J", "E", "XP", "XS", "VCP", "VCN", "SF", "SP", "SS", "SE", "SO", "SW", "SB")
-# Domain proper nouns Kiwi otherwise splits (for example "리 스클라" + "우드").
-# Compounds also emit their parts so "엘리스 클라우드" still matches.
-USER_WORDS = {
-    "엘리스": (),
-    "엘리스클라우드": ("엘리스", "클라우드"),
-    "런박스": (),
-    "헬피": (),
-}
+# Domain words Kiwi otherwise splits (for example "엘리스클라우드" -> "리 스클라" + "우드").
+USER_DICTIONARY_PATH = Path(__file__).parent / "data" / "bm25_user_words.tsv"
+USER_WORD_TAGS = ("NNP", "NNG")
 _MIXED_WORD = re.compile(r"[0-9a-z][0-9a-z.+#_-]*[0-9a-z+#]|[0-9a-z]")
 _CACHE_LIMIT = 8
 _cache: OrderedDict[tuple[str, str], object] = OrderedDict()
 _cache_lock = threading.Lock()
 _kiwi = None
 _kiwi_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class UserWord:
+    word: str
+    tag: str = "NNP"
+    parts: tuple[str, ...] = ()
+
+
+def load_user_words(path: Path) -> tuple[UserWord, ...]:
+    """Parse `word<TAB>[tag]<TAB>[part,part]` lines; `#` comments and blanks are ignored.
+
+    Words are casefolded like the text they must match. Malformed lines fail
+    loudly with their line number instead of silently changing search results.
+    """
+    entries: dict[str, UserWord] = {}
+    for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        columns = [column.strip() for column in raw.rstrip("\r\n").split("\t")]
+        word = columns[0].casefold()
+        tag = (columns[1] if len(columns) > 1 else "") or "NNP"
+        parts = tuple(
+            part.strip().casefold()
+            for part in (columns[2] if len(columns) > 2 else "").split(",")
+            if part.strip()
+        )
+        if (
+            len(columns) > 3
+            or not word
+            or any(ch.isspace() for ch in word)
+            or tag not in USER_WORD_TAGS
+            or any(any(ch.isspace() for ch in part) for part in parts)
+        ):
+            raise ValueError(f"{path.name}:{number}: expected word<TAB>NNP|NNG<TAB>part,part")
+        if word in entries:
+            raise ValueError(f"{path.name}:{number}: duplicate user word {word!r}")
+        entries[word] = UserWord(word, tag, parts)
+    return tuple(entries.values())
+
+
+@cache
+def user_words() -> tuple[UserWord, ...]:
+    return load_user_words(USER_DICTIONARY_PATH)
+
+
+@cache
+def _user_parts() -> dict[str, tuple[str, ...]]:
+    return {entry.word: entry.parts for entry in user_words() if entry.parts}
 
 
 def tokenizer_identity() -> str:
@@ -42,7 +90,9 @@ def tokenizer_identity() -> str:
 def bm25_profile() -> dict:
     return {
         "tokenizer": tokenizer_identity(),
-        "user_words": USER_WORDS,
+        # Content digest, so dictionary edits rebuild cached indexes and are
+        # distinguishable in evaluation records.
+        "user_dictionary": digest([[e.word, e.tag, list(e.parts)] for e in user_words()]),
         **BM25_PARAMETERS,
         "document_input": "EMBED",
     }
@@ -56,8 +106,8 @@ def _analyzer():
 
             # Model loading takes seconds; one shared analyzer serves all calls.
             kiwi = Kiwi()
-            for word in USER_WORDS:
-                kiwi.add_user_word(word, "NNP")
+            for entry in user_words():
+                kiwi.add_user_word(entry.word, entry.tag)
             _kiwi = kiwi
         return _kiwi
 
@@ -77,7 +127,7 @@ def tokenize(text: str) -> list[str]:
         if len(form) < 2 or " " in form:
             continue
         tokens.append(form)
-        tokens.extend(USER_WORDS.get(form, ()))
+        tokens.extend(_user_parts().get(form, ()))
     for word in normalized.split():
         for match in _MIXED_WORD.findall(word):
             if re.search(r"[a-z]", match) and re.search(r"[0-9]", match):

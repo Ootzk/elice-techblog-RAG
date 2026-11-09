@@ -81,7 +81,8 @@
 - 사용자 지시로 대화 UI·코드 로그인·관리자 코드 관리와 Dataset 평가 API를 현재 범위에 포함한다.
 - 사용자 지시로 BM25 검색, 검색 도구의 MCP 엔드포인트와 LangGraph agentic RAG를 현재 범위에 포함한다.
   BM25는 인덱스 키가 가리키는 스냅샷·정책 청크로 프로세스 메모리에 만들고 별도 테이블에 저장하지 않는다.
-  토크나이저·사용자 사전·BM25 매개변수가 바뀌면 `BM25_VERSION`을 올린다.
+  Kiwi 사용자 사전은 `apps/knowledge/src/elice_knowledge/data/bm25_user_words.tsv`로 관리하고 코드에 하드코딩하지 않는다.
+  사전 변경은 내용 해시로 추적하며, 토큰화 규칙·BM25 매개변수 등 코드 계약이 바뀌면 `BM25_VERSION`을 올린다.
   검토된 Gold Set 평가·의미적 Judge와 엘리스클라우드 배포는 후속 작업이다.
 
 ## 코드와 설정 배치

@@ -1,0 +1,8 @@
+# Kiwi user dictionary for BM25 keyword search.
+# Columns (tab-separated): word, tag (NNP|NNG, default NNP), parts (comma-separated, optional).
+# Parts are also emitted as tokens so a compound still matches its spaced form.
+# Changing this file changes the BM25 profile digest and rebuilds cached indexes.
+엘리스	NNP
+엘리스클라우드	NNP	엘리스,클라우드
+런박스	NNP
+헬피	NNP
