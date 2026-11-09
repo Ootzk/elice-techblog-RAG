@@ -43,14 +43,29 @@ uv lock --check --project apps/knowledge
 
 ## CI와 발행 순서
 
-1. feature → release PR: 브랜치·버전·lock 자체 항목, 릴리스 계약 테스트, Web 정적 빌드,
-   Knowledge lint·테스트를 검사한다.
-2. release → main PR: 제목은 `Release v0.1.0`. 위 검사에 `linux/amd64` 이미지 빌드를 추가한다.
+1. feature → release PR: 브랜치·버전·lock 자체 항목, CI·릴리스 계약 테스트, 공백 검사를 항상 실행한다.
+   나머지는 merge-base부터 PR head까지 바뀐 경로에 따라 선택한다. 기본 검사는 Python 표준
+   라이브러리만 사용하며 npm/uv 의존성을 설치하거나 DB를 기동하지 않는다.
+2. release → main PR: 제목은 `Release v0.1.0`. 변경 경로와 관계없이 Web·Knowledge 전체 검사와
+   `linux/amd64` 이미지 빌드를 실행한다.
    이미지가 있어야 하는 릴리스 PR은 이미지 빌드가 생략되어도 `Ready to merge`를 통과하지 못한다.
 3. 사용자가 release PR을 **merge commit**으로 병합한다. feature PR의 squash merge와 구분한다.
 4. main push의 Release workflow가 정확히 해당 SHA의 병합 PR·부모 commit·패키지 버전·미사용 태그를 확인한다.
 5. GHCR에 `:v0.1.0`, `:sha-<전체 merge SHA>`, `:latest` 이미지를 게시한다.
 6. 필요한 모든 이미지 게시가 성공한 뒤 같은 merge SHA에 태그·GitHub Release를 생성한다.
+
+| feature PR 변경 범위 | 추가 검사 |
+| --- | --- |
+| 문서(`*.md`, `docs/`), Corpus manifest, Gold·Iron 데이터, 조회 SQL, 에디터 설정 | 없음 |
+| `apps/web/` 코드·의존성·설정 | Web 포맷·타입 검사·정적 빌드 |
+| `apps/knowledge/`, `tools/evaluation/` 코드 | Python lint·format·lock 검사·전체 앱 테스트, 테스트 전용 PostgreSQL |
+| Compose·환경 예시·CI 등 공통 설정 또는 미분류 경로 | Web·Knowledge 모두 |
+
+여러 범위가 바뀌면 필요한 검사를 합친다. 문서 경로는 앱 디렉터리 내부에서도 기본 검사만 실행한다.
+삭제·이동도 변경 경로에 포함하며, 이동은 이전·새 경로를 모두 확인한다. 선택하지 않은 job은
+`skipped`로 표시되고, 선택한 job은 성공해야 `Ready to merge`를 통과한다.
+feature PR에서는 Docker 빌드·이미지 게시·릴리스 발행을 하지 않는다.
+Gold·Iron 전수 평가와 유료 Judge 호출은 두 PR CI 모두에서 실행하지 않는다.
 
 Knowledge Dockerfile만 있으므로 현재 발행되는 이미지는
 `ghcr.io/ootzk/elice-techblog-rag-knowledge` 하나다. Web·worker를 별도 이미지로 발행하지 않는다.

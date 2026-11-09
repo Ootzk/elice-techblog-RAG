@@ -85,6 +85,10 @@ class ReleaseContractTests(unittest.TestCase):
                     env={
                         **os.environ,
                         "CHECKS_RESULT": checks,
+                        "WEB_REQUIRED": "true",
+                        "WEB_RESULT": "success",
+                        "KNOWLEDGE_REQUIRED": "true",
+                        "KNOWLEDGE_RESULT": "success",
                         "RELEASE_PR": release_pr,
                         "HAS_IMAGES": images,
                         "IMAGES_RESULT": image_result,

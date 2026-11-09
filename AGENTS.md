@@ -263,7 +263,9 @@
   `pyproject.toml`과 `package.json` 및 대응 lockfile의 자체 패키지 버전이 일치하는지 확인한다.
 - PR CI는 feature → release, release → main 방향과 버전 정합성을 검사한다.
   release PR 제목은 `Release vX.Y.Z`로 한다.
-- feature PR은 저장소 검사, release PR은 추가로 서비스 이미지 빌드를 수행한다.
+- feature PR은 의존성 설치·DB 기동 없는 기본 검사와 변경 경로에 해당하는 앱 검사만 수행한다.
+  문서·평가 데이터만 변경하면 앱 검사는 생략하며, 공통 설정·미분류 경로는 양쪽 앱을 검사한다.
+  release PR은 경로와 관계없이 전체 앱 검사와 서비스 이미지 빌드를 수행한다.
   앱의 테스트·lockfile 검사 등은 각 구현이 추가될 때 CI에 연결한다.
 - `.github/scripts/release.py`는 CI의 브랜치·패키지 버전 확인과 릴리스 발행을 담당한다.
   CI 도구에 쓰는 Python 3.12는 애플리케이션의 언어나 Python 버전을 결정하지 않는다.
