@@ -370,6 +370,7 @@
 					class="min-h-16 shrink-0 flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-7 border-b border-gray-100"
 				>
 					<div class="flex items-center gap-3">
+						<a href="/review" class="text-sm text-gray-500 hover:underline">사람 검수</a>
 						<button
 							bind:this={menuButton}
 							class="flex shrink-0 items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"

@@ -2,6 +2,7 @@
 
 import secrets
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from elice_knowledge.access_codes import AccessCodes
 from elice_knowledge.evaluation import SCORER, SCORER_KEY, dataset_snapshot, enqueue_evaluation
 from elice_knowledge.execution import public_result
+from elice_knowledge.human_review import HumanReview
 from elice_knowledge.service_store import ServiceError, ServiceStore, token_hash
 
 COOKIE = "knowledge_session"
@@ -72,6 +74,35 @@ class ExtendCode(BaseModel):
     days: int = Field(ge=1, le=3660)
 
 
+class ReviewImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class ReviewAssignment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reviewer_id: UUID
+
+
+class ReviewScore(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: Literal["pass", "fail", "not_applicable"]
+    rationale: str = Field(min_length=1, max_length=4000)
+
+    @field_validator("rationale")
+    @classmethod
+    def not_blank(cls, value):
+        if not value.strip():
+            raise ValueError("Rationale must not be blank")
+        return value.strip()
+
+
+class ReviewSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    answer_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    scores: dict[str, ReviewScore] = Field(min_length=1, max_length=4)
+
+
 def admin_dependency(settings):
     def admin(request: Request):
         expected = settings.evaluation_api_token
@@ -118,6 +149,57 @@ def mount_service(app, settings):
 
     code_admin_dependency = Depends(code_admin)
     codes = AccessCodes(store)
+    reviews = HumanReview(store)
+
+    @router.get("/admin/review-candidates")
+    def review_candidates(page_token: str | None = None, owner=code_admin_dependency):
+        return reviews.candidates(page_token)
+
+    @router.post("/admin/reviews", status_code=201)
+    def import_review(body: ReviewImport, owner=code_admin_dependency):
+        reviews.import_run(body.run_id, owner["principal_id"])
+        return {"run_id": body.run_id}
+
+    @router.get("/admin/reviews/{run_id}/origin")
+    def review_origin(run_id: str, owner=code_admin_dependency):
+        return reviews.origin(run_id)
+
+    @router.post("/admin/reviews/{run_id}/assignments", status_code=201)
+    def assign_review(run_id: str, body: ReviewAssignment, owner=code_admin_dependency):
+        reviews.assign(run_id, body.reviewer_id)
+        return {"assigned": True}
+
+    @router.get("/reviews")
+    def review_sources(owner=session_dependency):
+        return {"items": reviews.sources(owner["principal_id"])}
+
+    @router.get("/reviews/{run_id}/cases/{position}")
+    def review_case(run_id: str, position: int, owner=session_dependency):
+        return reviews.case(run_id, owner["principal_id"], position)
+
+    @router.post("/reviews/{run_id}/cases/{position}")
+    def save_review(run_id: str, position: int, body: ReviewSubmission, owner=session_dependency):
+        return reviews.save(
+            run_id,
+            owner["principal_id"],
+            position,
+            body.answer_digest,
+            {key: value.model_dump() for key, value in body.scores.items()},
+        )
+
+    @router.get("/reviews/{run_id}/labels")
+    def review_labels(run_id: str, owner=session_dependency):
+        return {
+            "labels": [
+                label
+                for row in reviews.labels(run_id, owner["principal_id"])
+                for label in row["labels"]
+            ]
+        }
+
+    @router.post("/reviews/{run_id}/sync")
+    def sync_review(run_id: str, owner=session_dependency):
+        return reviews.sync(run_id, owner["principal_id"])
 
     def identity(row):
         return {"id": row["principal_id"], "label": row["label"], "role": row["role"]}

@@ -82,6 +82,9 @@ def initialize_service(conn):
             PRIMARY KEY(evaluation_id,record_id))""",
     ]:
         conn.execute(statement)
+    from elice_knowledge.human_review import initialize_reviews
+
+    initialize_reviews(conn)
 
 
 PROFILE_FIELDS = [

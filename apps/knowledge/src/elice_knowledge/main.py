@@ -148,6 +148,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             candidate = (settings.web_dist_dir / path).resolve()
             if candidate.is_relative_to(settings.web_dist_dir.resolve()) and candidate.is_file():
                 return FileResponse(candidate)
+            if path in {"review", "review/"}:
+                try:
+                    ServiceStore(settings).session(request.cookies.get(COOKIE))
+                except ServiceError:
+                    return RedirectResponse("/", status_code=303)
+                response = FileResponse(settings.web_dist_dir / "index.html")
+                response.headers["Cache-Control"] = "no-store"
+                return response
             if not path or path.startswith("c/"):
                 return FileResponse(settings.web_dist_dir / "index.html")
             raise HTTPException(status_code=404)

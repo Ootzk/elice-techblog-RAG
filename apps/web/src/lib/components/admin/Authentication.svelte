@@ -174,7 +174,13 @@
 			<a href="/" class="font-semibold flex items-center gap-2"
 				><img src="/open-webui-logo.png" alt="" class="size-7" />Open WebUI
 				<span class="font-normal text-gray-400 text-sm ml-2">관리자</span></a
-			><a href="/" class="text-sm text-gray-500 hover:underline">← 대화로 돌아가기</a>
+			>
+			<div class="flex gap-4">
+				<a href="/review" class="text-sm text-gray-500 hover:underline">사람 검수</a><a
+					href="/"
+					class="text-sm text-gray-500 hover:underline">← 대화로 돌아가기</a
+				>
+			</div>
 		</div>
 	</header>
 	<main class="max-w-6xl mx-auto px-5 py-9">

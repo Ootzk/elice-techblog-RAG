@@ -1,6 +1,6 @@
 # 릴리스와 배포 준비
 
-현재 릴리스 대상은 `v0.1.0`이다. 개발 환경의 수집·검색·QA·평가 기능 구현과,
+현재 개발 대상은 `v0.2.0`이며, 직전 릴리스는 `v0.1.0`이다. 개발 환경의 수집·검색·QA·평가 기능 구현과,
 이미지 발행·클라우드 배포·전수 품질 검증의 완료 상태는 구분한다.
 
 ## 패키지와 배포 단위
@@ -13,19 +13,19 @@
 | 평가 CLI | 별도 패키지 버전 없음 | Knowledge 실행 환경 사용 | 저장소의 `tools/evaluation`에서 실행 |
 | PostgreSQL·Ollama·MLflow | 각 외부 제품 버전 | 해당 인프라 관리 범위 | 이 저장소의 제품 버전과 별도 관리 |
 
-자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge와 Web은 모두 `0.1.0`이므로
-이번 출시를 위해 `0.1.1`이나 `0.2.0`으로 올리지 않는다. Open WebUI 원본 커밋·버전은
+자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge와 Web 및 lockfile의 자체 항목은 모두 `0.2.0`이다.
+v0.2.0은 Human Review 구축과 실험 인프라 고도화를 목표로 한다. Open WebUI 원본 커밋·버전은
 `apps/web/UPSTREAM.md`의 출처 정보이며, 자체 Web 패키지 버전과 구분한다.
 API OpenAPI 버전·연결 검증 MLflow 태그·MCP 버전은 설치된 Knowledge 패키지 메타데이터를 사용한다.
 
 다음 릴리스에서는 대상 `release/vX.Y.Z`에서 분기한 feature 브랜치에서 두 패키지를 맞춘다.
-예를 들어 대상 버전이 `0.2.0`일 때 저장소 루트에서 실행한다.
+예를 들어 다음 대상 버전이 `0.3.0`일 때 저장소 루트에서 실행한다.
 
 ```bash
-uv version --project apps/knowledge --no-sync 0.2.0
-npm version 0.2.0 --prefix apps/web --no-git-tag-version --allow-same-version --ignore-scripts
+uv version --project apps/knowledge --no-sync 0.3.0
+npm version 0.3.0 --prefix apps/web --no-git-tag-version --allow-same-version --ignore-scripts
 uv sync --project apps/knowledge --locked
-uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.2.0
+uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.3.0
 ```
 
 `uv version --no-sync`는 pyproject와 lock을 갱신하며, 이어지는 sync가 설치된 패키지 메타데이터도 갱신한다.
@@ -36,7 +36,7 @@ uv/npm 명령의 동시 갱신은 원본에 영향을 주지 않는 임시 복�
 현재 상태를 외부 API 호출이나 파일 수정 없이 검사하려면 다음을 사용한다.
 
 ```bash
-uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.1.0
+uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.2.0
 uv run --project apps/knowledge python -m unittest discover -s .github/tests -v
 uv lock --check --project apps/knowledge
 ```
@@ -46,12 +46,12 @@ uv lock --check --project apps/knowledge
 1. feature → release PR: 브랜치·버전·lock 자체 항목, CI·릴리스 계약 테스트, 공백 검사를 항상 실행한다.
    나머지는 merge-base부터 PR head까지 바뀐 경로에 따라 선택한다. 기본 검사는 Python 표준
    라이브러리만 사용하며 npm/uv 의존성을 설치하거나 DB를 기동하지 않는다.
-2. release → main PR: 제목은 `Release v0.1.0`. 변경 경로와 관계없이 Web·Knowledge 전체 검사와
+2. release → main PR: 제목은 `Release v0.2.0`. 변경 경로와 관계없이 Web·Knowledge 전체 검사와
    `linux/amd64` 이미지 빌드를 실행한다.
    이미지가 있어야 하는 릴리스 PR은 이미지 빌드가 생략되어도 `Ready to merge`를 통과하지 못한다.
 3. 사용자가 release PR을 **merge commit**으로 병합한다. feature PR의 squash merge와 구분한다.
 4. main push의 Release workflow가 정확히 해당 SHA의 병합 PR·부모 commit·패키지 버전·미사용 태그를 확인한다.
-5. GHCR에 `:v0.1.0`, `:sha-<전체 merge SHA>`, `:latest` 이미지를 게시한다.
+5. GHCR에 `:v0.2.0`, `:sha-<전체 merge SHA>`, `:latest` 이미지를 게시한다.
 6. 필요한 모든 이미지 게시가 성공한 뒤 같은 merge SHA에 태그·GitHub Release를 생성한다.
 
 | feature PR 변경 범위 | 추가 검사 |
@@ -79,8 +79,8 @@ GitHub 인증정보와 실제 main merge를 요구하며 publish는 태그·Rele
 ### 원격 설정 확인 결과
 
 2026-11-10 점검 기준 저장소는 private이고 squash·merge commit을 모두 허용하며,
-병합 후 feature 원격 브랜치 자동 삭제가 활성화되어 있다. 아직 릴리스 태그·GitHub Release는 없다.
-Release workflow는 release 브랜치에 있으며 최초 main 반영 전 원격에 등록된 workflow는 CI다.
+병합 후 feature 원격 브랜치 자동 삭제가 활성화되어 있다. `v0.1.0` 태그·GitHub Release가 발행되었으며
+Release workflow가 main에 반영되어 있다.
 
 브랜치 보호·ruleset API는 현재 저장소 요금제에서 403(상위 요금제 또는 public 저장소 필요)을 반환했다.
 따라서 `Ready to merge` workflow의 구현과 서버 측 필수 검사·PR 병합 강제 설정은 동일한 상태가 아니다.
@@ -89,7 +89,7 @@ Release workflow는 release 브랜치에 있으며 최초 main 반영 전 원격
 ## 환경별 이미지 사용
 
 prod `compose.yaml`에는 build가 없고 `KNOWLEDGE_IMAGE`가 필수다.
-`.env.example`은 `:v0.1.0`을 지정하며 실제 태그 발행 후에 pull한다. 버전 태그나 digest로
+`.env.example`은 개발 목표인 `:v0.2.0`을 지정하며 실제 태그 발행 후에 pull한다. 버전 태그나 digest로
 고정하고 변경되는 `latest`를 배포 기준으로 사용하지 않는다.
 
 dev `compose.dev.yaml`은 로컬 Knowledge build와 PostgreSQL을 추가한다.
@@ -110,7 +110,7 @@ docker compose --env-file .env.example -f compose.yaml config --no-env-resolutio
 
 ## 최초 배포 순서
 
-1. `v0.1.0` GitHub Release와 Knowledge 이미지 게시 성공을 확인한다.
+1. 배포할 버전의 GitHub Release와 Knowledge 이미지 게시 성공을 확인한다.
 2. 배포 호스트에서 `.env.example`을 `.env`로 복사하고 전용 DB·추론·MLflow·로그인 코드를 설정한다.
    private GHCR 이미지이면 Docker에 `read:packages` 권한이 있는 계정으로 로그인한다.
    이미지 pull 인증정보를 애플리케이션 환경 파일에 넣지 않는다.
@@ -143,7 +143,7 @@ docker compose --env-file .env -f compose.yaml up -d --no-build knowledge worker
 코드의 테이블 초기화는 임의의 이전 릴리스로 DB를 되돌리는 마이그레이션 수단이 아니므로,
 문제가 생기면 스키마 호환성과 백업을 확인한 뒤 이미지·데이터 복원 범위를 결정한다.
 
-## v0.1.0의 남은 배포 검증
+## 남은 배포 검증
 
 - 엘리스클라우드 DB·MLflow·HTTPS ingress·영속 저장소의 실제 접속 설정 확정.
 - BGE-M3의 제출용 서빙 방식 결정. 현재 어댑터는 Ollama 프로토콜이며 다른 ML API는 호환성 확인·구현이 필요.
@@ -153,7 +153,7 @@ docker compose --env-file .env -f compose.yaml up -d --no-build knowledge worker
   릴리스 PR의 네이티브 amd64 빌드를 구분하며, amd64 검증 완료 전 실제 배포가 확인된 것으로 기록하지 않는다.
 
 
-## 이번 점검에서 확인한 결과
+## v0.1.0 배포 준비 점검 기록
 
 - 패키지·lockfile의 통합 `0.1.0` 정합성 검사 통과.
 - 격리 PostgreSQL을 포함한 애플리케이션 테스트 227개와 릴리스 계약 테스트 9개 통과.
@@ -161,4 +161,5 @@ docker compose --env-file .env -f compose.yaml up -d --no-build knowledge worker
 - prod는 image 전용, dev는 build·PostgreSQL을 포함하는 Compose 구성 검사 통과.
 - ARM 이미지 빌드와 컨테이너 안의 패키지/API 버전·live 응답·정적 UI·라이선스 파일 검사 통과.
 - amd64 로컬 교차 실행은 위 Node/libuv 오류로 미검증. 변경한 workflow의 원격 CI,
-  최초 GHCR 게시·태그·GitHub Release 생성 및 클라우드 실배포는 아직 실행하지 않음.
+  당시 최초 GHCR 게시·태그·GitHub Release 생성 및 클라우드 실배포는 미실행.
+  이후 main 병합 자동화로 v0.1.0 이미지·태그·GitHub Release 발행을 확인했으며 실제 클라우드 배포와 구분함.
