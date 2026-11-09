@@ -522,7 +522,7 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/regi
 평가 CLI인 `tools/evaluation/evaluate.py`는 기본적으로 계획만 표시하고 `--submit`을 지정해야 작업을 접수합니다.
 등록 CLI는 `--dry-run`이 없으면 MLflow Dataset을 갱신하지만 모델 호출이나 평가를 실행하지는 않습니다.
 현재 Gold의 검색 근거 Recall과 답변 가능 여부를 채점합니다.
-실제 Gold 평가 실행, 의미적 정확성 Judge와 Iron의 실행·채점은 후속 작업입니다.
+dev에서는 Gold·Iron 실행 시 전용 Judge 세 개가 함께 채점합니다. 전체 기준 평가는 아직 실행하지 않았습니다.
 
 ---
 
@@ -638,7 +638,7 @@ pgvector에 저장합니다. 문서를 색인할 때와 질문을 검색할 때�
 생성은 엘리스클라우드 Serverless의 OpenAI 호환 endpoint로 연결하며 구체적인 모델은 설정 시 선택합니다.
 프런트엔드는 Open WebUI 소스를 추출·수정한 대화 화면이며 Knowledge API가 정적 파일로 제공합니다.
 QA는 LangGraph agent가 BM25·Dense 검색 도구를 골라 근거를 모으는 구조이며, 같은 도구를 `/mcp`로도 공개합니다.
-Judge 모델은 아직 정하지 않았습니다.
+Judge는 MLflow Gateway에 연결한 GPT-6 Luna·Claude Haiku 5.5·Gemini 3.5 Flash Lite를 사용합니다.
 
 MLflow에는 평가 Dataset과 Prompt, AI endpoint 설정을 준비합니다.
 Eval Harness는 이 설정을 이용해 평가를 실행하고, 질문별 결과와 주요 지표를 기록해 보고서로 정리합니다.
@@ -706,7 +706,7 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 두 지표는 검색 실패와 응답 가능성 판단을 나눠 관찰하기 위한 출발점입니다. 모두 높더라도 답변이 틀릴 수 있으므로
 모범 답안의 필수 요점·금지 주장·문서 간 종합은 별도 의미 판정이 필요합니다.
-LLM-as-a-Judge의 모델·프롬프트·일관성·사람 판단과의 정합성 검증과 Iron 행동 채점은 아직 구현하지 않았습니다.
+Gold·Iron의 수용 기준을 판정하는 Boolean Judge를 모델별로 등록했습니다. 일반 대화는 별도 online rubric으로 근거 충실도·응답 적절성을 평가하며 dev Trace를 100% 대상으로 합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. Judge 일관성과 사람 판단과의 정합성·Cohen’s kappa는 아직 검증하지 않았습니다.
 호출 오류·타임아웃은 정상 유보와 구분해 실패율·평가 완료율로 보고합니다.
 
 ### 재현성과 회귀 검증
@@ -722,7 +722,7 @@ MLflow Run에는 Dataset·QA/scorer 프로필과 사례별 출력·점수·오�
 확정된 입력으로 평가를 반복하는 것과 구분하며, 현재 생성 API의 Seed 지정과 모델 가중치 revision 통제도 미구현입니다.
 모델 별칭과 고정된 평가 조건만으로 비결정적 생성의 완전한 재현성을 보장하지 않습니다.
 
-Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. Gold 평가는
+Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. 두 데이터셋 모두
 `evaluate.py --dataset-id '<dataset-id>' --submit`으로 전체 문항을 한 번에 접수할 수 있으나,
 실제 기준 Run과 제출용 요약 보고서·Before/After 비교는 아직 만들지 않았습니다.
 
@@ -739,7 +739,7 @@ Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니
 코드 로그인 기반 대화 UI·관리자 기능, Dataset 등록·평가 API/CLI와 결정적 scorer를 구현했습니다.
 Gold 22문항·Iron 8문항을 검수해 홈서버 MLflow에 등록하고 원본과의 일치를 확인했습니다.
 엘리스 Serverless 모델의 실제 연결·응답은 확인했지만, 답변 정확성·유보 성능에 대한 기준 평가는 아직 실행하지 않았습니다.
-의미적 Judge, Iron 실행·채점, 기준 평가와 개선 실험·제출용 보고서, 클라우드 배포 검증은 남아 있습니다.
+기준 평가와 개선 실험·제출용 보고서, Judge 신뢰도와 클라우드 배포 검증은 남아 있습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
 임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.

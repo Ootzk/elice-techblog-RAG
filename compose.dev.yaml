@@ -4,12 +4,14 @@ services:
   knowledge:
     environment:
       APP_ENV: dev
+      EVALUATION_JUDGES_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
   worker:
     environment:
       APP_ENV: dev
+      EVALUATION_JUDGES_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy

@@ -53,7 +53,8 @@ def main():
             print(json.dumps({"qa_profile": created}, ensure_ascii=False, indent=2))
         else:
             profile = args.qa_profile_key or call("/qa-profiles")["active"]
-        scorer = call("/scorer-profiles")["items"][0]["key"]
+        scoring = call("/scorer-profiles")
+        scorer = scoring["items"][0]["key"]
         plan = {
             "dataset_id": args.dataset_id,
             "dataset_digest": dataset["digest"],
@@ -68,6 +69,8 @@ def main():
             else {
                 "mode": "preview",
                 "record_count": len(args.record_id or dataset["records"]),
+                "judges_enabled": scoring["judges_enabled"],
+                "dataset_kind": dataset["kind"],
                 "request": plan,
             }
         )

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     worker_lease_seconds: int = Field(default=300, ge=30, le=1800)
     web_dist_dir: Path = Path("/app/web")
     qa_mlflow_experiment_name: str = "elice-techblog-rag-evaluation"
+    evaluation_judges_enabled: bool = False
 
     @field_validator("generation_base_url", "generation_api_key", "generation_model", mode="before")
     @classmethod

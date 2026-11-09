@@ -637,3 +637,73 @@ def test_experiment_profile_api_pins_prompt_selectors(service, monkeypatch):
         TestClient(create_app(service.settings)).post("/api/qa-profiles", json={}).status_code
         == 401
     )
+
+
+def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypatch):
+    service.settings.evaluation_judges_enabled = True
+    record = {
+        "id": "r1",
+        "inputs": {"question": "Q", "history": []},
+        "expectations": {"answerable": False},
+    }
+    monkeypatch.setattr(
+        "elice_knowledge.evaluation.dataset_snapshot",
+        lambda *a: {"kind": "gold", "digest": "d" * 64, "records": [record]},
+    )
+    specs = [{"name": "qa-gold-chatgpt", "version": 1}]
+    monkeypatch.setattr("elice_knowledge.evaluation.frozen_judges", lambda *a: specs)
+
+    class Tracking:
+        def get_experiment_by_name(self, *a):
+            return SimpleNamespace(experiment_id="exp")
+
+        def create_run(self, *a, **kw):
+            return SimpleNamespace(info=SimpleNamespace(run_id="mlflow-judged"))
+
+        def __getattr__(self, name):
+            return lambda *a, **kw: None
+
+    monkeypatch.setattr("elice_knowledge.evaluation.tracking_client", lambda *a: Tracking())
+    monkeypatch.setattr(
+        "elice_knowledge.execution.run_qa",
+        lambda *a: QAResponse(
+            status="insufficient_evidence",
+            answer="근거 부족",
+            index_key="b" * 64,
+            reason="insufficient",
+        ),
+    )
+    seen = []
+
+    def judge(settings, run_id, records, cases, frozen):
+        seen.append(frozen)
+        assert cases[0]["error"] is None
+        return {}, [
+            {
+                "record_id": "r1",
+                "judges": {
+                    "qa-gold-chatgpt": {"value": False, "rationale": "missing", "version": 1}
+                },
+            }
+        ]
+
+    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_answers", judge)
+    job_id = enqueue_evaluation(
+        service,
+        EvaluationRequest(
+            dataset_id="dataset",
+            dataset_digest="d" * 64,
+            qa_profile_key=PROFILE,
+            scorer_profile_key=SCORER_KEY,
+        ),
+    )
+    specs[0]["version"] = 2
+    process_one(service)
+    assert seen[0][0]["version"] == 1
+    with service.connection() as conn:
+        case = conn.execute(
+            "SELECT scores FROM evaluation_cases WHERE evaluation_id=%s", (job_id,)
+        ).fetchone()
+        job = conn.execute("SELECT status FROM qa_jobs WHERE id=%s", (job_id,)).fetchone()
+    assert job["status"] == "completed"
+    assert case["scores"]["qa-gold-chatgpt"] == 0.0

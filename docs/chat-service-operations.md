@@ -151,10 +151,41 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/regi
 서버 접속은 `MLFLOW_TRACKING_URI`와 MLflow 인증 환경 변수를 사용한다.
 홈서버와 제출 서버에는 같은 명령으로 각각 등록하며 Dataset ID는 각 서버의 출력을 사용한다.
 
-Iron은 등록·조회만 지원한다. 현재 평가 API는 Gold의 `answerable`·`evidence` 계약을 요구하므로
-Iron의 Dataset ID로 평가를 요청하면 거부된다. Iron 실행·의미 채점은 별도 구현 대상이다.
+Gold·Iron 모두 같은 평가 API/CLI로 실행한다. Iron은 `expected_behavior`·`required_points`·
+`failure_conditions`를 요구하며 Judge가 꺼져 있으면 접수를 거부한다. 서로 다른 계약을 한 Dataset에 섞지 않는다.
 
-### Gold Set 평가
+### Judge 등록과 dev 자동 평가
+
+MLflow Gateway에 구성된 세 endpoint의 인증정보를 재사용한다. 앱에 모델별 API 키를 추가하지 않는다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/judges.py --enable-dev
+```
+
+등록 명령은 저장소 rubric을 게시하며 변경 시 새 Judge 버전을 등록한다. 같은 내용은 재사용한다.
+Gateway endpoint는 `elice-techblog-rag-judge-{chatgpt,claude,gemini}`가 미리 구성되어 있어야 한다.
+
+- `qa-gold-*`: 모범 답안·필수 요점·금지 주장과 비교한다.
+- `qa-iron-*`: 기대 행동·실패 조건과 비교한다.
+- `qa-online-*`: 모범 답안 없이 질문 적합성·검색 근거 충실도·인용을 판단한다.
+
+`compose.dev.yaml`은 API와 worker의 `EVALUATION_JUDGES_ENABLED=true`를 설정한다.
+호스트에서 worker를 실행하면 환경 변수도 직접 설정한다. prod 기본값은 false다.
+Gold/Iron 접수 시 해당 세 Judge의 등록 버전을 고정하고, QA 완료 후
+`mlflow.genai.evaluate()`로 채점한다. Judge 오류·누락 판정은 평가 실패로 처리한다.
+Run의 `judge-versions.json`, `judge-results.json`에 버전·문항 ID·판정·이유를 남기고
+Evaluation runs에서 상세 결과를 확인한다. 사례 API의 scores에도 Boolean 판정을 0/1로 제공한다.
+
+online Judge는 `environment=dev`이면서 `evaluation_mode=online`인 Trace를 100% 자동 평가한다.
+일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 단일 루트 Trace를 기록한다.
+노드별 autologging은 추가하지 않았으며, 설정 객체나 인증정보는 내보내지 않는다.
+Trace 저장 실패는 대화를 중단하지 않는다. MLflow 추적을 끄면 Trace도 기록하지 않는다.
+데이터셋 QA는 `evaluation_mode=offline`으로 기록해 online Judge와 중복 채점하지 않는다.
+MLflow 서버는 비동기로 채점하며 기본적으로 Trace 시작 후 약 5분 뒤 대상이 되므로 즉시 점수가 보이지 않을 수 있다.
+[자동 평가 문서](https://mlflow.org/docs/latest/genai/eval-monitor/automatic-evaluations/)를 참고한다.
+인간 평가와 Cohen’s kappa, Judge 반복 판정의 일관성 검증은 별도 후속 작업이다.
+
+### Gold / Iron Set 평가
 
 MLflow Gold Dataset의 각 레코드는 다음 형식을 사용한다.
 
@@ -212,10 +243,15 @@ agentic QA의 `evidence_recall_at_k`는 각 검색 호출의 top_k가 아니라 
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.
 이 지표는 의미적 답변 정확성·충실도를 검증하지 않는다.
 Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했다.
-실제 Gold 기준 평가, Judge/rubric 및 사람 판단과의 정합성 검증, Iron 실행·채점은 후속 작업이다.
+Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아직 수행하지 않았다.
 등록 CLI는 생성이나 평가를 호출하지 않는다.
 
 ## 검증 한계
+
+Judge 연동은 Gold·Iron의 고정 모범 답안 샘플 각 1개에 모델 3개가 판정·이유를 남기는지 확인했다.
+실제 QA 샘플 1개는 질문·답변·검색 근거의 Trace 저장과 online Judge 3개의 서버 자동 판정을 확인했다.
+이는 연결·rubric 실행 검증이며 전수 기준 평가나 Judge 신뢰도 측정 결과가 아니다.
+격리된 임시 PostgreSQL DB를 포함한 Python 테스트 205개, lint와 개발 이미지 빌드·기동을 확인했다.
 
 브라우저 연결이 없어 실제 화면 클릭·모바일 배치는 확인하지 못했다.
 대화 UI의 정적 빌드·Docker HTTP 검증과 Dataset 등록의 파일 검증·원격 내용 대조·재등록을 확인했다.

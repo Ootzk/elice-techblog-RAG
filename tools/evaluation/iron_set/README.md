@@ -83,4 +83,6 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/regi
 
 `elice-techblog-iron` Dataset을 하나씩 유지하며, 재등록하면 저장소 내용으로 갱신한다.
 등록 결과의 Dataset ID를 해당 서버의 평가·조회에 사용한다. 등록은 모델 호출을 하지 않는다.
-현재 Iron은 등록·조회만 지원하고 기대 행동의 실행·채점은 지원하지 않는다.
+같은 평가 CLI에 Iron Dataset ID를 지정하면 기대 행동을 전용 Judge 세 개가 채점한다.
+실행 환경에서 `EVALUATION_JUDGES_ENABLED=true`여야 하며 dev Compose는 기본으로 활성화한다.
+[운영 문서](../../../docs/chat-service-operations.md)의 Judge 등록·평가 실행 방법을 따른다.
