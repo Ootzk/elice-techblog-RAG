@@ -6,6 +6,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from elice_knowledge.corpus import digest
+from elice_knowledge.evaluation_bundle import create_bundle
 from elice_knowledge.execution import execute
 from elice_knowledge.judges import evaluate_answers, frozen_judges
 from elice_knowledge.performance import summarize as performance_summary
@@ -213,6 +214,9 @@ def run_evaluation(store, job):
                 )
             cases.append(case)
         failed = sum(bool(c["error"]) for c in cases)
+        tracking.log_dict(
+            run_id, create_bundle(run_id, evaluation, profile, cases), "evaluation-bundle.json"
+        )
         judge_metrics = {}
         if judge_specs:
             judge_metrics, judgments = evaluate_answers(
