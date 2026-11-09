@@ -92,6 +92,7 @@ class QAResponse(BaseModel):
     generation_model: str | None = None
     usage: dict[str, int] = Field(default_factory=dict)
     retrieved_sources: list[dict] = Field(default_factory=list)
+    generation_sources: list[dict] = Field(default_factory=list)
     usage_reported_calls: dict[str, int] = Field(default_factory=dict)
     llm_call_count: int = Field(default=0, ge=0)
     tool_call_count: int = Field(default=0, ge=0)
@@ -176,6 +177,7 @@ def answer_from_sources(
         {"text": response.message.content, "sources": documents(sources)},
     ) as span:
         result = _parse_and_validate(response, parser, request, sources)
+        result.generation_sources = sources
         finish_span(
             span,
             result.model_dump(),

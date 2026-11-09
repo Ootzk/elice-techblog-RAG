@@ -22,7 +22,7 @@ def qa_trace(settings, request, profile_key, mode, queue_wait_ms=None):
     import mlflow
     from mlflow.entities import MlflowExperimentLocation
 
-    from elice_knowledge.judges import configure
+    from elice_knowledge.judges import QUALITY_CONTRACT, configure
 
     context, span = None, None
     try:
@@ -43,6 +43,7 @@ def qa_trace(settings, request, profile_key, mode, queue_wait_ms=None):
                 "environment": settings.app_env,
                 "evaluation_mode": mode,
                 "qa_profile_key": profile_key,
+                "quality_contract": QUALITY_CONTRACT,
             }
         )
     except Exception:
@@ -82,7 +83,14 @@ def execute(store, profile_key, question, history=None, *, mode="online", queue_
             error = getattr(exc, "code", type(exc).__name__)
         if span:
             try:
-                span.set_outputs(result if not error else {"error": error})
+                span.set_outputs(
+                    {
+                        key: result[key]
+                        for key in ("status", "answer", "reason", "citations", "generation_sources")
+                    }
+                    if not error
+                    else {"error": error}
+                )
                 if not error:
                     span.set_attributes(
                         {

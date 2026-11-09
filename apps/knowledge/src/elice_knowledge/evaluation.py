@@ -223,7 +223,11 @@ def run_evaluation(store, job):
                 if case["record_id"] in by_id:
                     case["judges"] = by_id[case["record_id"]]["judges"]
                     case["scores"].update(
-                        {name: float(value["value"]) for name, value in case["judges"].items()}
+                        {
+                            name: float(value["value"])
+                            for name, value in case["judges"].items()
+                            if value["value"] is not None
+                        }
                     )
                     with store.connection() as conn:
                         conn.execute(
@@ -239,6 +243,7 @@ def run_evaluation(store, job):
             "failed": failed,
             "failure_rate": failed / len(cases),
             "mlflow_run_id": run_id,
+            **judge_metrics,
         }
         for name in {k for c in cases for k in c["scores"]}:
             values = [c["scores"][name] for c in cases if name in c["scores"]]
