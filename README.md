@@ -19,10 +19,10 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ```
 
 `compose.yaml`은 prod용 기본 구성으로 Knowledge 서비스를 정의합니다. `compose.dev.yaml`을 함께 사용하면
-dev용 프로젝트 전용 PostgreSQL + pgvector도 실행합니다. DB 포트는 호스트에 공개하지 않고,
-데이터는 `knowledge-postgres` 볼륨에 보관합니다. 기존 홈서버 Ollama·MLflow는 기동하거나 변경하지 않습니다.
+dev용 프로젝트 전용 PostgreSQL + pgvector도 실행합니다. DB 포트는 맥북의 `127.0.0.1:5432`에
+바인딩하고, 데이터는 `knowledge-postgres` 볼륨에 보관합니다. 기존 홈서버 Ollama·MLflow는 기동하거나 변경하지 않습니다.
 prod는 `.env`의 `DATABASE_URL`로 외부 PostgreSQL에 연결하며 `compose.yaml`만 사용합니다.
-`init-db`는 전용 DB에 vector 확장과 연결 검증용 테이블을 생성하며, 재실행할 수 있습니다.
+`init-db`는 전용 DB에 vector 확장과 연결 검증용 테이블·Corpus 테이블을 생성하며, 재실행할 수 있습니다.
 외부 DB에서는 해당 권한이 필요합니다.
 
 컨테이너를 종료해도 DB 볼륨은 유지됩니다.
@@ -101,7 +101,7 @@ HTML 주석과 본문 바깥 UI는 파싱 전에 제외합니다.
 두 파이프라인 모두 모델을 자동 선택하거나 호출하지 않습니다.
 
 ```bash
-# 최초 실행 시 저장 테이블을 초기화합니다.
+# 최초 실행 시 저장 테이블을 생성합니다. 기존 데이터는 삭제하지 않습니다.
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge init-db
 # 현재 tech_blog 목록을 발견하고 문서를 수집합니다.
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ingest --report /artifacts/ingest/latest.json
@@ -111,9 +111,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 페이지 링크를 순회하며, 목록 링크에서 생략된 `/ko`를 명시합니다. 다른 호스트나 영어 경로로의
 리다이렉트는 따라가지 않습니다. 최종 URL·HTML 언어·canonical과 본문의 한국어 텍스트를 검사합니다.
 
-본문은 `articleBody`의 작성 영역에서 추출합니다. 제목·소제목과 캡션 등 일반 텍스트는 기본 파서가 처리하고,
-원래 섹션 ID·표 HTML·코드 공백·줄바꿈·이미지 URL·alt와 본문 링크는 메타데이터로 보존합니다.
-메뉴·푸터와 본문 바깥 공유 UI는 제외합니다. 본문 안의 제품 홍보 문단은 일괄 삭제하지 않으며,
+본문은 `articleBody`의 작성 영역에서 추출합니다. 메뉴·푸터와 본문 바깥 공유 UI는 제외합니다.
+본문 안의 제품 홍보 문단은 일괄 삭제하지 않으며,
 이미지 다운로드·OCR·이미지 속 그래프 수치 해석은 수행하지 않습니다.
 
 수집 결과는 PostgreSQL의 문서·불변 문서 버전·수집 실행/관측 이력·Corpus 스냅샷 테이블에 저장합니다.
@@ -123,6 +122,8 @@ metadata에는 표준 `TextNode` 직렬화 결과(`html_nodes`)와 원본 출처
 노드의 ID·관계·문자 위치까지 기본 직렬화 형식 그대로 보관합니다. 내용 판별에는 기본 `TextNode.hash`를
 사용하고, 같은 내용이 재수집되면 최초 저장한 버전의 노드 ID와 관계를 재사용합니다.
 연결 검증용 `connectivity_samples`와는 별도입니다.
+`corpus_observations`는 URL별 실행 이력이므로 같은 URL에 최초 200과 재확인 304가 함께 남습니다.
+실제 본문 버전은 `corpus_versions`에 저장하며, 같은 추출 내용은 새 버전을 만들지 않습니다.
 
 버전 아카이브는 원문·과거 본문·스냅샷 재현의 기준이며, LlamaIndex PostgreSQL Docstore는
 후속 RAG 처리를 위한 버전별 Document 등록본입니다. 각 Document ID는 기존 문서 버전 ID와 같아
@@ -143,15 +144,21 @@ metadata에는 표준 `TextNode` 직렬화 결과(`html_nodes`)와 원본 출처
   일부 문서만 성공하면 그 문서는 저장하되 기존 스냅샷은 유지하며, 명령은 종료 코드 1을 반환합니다.
   동일 버전 집합은 동일 스냅샷 ID를 사용하고, 예전 스냅샷은 예전 문서 버전을 계속 참조합니다.
 
-제출용 고정 소스 목록은 [Corpus manifest](corpus/manifest.json)에 있습니다.
-원문은 Git에 포함하지 않습니다. 고정 manifest로 수집하면 지정된 URL만 대상으로 하며,
-기록된 내용 해시와 다른 문서는 실패로 처리해 원본 변경을 드러냅니다.
+평가·제출에 사용할 소스 목록과 내용 버전을 [Corpus manifest](corpus/manifest.json)로 Git에 고정합니다.
+파일에는 URL·원문/내용 해시·문서/버전 ID·파서 버전·스냅샷 ID를 기록하며 원문은 포함하지 않습니다.
+일반 수집은 현재 목록을 탐색하고, `--manifest` 수집은 파일에 포함된 URL과 내용 해시를 기준으로 검사합니다.
+문서 내용 해시나 파서 버전이 다르면 실패로 처리하며, 원문 해시·ID·스냅샷 ID는 기준을 추적하는 정보입니다.
 이는 과거 원문을 웹에서 복구하는 기능은 아니므로, 과거 데이터 재현에는 해당 DB 버전도 보존해야 합니다.
+
+Corpus 기준을 바꿀 때만 manifest를 갱신합니다. 일반 수집이 성공한 보고서의 `manifest`를 파일의
+`documents`로, `processor_version`·`snapshot_id`를 같은 이름의 필드로 반영하고 `source`·`language`는 유지합니다.
+URL·내용 버전 변경을 검토한 뒤 커밋하고, 이미지에 포함된 manifest도 갱신되도록 Knowledge 이미지를 다시 빌드합니다.
+수집 명령은 이 파일을 자동으로 덮어쓰지 않습니다.
 
 ```bash
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ingest --manifest /app/corpus/manifest.json --report /artifacts/ingest/pinned.json
 mkdir -p artifacts
-docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml cp knowledge:/artifacts/ingest/latest.json artifacts/ingest-latest.json
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml cp knowledge:/artifacts/ingest/pinned.json artifacts/ingest-pinned.json
 ```
 
 명령의 표준 출력에는 실행 ID·보고서 경로·스냅샷 ID·상태별 개수가, 표준 오류에는 문서별 진행 상태가
