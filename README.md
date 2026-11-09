@@ -426,6 +426,10 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 
 ### 서비스와 데이터 흐름
 
+다음 단계의 [대화 서비스·Dataset 평가 API 설계](docs/chat-service-design.md)에
+Open WebUI 프런트엔드 추출 범위, 공유 코드 인증, 대화 저장과 공통 QA 실행 계약을 정리했습니다.
+해당 UI와 대화·평가 API는 설계 단계이며 아직 구현하지 않았습니다.
+
 아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹·벡터 검색 및 QA API 경로를 구현했으며,
 Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
 
@@ -500,7 +504,8 @@ flowchart TB
 Knowledge는 문서와 수집 상태를 관계형 데이터로 관리하고, 청크 벡터도 같은 PostgreSQL의
 pgvector에 저장합니다. 문서를 색인할 때와 질문을 검색할 때는 같은 Embedding 프로필을 사용합니다.
 생성은 엘리스클라우드 Serverless의 OpenAI 호환 endpoint로 연결하며 구체적인 모델은 설정 시 선택합니다.
-Judge 모델·프런트엔드와 agentic 구성은 아직 정하지 않았습니다.
+프런트엔드는 Open WebUI 소스를 추출·수정하는 방향으로 정했으며 아직 구현하지 않았습니다.
+Judge 모델과 agentic 구성은 아직 정하지 않았습니다.
 
 MLflow에는 평가 Dataset과 Prompt, AI endpoint 설정을 준비합니다.
 Eval Harness는 이 설정을 이용해 평가를 실행하고, 질문별 결과와 주요 지표를 기록해 보고서로 정리합니다.
