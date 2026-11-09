@@ -35,7 +35,10 @@
 - MLOps와 평가에는 MLflow를 사용한다. 개발 중에는 홈서버 인프라에 연결하고,
   주요 실험과 보고서 작성은 홈서버에서 진행한다. 제출 시에는 Dataset·AI endpoint·Prompt가
   설정된 별도 MLflow를 엘리스클라우드에 배포해 면접관이 검증할 수 있는 환경을 제공한다.
-- 생성 모델, RAG 프레임워크와 agentic 동작 범위, 스케줄러,
+- 생성은 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions를 사용한다.
+  구체적인 모델·endpoint·API Key는 사용자가 설정하며, 자동 선택·fallback·실제 유료 호출을 하지 않는다.
+  PDF 2쪽과 선택한 모델의 호출 정보를 기준으로 /v1 Base URL과 Bearer 인증을 설정한다.
+- Judge 모델, agentic 동작 범위, 스케줄러,
   서비스 분리 범위와 구체적인 클라우드 배포 방식은 아직 확정하지 않았다.
 - 활성 release는 `release/v0.1.0`이며, 구현 범위는 아래 milestone 기준을 따른다.
 
@@ -63,7 +66,10 @@
   LlamaIndex BaseEmbedding으로 연결하고 PGVectorStore·VectorStoreIndex를 사용한다.
   임베딩 프로필별로 청크 벡터를 재사용하며 스냅샷·정책별 완료 인덱스만 검색에 노출한다.
   입력 초과는 truncate=false로 거부하고, 실패 배치는 저장하지 않는다.
-- QA, Gold Set 평가, 프런트엔드와
+- 사용자 지시로 지정한 검색 인덱스 기반 QA API·CLI를 추가한다.
+  LlamaIndex LLM·프롬프트·출력 파서를 사용하고 출처 번호와 원문 인용문을 검증한다.
+  생성 미설정·실호출 미검증 상태를 구현 완료와 구분하고, 상태 확인에서는 유료 요청을 보내지 않는다.
+- Gold Set 평가, 프런트엔드와
   엘리스클라우드 배포는 후속 milestone에서 진행한다.
 
 ## 코드와 설정 배치

@@ -60,6 +60,12 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_TRACKING_TOKEN` | 서버가 요구하는 방식의 선택적 인증 |
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
+| `GENERATION_BASE_URL` | 선택한 엘리스 Serverless 모델의 `/v1` Base URL; 미설정 시 QA 비활성 |
+| `GENERATION_API_KEY`, `GENERATION_MODEL` | Serverless API Key와 모델 API 패널에 표시된 모델 이름; 기본값 없음 |
+| `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
+| `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
+| `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
+| `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192` |
 
 `DATABASE_URL`의 비밀번호에 예약 문자가 있으면 URL 인코딩해야 합니다.
 로컬 DB의 초기화 환경 변수는 빈 볼륨에 처음 기동할 때 적용됩니다.
@@ -264,7 +270,60 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 
 ### 서버 실행과 질문 예시
 
-현재 제공하는 API는 서비스 상태 확인입니다. QA API는 아직 구현하지 않았습니다.
+서비스 상태 API와 `POST /qa`를 제공합니다. QA는 지정한 검색 인덱스의 청크로 답변을 생성합니다.
+생성 백엔드는 엘리스클라우드 Serverless의 OpenAI 호환 Chat Completions이며,
+아직 모델·endpoint·API Key를 설정하지 않은 상태에서는 HTTP 503과 `generation_not_configured`를 반환합니다.
+수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
+
+과제 PDF 2쪽의 모델 호출 안내와 [엘리스 Serverless 가이드](https://help.elice.io/help/docs/elicecloud/ml-api/serverless)를 기준으로
+`GENERATION_BASE_URL`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
+[엘리스의 OpenAI 호환 호출 예시](https://elice.io/en/ax/model-library/043bad99-5529-4325-a293-1a0cfba17d94)처럼
+Bearer 인증과 `model`·`messages`·`stream=false`를 사용합니다. 모델 이름은 자동으로 선택하지 않습니다.
+이 어댑터는 OpenAI 호환 Chat Completions endpoint용이며, 다른 모델의 API 형식까지 가정하지 않습니다.
+
+모델을 선택한 뒤 `.env.dev` 또는 `.env`의 다음 세 항목을 입력합니다. 실제 키는 Git에 포함하지 않습니다.
+
+```dotenv
+GENERATION_BASE_URL=https://mlapi.run/<endpoint-id>/v1
+GENERATION_API_KEY=<발급받은 Serverless API Key>
+GENERATION_MODEL=<모델 API 패널의 model 값>
+```
+
+모델마다 지원하는 매개변수가 다르므로 temperature와 출력 한도는 설정한 경우에만 전송합니다.
+출력 한도를 설정하려면 API 패널에서 지원하는 `max_completion_tokens`·`max_tokens` 중 필드를 확인합니다.
+인증 실패·요청 거부·사용량 제한 등의 응답은 `generation_http_401`처럼 상태 코드만 전달하며,
+오류 본문·헤더·접속 URL은 노출하지 않습니다. 자동 재시도나 다른 모델로의 fallback은 없습니다.
+
+```bash
+# 환경 파일을 수정한 뒤 Knowledge만 다시 생성합니다. 기존 DB 컨테이너는 유지합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --no-deps --force-recreate knowledge
+# <index_key>는 corpus-vector-indexes.sql에서 확인한 실제 키로 교체합니다.
+curl -X POST http://127.0.0.1:8080/qa \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"B300 GPU 가상화는 어떻게 동작하나요?","index_key":"<index_key>","top_k":5}'
+# 같은 QA 로직을 사용하는 CLI
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ask 'B300 GPU 가상화는 어떻게 동작하나요?' --index-key '<index_key>' --top-k 5
+```
+
+요청은 `question`(1~4000자, 공백만 입력 불가), `index_key`(64자리 해시), `top_k`(1~20, 기본 5)입니다.
+응답은 `status`·`answer`·`index_key`·`citations`·`reason`·`prompt_version`·`generation_model`·`usage`를 포함합니다.
+`answered`의 본문은 `[1]` 같은 출처 번호를 사용하며, 각 citation에는 `source_id`·`chunk_id`·제목·URL/앵커·
+섹션 경로·문서 버전·인용문·검색 점수가 들어갑니다. URL과 문서 정보는 모델 출력 대신 검색 결과에서 연결합니다.
+토큰 사용량은 제공자가 반환한 prompt/completion/total 값만 기록하며 비용을 추정하지 않습니다.
+스키마는 `/docs`와 `/openapi.json`에서 확인할 수 있습니다.
+
+LlamaIndex `CustomLLM`·`ChatMessage`로 생성 endpoint를 연결하고 `PromptTemplate`·`PydanticOutputParser`로
+질문·검색 문서·JSON 출력 형식을 구성합니다. 모델에는 검색 문서를 데이터로 취급하고
+문서 안의 규칙 변경 지시를 따르지 않도록 요청합니다. 예산을 넘는 청크는 통째로 제외하며 표·코드를 잘라 넣지 않습니다.
+이 예산은 모델의 실제 토크나이저·컨텍스트 한도를 보장하지 않으므로 모델 선택 후 호출 정보와 함께 확인해야 합니다.
+
+근거가 없거나 모델이 답변을 유보하면 `insufficient_evidence`와 고정 안내 문구를 반환합니다.
+인용 번호 불일치·존재하지 않는 출처·원문에 없는 인용문도 답변을 유보합니다.
+인용문은 공백 차이를 정규화한 뒤 원문 포함 여부를 검사하며, 이것만으로 답변 전체의 의미적 지지가 증명되지는 않습니다.
+원문에 인용문이 있어도 다른 주장을 생성할 수 있으므로 실제 모델의 답변 정확성과 유보 성능은 Gold Set에서 평가해야 합니다.
+잘린 생성 결과나 잘못된 JSON은 HTTP 502, 생성 timeout은 504, 검색 불가·생성 미설정은 503입니다.
+인용 검증과 무관하게 API 오류를 성공 답변으로 바꾸지는 않습니다. 현재는 비스트리밍·단일 질문 방식입니다.
+
 
 ```bash
 curl http://127.0.0.1:8080/health/live
@@ -276,6 +335,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 - `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest, MLflow API 접근을
   각각 검사합니다. 준비되면 HTTP 200, 실패하면 HTTP 503이며 의존성별 상태를 반환합니다.
   DB 쓰기·임베딩 생성·Run 생성은 하지 않습니다. MLflow를 끄면 `disabled`로 표시합니다.
+  `generation`은 설정 여부만 `configured`·`not_configured`로 표시하며 유료 연결 검사는 하지 않습니다.
+  전체 ready 상태는 기존 인프라 기준입니다. 생성 미설정이어도 수집·검색은 ready일 수 있고 QA는 503을 반환합니다.
 - `python -m elice_knowledge smoke`: 고정 한국어 문장의 임베딩을 생성하고 pgvector에
   저장·유사도 조회한 뒤 MLflow Run에 연결 검증 지표를 기록합니다. 실패 시 종료 코드는 1입니다.
   MLflow를 켠 상태에서 기록에 실패하면 성공으로 처리하지 않습니다. 이미 저장된 DB 샘플은 남습니다.
@@ -312,7 +373,7 @@ PostgreSQL 통합 테스트 15개는 `TEST_DATABASE_URL`을 설정했을 때 실
 기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
-수집·청킹·벡터 검색을 포함한 테스트 86개(PostgreSQL 통합 테스트 15개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+수집·청킹·벡터 검색·QA를 포함한 테스트 124개(PostgreSQL 통합 테스트 15개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
 기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
 표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
 고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
@@ -323,6 +384,11 @@ H2 정책의 454개 청크를 홈서버 BGE-M3로 임베딩해 1024차원 벡터
 재실행은 신규 0개·재사용 454개였으며, B300·Qwen·Whisper 관련 질문에서 해당 글의 청크가 검색됐습니다.
 큰 표·코드 3개도 입력 한도 내에서 처리됐고, 별도의 길이 초과 입력은 잘림 없이 거부되는 것을 확인했습니다.
 벡터 프로필·인덱스 조회 SQL 2개도 실행했습니다. 이는 동작 확인이며 Gold Set 검색 품질 평가가 아닙니다.
+QA는 모의 Serverless 응답으로 API 요청 형식·출처 매핑·유보·오류 처리를 검증했습니다.
+실제 BGE-M3 검색과 모의 생성을 연결한 경로 및 Docker의 QA 미설정 응답(503)·OpenAPI 스키마·CLI 오류 코드를 확인했습니다.
+이후 사용자가 설정한 엘리스 Serverless endpoint의 `gpt-6.1-terra`로 QA 한 건을 호출해
+HTTP 200·`answered`와 출처 3개를 확인했습니다. 제공자가 반환한 입력/출력 토큰은 1540/475였습니다.
+이는 연결과 출력 계약 확인이며 실제 답변 정확성·유보 성능에 대한 Gold Set 평가는 아직 하지 않았습니다.
 MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 실행은 아직 검증하지 않았습니다.
 
 ### 평가 실행
@@ -360,7 +426,7 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 
 ### 서비스와 데이터 흐름
 
-아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹·벡터 검색을 구현했으며,
+아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집·청킹·벡터 검색 및 QA API 경로를 구현했으며,
 Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
 
 ```mermaid
@@ -433,7 +499,8 @@ flowchart TB
 
 Knowledge는 문서와 수집 상태를 관계형 데이터로 관리하고, 청크 벡터도 같은 PostgreSQL의
 pgvector에 저장합니다. 문서를 색인할 때와 질문을 검색할 때는 같은 Embedding 프로필을 사용합니다.
-생성 모델과 Judge 모델의 구체적인 선택, 프런트엔드와 RAG의 프레임워크는 아직 정하지 않았습니다.
+생성은 엘리스클라우드 Serverless의 OpenAI 호환 endpoint로 연결하며 구체적인 모델은 설정 시 선택합니다.
+Judge 모델·프런트엔드와 agentic 구성은 아직 정하지 않았습니다.
 
 MLflow에는 평가 Dataset과 Prompt, AI endpoint 설정을 준비합니다.
 Eval Harness는 이 설정을 이용해 평가를 실행하고, 질문별 결과와 주요 지표를 기록해 보고서로 정리합니다.
@@ -469,7 +536,9 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
 
 현재 구현은 서비스 기동·외부 인프라 연결 검증, 문서 수집·버전 관리·정책별 청킹과 벡터 검색 범위입니다.
-QA·Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
+QA API·엘리스 Serverless 어댑터를 구현하고 설정된 모델의 실호출 한 건을 확인했습니다.
+답변 정확성·유보 성능에 대한 체계적 평가는 아직 하지 않았습니다.
+Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
 임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
