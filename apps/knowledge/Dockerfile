@@ -4,11 +4,13 @@ FROM python:3.12-slim
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy \
     PATH="/app/.venv/bin:$PATH" \
+    TIKTOKEN_CACHE_DIR=/app/tokenizer-cache \
     MLFLOW_HTTP_REQUEST_TIMEOUT=10 MLFLOW_HTTP_REQUEST_MAX_RETRIES=0 \
     MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT=true INGEST_REPORT_DIR=/artifacts/ingest
 WORKDIR /app
 COPY apps/knowledge/pyproject.toml apps/knowledge/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
+RUN python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base")'
 COPY apps/knowledge/src ./src
 COPY corpus ./corpus
 RUN uv sync --locked --no-dev --no-editable \

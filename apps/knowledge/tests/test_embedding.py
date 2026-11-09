@@ -77,3 +77,18 @@ def test_empty_optional_key_does_not_send_invalid_bearer_header():
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert OllamaEmbedder(settings(embedding_api_key=""), client).embed(["sample"]) == [[1, 2]]
+
+
+def test_oversized_input_is_rejected_without_retrying_with_truncation():
+    from elice_knowledge.embedding import EmbeddingInputTooLong
+
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(400, json={"error": "the input length exceeds the context length"})
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(EmbeddingInputTooLong):
+            OllamaEmbedder(settings(), client).embed(["long input"])
+    assert len(requests) == 1

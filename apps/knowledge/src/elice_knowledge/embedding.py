@@ -12,6 +12,10 @@ class EmbeddingError(ValueError):
     pass
 
 
+class EmbeddingInputTooLong(EmbeddingError):
+    pass
+
+
 class Embedder(Protocol):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
@@ -88,14 +92,21 @@ class OllamaEmbedder:
         size = self.settings.embedding_batch_size
         for start in range(0, len(texts), size):
             batch = texts[start : start + size]
-            result = self._request(
-                "/api/embed",
-                {
-                    "model": self.settings.embedding_model,
-                    "input": batch,
-                    "truncate": False,
-                },
-            )
+            try:
+                result = self._request(
+                    "/api/embed",
+                    {"model": self.settings.embedding_model, "input": batch, "truncate": False},
+                )
+            except httpx.HTTPStatusError as exc:
+                # Never log response bodies: a backend may echo private input.
+                detail = exc.response.text.lower()
+                if exc.response.status_code == 400 and (
+                    "input length exceeds" in detail or "context length" in detail
+                ):
+                    raise EmbeddingInputTooLong(
+                        "Input exceeds the embedding context window"
+                    ) from None
+                raise
             received = result.get("embeddings")
             if not isinstance(received, list) or len(received) != len(batch):
                 raise EmbeddingError("Embedding count differs from input count")
