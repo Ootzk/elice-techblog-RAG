@@ -47,3 +47,15 @@
 현재 `evidence-v1` scorer는 답변 가능 여부의 일치와 URL·인용문 기반 검색 근거 회수율을 계산한다. 필수 요점 충족, 금지 주장, 문서 간 종합과 문맥 해석은 별도 의미 판정 대상이다. 검색 성공만으로 답변의 정확성을 보장하지 않는다.
 
 보안·악용·역할 유지에 관한 대응은 [🦾 Iron Set](../iron_set/README.md)으로 구분해 집계한다.
+
+## MLflow 등록
+
+질문·기대 답안은 이 폴더의 JSONL에서 수정하고 저장소 루트에서 등록한다.
+
+```bash
+uv run --project apps/knowledge python tools/evaluation/register.py --dataset gold --dry-run
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py --dataset gold
+```
+
+`elice-techblog-gold` Dataset을 하나씩 유지하며, 재등록하면 저장소 내용으로 갱신한다.
+등록 결과의 Dataset ID를 해당 서버의 평가·조회에 사용한다. 등록은 모델 호출을 하지 않는다.

@@ -170,11 +170,12 @@
 
 ## MLflow와 Eval Harness
 
-- MLflow Evaluation Dataset에 질문·기대 근거·수용 기준을 관리하고,
+- 저장소 JSONL을 질문·기대 근거·수용 기준의 편집 원본으로 관리하고 MLflow Evaluation Dataset에 등록한다.
   Evaluation Run으로 평가를 실행해 질문별 결과와 집계 지표를 기록한다.
   지표 정의·판정 기준·자체 scorer 및 보고서 생성은 프로젝트의 Eval Harness가 담당한다.
-- 제출 요구사항에 맞게 Gold Set을 저장소에도 내보내 보관한다.
-  MLflow Dataset과의 대응 관계·내용 해시를 기록하고 두 사본을 독립적으로 수정하지 않는다.
+- Gold·Iron은 MLflow Dataset을 각각 하나씩 두고 명시적인 등록 CLI로 갱신한다.
+  MLflow UI에서 독립적으로 편집하거나 자동 양방향 동기화하지 않는다.
+  내용 해시는 등록 출처 추적에 사용하고 내용별 Dataset 생성·불변 버전 관리 계층을 추가하지 않는다.
 - 평가마다 Dataset ID·내용 해시·Corpus 버전·코드 revision·모델·프롬프트·검색 설정·Seed와
   scorer/Judge 버전을 기록한다. 평가 도중 Dataset이 바뀌지 않도록 입력을 고정한다.
 - 개발·제출 서버의 연결은 `MLFLOW_TRACKING_URI`와 환경별 실험명·인증 설정으로 전환한다.

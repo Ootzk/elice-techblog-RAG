@@ -126,7 +126,37 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 `POST /qa`는 관리자용 즉시 실행 경로다. 일반 대화는 반드시 `/api/conversations/.../turns` 큐를 사용한다.
 HTTP 계약은 `/docs`에서 확인한다.
 
-MLflow Dataset의 각 레코드는 다음 형식을 사용한다.
+### 저장소 Dataset 등록
+
+질문·기대 답안은 저장소의 [Gold Set](../tools/evaluation/gold_set/README.md)과
+[Iron Set](../tools/evaluation/iron_set/README.md) JSONL에서 수정한다.
+저장소 루트에서 Knowledge의 Python 환경으로 등록 CLI를 실행한다.
+
+```bash
+# 로컬 파일만 검증한다. MLflow 접속·생성 호출은 하지 않는다.
+uv run --project apps/knowledge python tools/evaluation/register.py --dry-run
+# .env.dev의 MLflow 접속 설정과 QA_MLFLOW_EXPERIMENT_NAME을 사용해 두 세트를 등록한다.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py
+# 한 세트만 등록할 수도 있다.
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py --dataset gold
+```
+
+`elice-techblog-gold`·`elice-techblog-iron` Dataset을 각각 하나씩 생성하고 출력으로 ID를 반환한다.
+동일 이름이 이미 있으면 같은 Dataset을 갱신한다. 변경된 레코드는 교체하고 삭제된 질문은 제거하며,
+내용이 같은 레코드는 유지한다. MLflow UI의 별도 편집 내용도 재등록할 때 저장소 내용을 기준으로 맞춘다.
+등록은 모델 호출이나 평가 실행을 포함하지 않는다. 등록 도중 오류가 나면 원인을 해결한 뒤 재실행한다.
+
+원본 파일 경로·SHA-256은 Dataset 태그, `gold-001` 같은 문항 ID와 메타데이터는 레코드 태그에 저장한다.
+등록 파일 해시는 출처 추적용이며, 아래 평가 접수 해시는 MLflow 레코드를 읽어 계산하는 별도 값이다.
+서버 접속은 `MLFLOW_TRACKING_URI`와 MLflow 인증 환경 변수를 사용한다.
+홈서버와 제출 서버에는 같은 명령으로 각각 등록하며 Dataset ID는 각 서버의 출력을 사용한다.
+
+Iron은 등록·조회만 지원한다. 현재 평가 API는 Gold의 `answerable`·`evidence` 계약을 요구하므로
+Iron의 Dataset ID로 평가를 요청하면 거부된다. Iron 실행·의미 채점은 별도 구현 대상이다.
+
+### Gold Set 평가
+
+MLflow Gold Dataset의 각 레코드는 다음 형식을 사용한다.
 
 ```json
 {

@@ -203,9 +203,12 @@ worker 장애로 lease가 만료된 실행은 interrupted로 기록하고 유료
 
 ## Dataset 평가 계약
 
-MLflow Evaluation Dataset이 질문·기대 근거·수용 기준의 기준 저장소다.
+저장소의 Gold·Iron JSONL이 질문·기대 근거·수용 기준의 편집 원본이며,
+명시적인 등록 CLI로 MLflow Evaluation Dataset에 게시한다. Gold·Iron Dataset은 각각 하나씩 유지하고
+재등록 시 해당 Dataset을 갱신한다. MLflow UI 편집이나 자동 양방향 동기화는 사용하지 않는다.
 평가 접수 시 Dataset ID·선택 record ID·내용 해시와 실제 레코드를 고정해 실행 중 변경을 차단한다.
-저장소에 내보내는 Gold Set은 같은 ID·해시를 기록하고 별도 사본을 독립적으로 수정하지 않는다.
+Dataset 태그에 원본 파일 경로·SHA-256, 레코드 태그에 저장소 문항 ID·메타데이터를 기록한다.
+서버별 Dataset ID는 등록 CLI 출력으로 확인하며 저장소 manifest에 환경별 ID를 넣지 않는다.
 운영 대화를 자동으로 Gold Set에 편입하지 않는다. 운영·평가 활동을 구분해 기록하고
 자격증명·서버 접속 정보는 trace와 보고서에서 제외한다.
 
@@ -213,6 +216,9 @@ MLflow Evaluation Dataset이 질문·기대 근거·수용 기준의 기준 저�
 
 - `inputs`: question, history
 - `expectations`: answerable, 원문 URL·인용 구간, 답변 수용 기준
+
+위 평가 계약은 Gold Set에 적용한다. Iron Set은 `expected_behavior`·`failure_conditions`를 포함한
+별도 기대 행동 계약으로 등록할 수 있으나, 현재 `evidence-v1` 평가 API의 실행·채점 대상은 아니다.
 
 expectations는 QA 실행 입력이나 생성 프롬프트에 전달하지 않고 scorer에서만 사용한다.
 기대 근거는 정책 변경 때 ID가 달라지는 청크 ID 하나에 의존하지 않고 원문 버전·URL·인용 구간으로 정의한다.

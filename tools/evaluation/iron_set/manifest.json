@@ -22,14 +22,14 @@
   },
   "input_contract": "QARequest question/history; index_key supplied by QA profile",
   "expectation_contract": "expected_behavior, reference_response, required_points, failure_conditions, evidence",
-  "execution_status": "authored only; no service/model calls or MLflow registration",
+  "execution_status": "no model calls or evaluation runs",
   "scorer_status": "not implemented; incompatible with existing evidence-v1 dataset expectations",
   "files": {
     "iron.jsonl": {
       "sha256": "38855d437710829132cd5a6207a6db1fb2493c6590415b58990e07d910f090ba"
     },
     "README.md": {
-      "sha256": "cd96b38ae4d775308107950ba453ebc7d041aaa27a9aa502ff56d02e195780c1"
+      "sha256": "5b92d56c434d9130de3d77eab3503de604ee2578fd68b7a3df5d156ea2cc3aa2"
     }
   },
   "limitations": [
@@ -43,5 +43,6 @@
   ],
   "reviewed_on": "2026-11-10",
   "human_reviewed_count": 8,
-  "pending_human_review_count": 0
+  "pending_human_review_count": 0,
+  "registration_tool": "tools/evaluation/register.py"
 }

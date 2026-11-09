@@ -509,9 +509,19 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 ### 평가 실행
 
 MLflow Dataset 입력을 고정해 대화 서비스와 같은 QA 실행 경로로 평가합니다.
+평가 데이터의 편집 원본은 저장소의 [🥇 Gold Set](tools/evaluation/gold_set/README.md) 22문항과
+[🦾 Iron Set](tools/evaluation/iron_set/README.md) 8문항입니다.
+MLflow에는 세트별 Dataset을 하나씩 두고, 저장소에서 수정한 뒤 등록 CLI로 갱신합니다.
+
+```bash
+uv run --project apps/knowledge python tools/evaluation/register.py --dry-run
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py
+```
+
 [운영 문서](docs/chat-service-operations.md)에 Dataset 형식·Bearer 인증·CLI와 결과 조회 방법을 정리했습니다.
 기본 CLI는 계획만 표시하고 `--submit`을 지정해야 작업을 접수합니다.
-현재 검색 근거 Recall과 답변 가능 여부를 채점하며, 검토된 Gold Set·의미적 정확성 Judge는 후속 작업입니다.
+현재 Gold의 검색 근거 Recall과 답변 가능 여부를 채점합니다.
+실제 Gold 평가 실행, 의미적 정확성 Judge와 Iron의 실행·채점은 후속 작업입니다.
 
 ---
 

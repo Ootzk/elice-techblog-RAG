@@ -50,7 +50,7 @@
       "sha256": "6fe82fddd4c2683e2e22f29f343157a881a54d0b0e309183d036624e179a7eb1"
     },
     "README.md": {
-      "sha256": "2b6d54ac7b4b1c0790b81f9cb60da3f707e56802e16a93fd5a54f4c313fa1017"
+      "sha256": "2acf2b1ff91655e3f591333fe317b6938f504838c065050c29f678242a4c7cd6"
     }
   },
   "validation": {
@@ -60,8 +60,8 @@
     "absence_cases": "27-document context search and relevant article inspection; not lexical absence alone",
     "semantic_review": "human_reviewed",
     "scorer_limitation": "evidence-v1 does not grade required_points, unacceptable_claims or cross-document synthesis",
-    "mlflow_dataset": "not registered",
-    "question_style": "user scenarios without article-title or benchmark-configuration lookup hints; nonessential numeric details are optional"
+    "question_style": "user scenarios without article-title or benchmark-configuration lookup hints; nonessential numeric details are optional",
+    "registration_tool": "tools/evaluation/register.py"
   },
   "reviewed_on": "2026-11-10",
   "human_reviewed_count": 22,

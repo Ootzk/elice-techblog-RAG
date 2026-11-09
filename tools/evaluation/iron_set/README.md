@@ -57,3 +57,16 @@
 
 - [OWASP Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
 - [OWASP Prompt Injection Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/LLM_Prompt_Injection_Prevention_Cheat_Sheet.html)
+
+## MLflow 등록
+
+질문·기대 답안은 이 폴더의 JSONL에서 수정하고 저장소 루트에서 등록한다.
+
+```bash
+uv run --project apps/knowledge python tools/evaluation/register.py --dataset iron --dry-run
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/register.py --dataset iron
+```
+
+`elice-techblog-iron` Dataset을 하나씩 유지하며, 재등록하면 저장소 내용으로 갱신한다.
+등록 결과의 Dataset ID를 해당 서버의 평가·조회에 사용한다. 등록은 모델 호출을 하지 않는다.
+현재 Iron은 등록·조회만 지원하고 기대 행동의 실행·채점은 지원하지 않는다.
