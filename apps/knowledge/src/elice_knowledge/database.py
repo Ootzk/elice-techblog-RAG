@@ -52,6 +52,7 @@ def initialize_database(settings: Settings):
     from elice_knowledge.chunk_store import initialize_chunks
     from elice_knowledge.corpus_store import initialize_corpus
     from elice_knowledge.retrieval import initialize_retrieval
+    from elice_knowledge.service_store import initialize_service
 
     with connect(settings) as conn:
         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -68,6 +69,11 @@ def initialize_database(settings: Settings):
         initialize_corpus(conn)
         initialize_chunks(conn)
         initialize_retrieval(conn)
+        initialize_service(conn)
+    from elice_knowledge.access_codes import AccessCodes
+    from elice_knowledge.service_store import ServiceStore
+
+    AccessCodes(ServiceStore(settings)).bootstrap()
 
 
 def store_and_search(settings: Settings, text: str, vector: list[float], profile: dict) -> dict:

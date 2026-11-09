@@ -25,3 +25,8 @@ htmlcov/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Web build output
+node_modules/
+.svelte-kit/
+/apps/web/build/

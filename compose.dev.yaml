@@ -7,6 +7,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+  worker:
+    environment:
+      APP_ENV: dev
+    depends_on:
+      postgres:
+        condition: service_healthy
   postgres:
     image: pgvector/pgvector:pg17
     ports:

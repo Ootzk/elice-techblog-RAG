@@ -37,11 +37,34 @@ class Settings(BaseSettings):
         "max_completion_tokens"
     )
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
+    admin_access_code: SecretStr | None = None
+    auth_session_secret: SecretStr | None = None
+    evaluation_api_token: SecretStr | None = None
+    qa_active_index_key: str | None = None
+    chat_session_hours: int = Field(default=168, ge=1, le=720)
+    chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
+    qa_history_pairs: int = Field(default=3, ge=0, le=10)
+    qa_history_tokens: int = Field(default=2048, ge=128, le=8192)
+    qa_worker_concurrency: int = Field(default=1, ge=1, le=8)
+    qa_build_revision: str = "development"
+    qa_build_dirty: bool = True
+    worker_lease_seconds: int = Field(default=300, ge=30, le=1800)
+    web_dist_dir: Path = Path("/app/web")
+    qa_mlflow_experiment_name: str = "elice-techblog-rag-evaluation"
 
     @field_validator("generation_base_url", "generation_api_key", "generation_model", mode="before")
     @classmethod
     def blank_generation_value(cls, value):
         return (value.strip() or None) if isinstance(value, str) else value
+
+    @field_validator("admin_access_code", "auth_session_secret")
+    @classmethod
+    def authentication_secrets(cls, value, info):
+        if value is not None and len(value.get_secret_value()) < (
+            32 if info.field_name == "auth_session_secret" else 20
+        ):
+            raise ValueError("Use at least 32 characters for session secret and 20 for admin code")
+        return value
 
     @property
     def generation_configured(self) -> bool:

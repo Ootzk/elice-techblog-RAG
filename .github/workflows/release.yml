@@ -61,6 +61,9 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          build-args: |
+            QA_BUILD_REVISION=${{ github.sha }}
+            QA_BUILD_DIRTY=false
           file: ${{ matrix.file }}
           platforms: linux/amd64
           push: true

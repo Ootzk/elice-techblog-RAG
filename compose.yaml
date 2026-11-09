@@ -3,16 +3,30 @@ name: elice-techblog-rag
 # Production base for Elice Cloud; dev adds compose.dev.yaml.
 services:
   knowledge:
+    image: &knowledge-image ${KNOWLEDGE_IMAGE:-elice-techblog-rag-knowledge:latest}
     build:
       context: .
       dockerfile: apps/knowledge/Dockerfile
-    env_file:
+    env_file: &knowledge-env
       - path: ${KNOWLEDGE_ENV_FILE:-.env}
         required: true
     environment:
       APP_ENV: prod
     ports:
       - "127.0.0.1:${KNOWLEDGE_PORT:-8080}:8080"
+    init: true
+    restart: unless-stopped
+    volumes:
+      - knowledge-artifacts:/artifacts
+
+  worker:
+    image: *knowledge-image
+    env_file: *knowledge-env
+    environment:
+      APP_ENV: prod
+    command: ["python", "-m", "elice_knowledge", "worker"]
+    healthcheck:
+      disable: true
     init: true
     restart: unless-stopped
     volumes:
