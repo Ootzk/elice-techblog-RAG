@@ -33,6 +33,12 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 
 맥북에서는 Colima의 Docker Engine에서 실행을 검증합니다. Docker Desktop 설치는 필수가 아닙니다.
 
+개발 DB는 맥북의 `127.0.0.1:5432`로 접속할 수 있습니다. SQLTools 등 DB 클라이언트에서
+이 주소와 `.env.dev`의 `POSTGRES_DB`·`POSTGRES_USER`·`POSTGRES_PASSWORD`를 사용합니다.
+컨테이너 내부의 `DATABASE_URL`은 호스트 이름 `postgres`를 사용합니다.
+수집 실행·문서 목록·URL별 관측 이력·문서 상세·스냅샷 조회 SQL은 [tools/sql](tools/sql)에 있습니다.
+파일을 열고 연결한 DB에서 실행하면 되며, 문서 상세 쿼리의 제목 검색어는 필요에 맞게 바꿉니다.
+
 ### 환경 변수 설정
 
 실제 설정은 Git에서 제외한 prod용 `.env`와 dev용 `.env.dev`에 둡니다. 예시의 주소와 비밀번호는 교체해야 합니다.
@@ -76,6 +82,91 @@ docker compose exec knowledge python -m elice_knowledge init-db
 
 ### 문서 수집과 색인
 
+Ingest는 Knowledge 패키지 안의 재실행 가능한 CLI입니다. 초기 전체 수집과 이후 갱신에
+같은 명령을 사용하며, 현재는 수동 실행합니다. 스케줄러·청킹·임베딩·검색 색인은 아직 포함하지 않습니다.
+
+본문 HTML 전체를 한 개의 LlamaIndex `Document`로 전달하고,
+`IngestionPipeline(transformations=[HTMLNodeParser(...)])`가 문단·태그 탐색과 노드 분리를 처리합니다.
+반환된 `TextNode`는 LlamaIndex 표준 직렬화 형식으로 저장합니다.
+사이트 전용 코드는 목록 수집·언어 검사·본문 영역 선택과 출처 메타데이터 추출을 담당합니다.
+HTML 주석과 본문 바깥 UI는 파싱 전에 제외합니다.
+
+기본 파서의 텍스트 출력은 표와 코드의 공백·구조를 단순화할 수 있습니다.
+정확한 정보는 문서 메타데이터에 섹션 앵커 목록, 원래 표 HTML, 코드 원문, 이미지 URL·alt,
+본문 링크로 따로 보존합니다. 표의 헤더·셀 병합은 원래 HTML에 남으며 직접 셀 배열로 변환하지 않습니다.
+섹션은 문서 수준 목록으로 보관하고, 개별 노드와 섹션의 정밀 매핑은 아직 구현하지 않았습니다.
+
+버전별 문서 등록은 별도의 `IngestionPipeline`과 `PostgresDocumentStore`를 사용합니다.
+이 등록 파이프라인의 변환 목록은 비워 두고 `DUPLICATES_ONLY` 전략으로 중복 등록만 처리합니다.
+두 파이프라인 모두 모델을 자동 선택하거나 호출하지 않습니다.
+
+```bash
+# 최초 실행 시 저장 테이블을 초기화합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge init-db
+# 현재 tech_blog 목록을 발견하고 문서를 수집합니다.
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ingest --report /artifacts/ingest/latest.json
+```
+
+`robots.txt`를 확인하고 요청 사이에 기본 0.5초 간격을 둡니다. 목록의 번호가 표시된
+페이지 링크를 순회하며, 목록 링크에서 생략된 `/ko`를 명시합니다. 다른 호스트나 영어 경로로의
+리다이렉트는 따라가지 않습니다. 최종 URL·HTML 언어·canonical과 본문의 한국어 텍스트를 검사합니다.
+
+본문은 `articleBody`의 작성 영역에서 추출합니다. 제목·소제목과 캡션 등 일반 텍스트는 기본 파서가 처리하고,
+원래 섹션 ID·표 HTML·코드 공백·줄바꿈·이미지 URL·alt와 본문 링크는 메타데이터로 보존합니다.
+메뉴·푸터와 본문 바깥 공유 UI는 제외합니다. 본문 안의 제품 홍보 문단은 일괄 삭제하지 않으며,
+이미지 다운로드·OCR·이미지 속 그래프 수치 해석은 수행하지 않습니다.
+
+수집 결과는 PostgreSQL의 문서·불변 문서 버전·수집 실행/관측 이력·Corpus 스냅샷 테이블에 저장합니다.
+버전에는 원본 HTML, LlamaIndex 직렬화 형식의 Document, 게시/수정/수집 시각,
+원문·추출 내용 해시와 파서 버전을 보관합니다. Document의 텍스트는 본문이고,
+metadata에는 표준 `TextNode` 직렬화 결과(`html_nodes`)와 원본 출처 정보(`source`)가 들어갑니다.
+노드의 ID·관계·문자 위치까지 기본 직렬화 형식 그대로 보관합니다. 내용 판별에는 기본 `TextNode.hash`를
+사용하고, 같은 내용이 재수집되면 최초 저장한 버전의 노드 ID와 관계를 재사용합니다.
+연결 검증용 `connectivity_samples`와는 별도입니다.
+
+버전 아카이브는 원문·과거 본문·스냅샷 재현의 기준이며, LlamaIndex PostgreSQL Docstore는
+후속 RAG 처리를 위한 버전별 Document 등록본입니다. 각 Document ID는 기존 문서 버전 ID와 같아
+내용이 바뀐 새 버전을 등록해도 과거 버전을 덮어쓰지 않습니다.
+프레임워크의 문서 해시와 manifest의 내용 해시는 용도가 다르며 별도로 유지합니다.
+
+현재 파서 기준은 `elice-html-v1`입니다.
+아카이브와 Docstore 기록은 별도 트랜잭션입니다. Docstore 기록에 실패하면 실행을 실패로 기록하고
+새 스냅샷을 확정하지 않습니다. 이미 저장한 아카이브는 유지하며, 재실행 시 HTTP 304여도
+누락된 Docstore 문서를 복구합니다. 프레임워크의 해시만 기록되고 문서가 누락된 경우도 복구합니다.
+
+- 재실행 시 ETag·Last-Modified가 있으면 조건부 HTTP 요청을 사용합니다.
+  304는 기존 검증 버전을 유지하고, 200이라도 추출 내용과 메타데이터가 같으면 새 버전을 만들지 않습니다.
+- `--force`를 붙이면 조건부 요청 없이 다시 다운로드합니다. 파서 버전이 바뀐 경우에도 다시 다운로드합니다.
+- 수집·언어 검증 실패는 기존 문서 버전을 덮어쓰지 않습니다. 목록에서 빠진 기존 URL도 다시 확인하고
+  삭제 후보로 기록하지만 자동 삭제하지 않습니다. 후보가 수집에 실패하면 새 스냅샷도 발행하지 않습니다.
+- 최소 20개 소스와 전체 대상의 성공을 확인한 실행만 스냅샷을 확정합니다.
+  일부 문서만 성공하면 그 문서는 저장하되 기존 스냅샷은 유지하며, 명령은 종료 코드 1을 반환합니다.
+  동일 버전 집합은 동일 스냅샷 ID를 사용하고, 예전 스냅샷은 예전 문서 버전을 계속 참조합니다.
+
+제출용 고정 소스 목록은 [Corpus manifest](corpus/manifest.json)에 있습니다.
+원문은 Git에 포함하지 않습니다. 고정 manifest로 수집하면 지정된 URL만 대상으로 하며,
+기록된 내용 해시와 다른 문서는 실패로 처리해 원본 변경을 드러냅니다.
+이는 과거 원문을 웹에서 복구하는 기능은 아니므로, 과거 데이터 재현에는 해당 DB 버전도 보존해야 합니다.
+
+```bash
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec knowledge python -m elice_knowledge ingest --manifest /app/corpus/manifest.json --report /artifacts/ingest/pinned.json
+mkdir -p artifacts
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml cp knowledge:/artifacts/ingest/latest.json artifacts/ingest-latest.json
+```
+
+명령의 표준 출력에는 실행 ID·보고서 경로·스냅샷 ID·상태별 개수가, 표준 오류에는 문서별 진행 상태가
+JSON으로 출력됩니다. 보고서는 `knowledge-artifacts` 영속 볼륨에 저장합니다.
+`--report`를 생략하면 실행 ID별 파일을 생성합니다. 같은 경로를 지정하면 해당 보고서 파일은 교체되며,
+DB의 실행 이력은 별도로 유지됩니다. 보고서에는 원문이나 인증정보를 넣지 않습니다.
+
+수집 설정은 `CRAWL_INTERVAL_SECONDS`(기본 0.5), `CRAWL_TIMEOUT_SECONDS`(30),
+`CRAWL_RETRIES`(2), `CRAWL_MAX_PAGES`(100), `CORPUS_MIN_DOCUMENTS`(20)로 조정합니다.
+컨테이너의 기본 보고서 디렉터리는 `/artifacts/ingest`이며 `INGEST_REPORT_DIR`로 변경할 수 있습니다.
+Ingest는 Embedding·MLflow를 호출하지 않습니다. CI에서는 임시 PostgreSQL 스키마로 저장·롤백·스냅샷을
+검사하며, 실제 사이트 수집은 CI에서 실행하지 않습니다.
+
+스냅샷 ID는 URL과 추출 문서 버전 집합으로 계산합니다.
+
 ### 서버 실행과 질문 예시
 
 현재 제공하는 API는 서비스 상태 확인입니다. QA API는 아직 구현하지 않았습니다.
@@ -118,11 +209,18 @@ uv run --project apps/knowledge ruff format --check apps/knowledge
 uv run --project apps/knowledge pytest apps/knowledge/tests -q
 ```
 
+PostgreSQL 통합 테스트 5개는 `TEST_DATABASE_URL`을 설정했을 때 실행합니다.
+테스트마다 임시 스키마를 만들고 종료 후 삭제하므로 해당 권한이 필요하며,
+설정하지 않으면 이 5개만 건너뜁니다. CI는 전용 PostgreSQL 서비스에서 실행합니다.
+
 2026-11-09 기준 맥북 Colima(`linux/arm64`)의 dev 구성에서 이미지 빌드와 두 컨테이너의
 기동을 확인했습니다. 준비 상태는 DB·Embedding·MLflow 모두 `ok`였고,
 샘플 임베딩은 1024차원, 저장 후 최근접 벡터와의 cosine distance는 `0.0`이었습니다.
 MLflow API로 Run이 `FINISHED`이며 `connectivity_success=1`로 저장된 것도 확인했습니다.
-단위 테스트 21개, 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+Ingest를 포함한 테스트 60개(PostgreSQL 통합 테스트 5개 포함), 린트·포맷·lockfile·Compose 설정 검사는 통과했습니다.
+기본 HTML 파서로 한국어 글 27개를 새 `elice-html-v1` 기준으로 수집해 노드 1,156개를 저장했습니다.
+표 HTML 48개·코드 원문 41개·이미지 출처 64개는 별도 메타데이터로 보존했습니다.
+고정 manifest로 재실행해 27개 모두 기존 버전을 유지하고 동일한 스냅샷을 재사용하는 것을 확인했습니다.
 MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 실행은 아직 검증하지 않았습니다.
 
 ### 평가 실행
@@ -154,12 +252,13 @@ MLflow UI에서의 시각적 확인과 제출 환경·`linux/amd64`의 실제 �
 | 개발용 Embedding 추론 | 홈서버 Ollama |
 | 실험·평가 관리 | MLflow Dataset, Evaluation Run, Prompt와 AI endpoint 설정 |
 | Knowledge 서비스 | Python 3.12 + uv + FastAPI |
+| Ingest 문서 처리 | LlamaIndex Core + PostgreSQL Docstore |
 
 ## 3. 시스템 아키텍처
 
 ### 서비스와 데이터 흐름
 
-아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 인프라 연결용 서비스 골격을 구현했으며,
+아래는 지금까지 결정한 내용을 바탕으로 그린 설계안입니다. 현재는 서비스 골격과 문서 수집을 구현했으며,
 Knowledge와 RAG를 하나의 프로세스로 실행할지 나눌지는 정하지 않았습니다.
 
 ```mermaid
@@ -267,8 +366,8 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
 
-현재 구현은 Knowledge 서비스의 기동과 외부 인프라 연결 검증 범위입니다.
-블로그 수집·청킹·검색·QA, Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
+현재 구현은 Knowledge 서비스의 기동·외부 인프라 연결 검증과 블로그 수집·문서 버전 관리 범위입니다.
+청킹·본문 임베딩·검색·QA, Gold Set 평가와 클라우드 배포는 아직 구현하지 않았습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
 임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
