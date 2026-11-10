@@ -33,6 +33,8 @@
 		draft: { scores: Record<string, Score>; revision: number; updated_at: string } | null;
 	};
 	type Round = {
+		grading_run_id: string | null;
+		grading_state: string;
 		run_id: string;
 		round: number;
 		dataset_id: string;
@@ -70,6 +72,7 @@
 		active = '';
 	let origin: Candidate | null = null,
 		originError = '';
+	let gradingOrigin: Candidate | null = null;
 	let scores: Record<string, Score> = {},
 		draftSnapshot = '',
 		draftRevision = 0;
@@ -296,6 +299,7 @@
 		questionHeading?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
 	}
 	async function openRound(r: Round) {
+		gradingOrigin = null;
 		run = r.run_id;
 		number = r.round;
 		current = null;
@@ -304,6 +308,15 @@
 		progress = [];
 		await loadProgress();
 		await loadCase(r.next_position);
+		await loadGradingOrigin();
+	}
+	async function loadGradingOrigin() {
+		if (session?.identity.role !== 'admin') return;
+		try {
+			gradingOrigin = await api<Candidate | null>(`/admin/reviews/${run}/rounds/${number}/origin`);
+		} catch {
+			gradingOrigin = null;
+		}
 	}
 	async function selectRun(id: string) {
 		run = id;
@@ -363,20 +376,21 @@
 		await refresh();
 		await loadProgress();
 		if (current) await loadCase(current.position);
+		await loadGradingOrigin();
 		notice = data.synced
-			? `${number}회차의 질문 ${data.synced}개를 MLflow에 동기화했습니다.`
+			? `${number}회차의 질문 ${data.synced}개를 내 채점 run에 동기화했습니다.`
 			: '이미 모두 동기화되어 있습니다.';
 	}
 	async function download() {
-		const data = await api<{ labels: unknown[] }>(`${path()}/labels`);
+		const data = await api<unknown>(`${path()}/result`);
 		const url = URL.createObjectURL(
-			new Blob([data.labels.map((x) => JSON.stringify(x)).join('\n') + '\n'], {
-				type: 'application/x-ndjson'
+			new Blob([JSON.stringify(data, null, 2) + '\n'], {
+				type: 'application/json'
 			})
 		);
 		const link = document.createElement('a');
 		link.href = url;
-		link.download = `human-labels-${run}-round-${number}.jsonl`;
+		link.download = `grading-result-${run}-round-${number}.json`;
 		link.click();
 		URL.revokeObjectURL(url);
 	}
@@ -558,7 +572,7 @@
 									class="mt-3 inline-block text-xs text-[#3f5840] underline"
 									href={safeUrl(origin?.url)}
 									target="_blank"
-									rel="noreferrer">MLflow 원본 run 열기 ↗</a
+									rel="noreferrer">원본 답변 run 열기 ↗</a
 								>{/if}
 							{#if runRounds.length}<div
 									class="mt-5 flex flex-wrap gap-2"
@@ -584,10 +598,10 @@
 												class="mt-2 inline-block underline"
 												href={safeUrl(origin.url)}
 												target="_blank"
-												rel="noreferrer">MLflow 원본 run 열기 ↗</a
+												rel="noreferrer">원본 답변 run 열기 ↗</a
 											>{/if}
 										<p class="mt-2">
-											동기화 결과: Artifacts → human-review → 검수자 → 회차
+											사람 판정과 quality metric은 아래 내 채점 run에 기록됩니다.
 										</p>{:else if originError}<p class="mt-2">{originError}</p>{/if}
 								</details>{/if}
 						</section>
@@ -616,6 +630,21 @@
 										>
 									</div>
 								</div>
+								<div class="mt-3 text-xs text-gray-500">
+									{#if !selected.grading_run_id}채점 run 연결 대기 중입니다. 판정은 로컬에 보존되며
+										동기화 때 다시 연결합니다.
+									{:else}내 채점 run · {selected.grading_state === 'FINISHED'
+											? '완료'
+											: selected.grading_state === 'FAILED'
+												? '오류'
+												: '진행 중'}{/if}
+									{#if session?.identity.role === 'admin' && safeUrl(gradingOrigin?.url)}<a
+											class="ml-3 text-[#3f5840] underline"
+											href={safeUrl(gradingOrigin?.url)}
+											target="_blank"
+											rel="noreferrer">내 채점 run 열기 ↗</a
+										>{/if}
+								</div>
 								<progress
 									class="mt-4 block h-2 w-full accent-[#526b49]"
 									value={selected.completed}
@@ -642,8 +671,8 @@
 									<h3 class="font-semibold text-[#3f5840]">{number}회차 검수를 마쳤습니다.</h3>
 									<p class="mt-2 text-sm leading-7 text-gray-600">
 										{selected.completed > selected.synced
-											? '동기화 대기 중인 판정이 있습니다. 위의 MLflow 동기화를 눌러 원본 run에 반영하세요.'
-											: '이 회차의 판정이 모두 원본 run에 동기화되어 있습니다.'} 같은 답변을 다시 검수하려면
+											? '동기화 대기 중인 판정이 있습니다. 위의 MLflow 동기화를 눌러 채점 run에 반영하세요.'
+											: '이 회차의 판정이 모두 채점 run에 동기화되어 있습니다.'} 같은 답변을 다시 검수하려면
 										새 회차를 시작하세요.
 									</p>
 								</div>{/if}

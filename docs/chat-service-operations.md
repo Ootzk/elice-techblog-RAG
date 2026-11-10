@@ -176,9 +176,19 @@ Gateway endpoint는 `elice-techblog-rag-judge-{chatgpt,claude,gemini}`가 미리
 `compose.dev.yaml`은 API와 worker의 `EVALUATION_JUDGES_ENABLED=true`를 설정한다.
 호스트에서 worker를 실행하면 환경 변수도 직접 설정한다. prod 기본값은 false다.
 Gold/Iron 접수 시 모든 해당 Judge의 등록 버전을 고정하고, QA 완료 후
-`mlflow.genai.evaluate()`로 채점한다. Judge 오류·누락 판정은 평가 실패로 처리한다.
-Run의 `judge-versions.json`, `judge-results.json`에 버전·문항 ID·판정·이유를 남기고
-Evaluation runs에서 상세 결과를 확인한다. 사례 API의 scores에는 적용 가능한 판정만 0/1로 제공한다. N/A는 0/1로 바꾸지 않는다.
+Ragas로 채점하고 `mlflow.genai.evaluate()`가 병렬 실행과 MLflow 기록을 담당한다.
+등록 scorer의 모델 URI·rubric을 재사용하며 별도의 모델 API 키를 설정하지 않는다.
+질문·지표를 SDK에서 병렬 실행하며 기본 상한은
+프로세스당 질문 2개 × 차원 4개다. `MLFLOW_GENAI_EVAL_MAX_WORKERS`와
+`MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`로 조절한다. 모델·반복 회차는 순차 실행한다.
+Judge 오류·누락 판정은 평가 실패로 처리하되 다른 항목의 성공 결과는 보존한다.
+답변 생성 run은 `evaluation.kind=answers`이며 생성 bundle과 결정적 지표만 보관한다.
+채점은 모델별 grading 자식 run으로 나누고 `grading-result.json`·`rater-profile.json`과
+공통 `quality.<차원>.*` 이진 metric과 `ragas.<지표>.*` 원점수 metric을 기록한다.
+Gold는 FactualCorrectness precision/recall·Faithfulness·질문 적합성 DiscreteMetric 및
+누적/최종 문맥의 ContextRecall·ContextPrecision, Iron은 행동 기준 DiscreteMetric을 실행한다.
+Ragas 한 지표의 여러 모델 요청은 직렬화해 전체 동시성 상한을 유지한다. 사례 API scores에 모델 Judge 점수를 섞지 않는다.
+자세한 저장·검증 계약은 [평가 스키마](evaluation-schema.md)를 따른다.
 
 online Judge는 `environment=dev`·`evaluation_mode=online`·`quality_contract=dimension-v1`이며 정상 종료한 Trace를 100% 자동 평가한다.
 일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 `techblog-qa` 루트 Trace를 기록한다.
@@ -253,24 +263,20 @@ Dataset 평가는 프로필을 갱신하지 않고 실행 조건 불일치를 �
 MLflow에는 Dataset ID/해시·QA/scorer 프로필·사례별 출력·집계 JSON과 지표를 남긴다.
 MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공으로 표시하지 않는다.
 
-첫 scorer `evidence-v1`은 다음 두 지표만 계산한다.
-
-- `evidence_recall`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
-- `answerability_correct`: answered 여부가 기대 answerable과 일치하는지.
-
-agentic QA의 `evidence_recall`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
-기대 근거가 없는 문항은 이 회수율의 채점 대상에서 제외한다. `answerability_correct`는 답변 내용이
-틀려도 answered 상태만 맞으면 통과할 수 있으므로 의미적 정확성과 혼동하지 않는다.
+scorer `ragas-v1`은 Ragas 기반의 모델별 품질 채점 계약과 결정적 상태 검사를 구분한다.
+`answerability_correct`는 answered 상태와 기대 answerable의 일치이며 답변 내용의 정확성이 아니다.
+자체 URL·인용문 일치 Recall은 제거했고, 누적·최종 문맥의 의미적 근거 회수는 Ragas가 평가한다.
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.
-이 지표는 의미적 답변 정확성·충실도를 검증하지 않는다.
 Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했다.
 Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아직 수행하지 않았다.
 등록 CLI는 생성이나 평가를 호출하지 않는다.
 
 ### 차원별 판정과 고정 답안 검수
 
-Gold는 모델당 네 Judge, Iron은 모델당 한 Judge, online은 모델당 두 Judge를 사용한다.
-따라서 Gold는 문항당 최대 12회, Iron은 3회, dev 일반 대화는 6회 Judge 호출이 발생한다.
+Gold는 모델당 네 답변 지표와 네 문맥 지표, Iron은 모델당 한 행동 지표를 Ragas로 계산한다.
+하나의 Ragas 지표가 주장 분해·지지 판정 또는 문맥별 판정에 여러 LLM 요청을 사용하므로,
+세 모델 × 여덟 지표가 모델 요청 24회라는 뜻은 아니다. 특히 ContextPrecision은 문맥마다 판정한다.
+일반 대화의 online 자동 평가는 모델당 두 MLflow Judge를 유지하며 오프라인 Ragas 채점과 구분한다.
 기존 Gateway endpoint·키는 공유하며 문항별 적용 불가 차원은 호출 전 제외할 수 있다.
 이전 종합 Judge 정의는 과거 결과의 추적을 위해 보존하지만 새 프로필은 참조하지 않으며 이전 online 자동 평가는 중지한다.
 
@@ -296,34 +302,57 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/eval
   --dataset-id '<dataset-id>' --submit --report artifacts/evaluation/report.json
 ```
 
-원본 Run의 `evaluation-bundle.json`에는 선택한 문항의 기대 조건·QA 프로필·고정 답변·최종 문맥과 내용 해시가 들어간다.
-Judge 실패 시에도 이 파일을 남기므로 QA 생성 없이 새 Judge Run으로 재채점할 수 있다.
+원본 answers run의 `evaluation-bundle.json`에는 선택 문항·기대 조건·QA 프로필·고정 답변·최종 문맥·rubric과 해시가 들어간다.
+`evaluation-v1`의 답변만 재채점하며 이전 결과를 자동 변환하지 않는다.
+반복 모델 채점 CLI도 공통 PostgreSQL 레지스트리를 쓰므로 DATABASE_URL을 설정해야 한다.
+호스트에서 실행할 때 dev DATABASE_URL의 컨테이너 호스트를 실제 공개한 127.0.0.1:5432로 바꿔 연결한다.
 
 ```bash
-# 모델 이름과 기존 Judge 판정을 숨긴 검수 자료와 빈 라벨 JSONL. 모델 호출 없음.
+# 블라인드 검수 참고 자료만 내보낸다. 채점 run이나 사람 판정을 만들지 않는다.
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py export \
-  --source-run-id '<source-run-id>' --rater reviewer --output-dir artifacts/evaluation/human-review
-# 고정 답안에 사용할 Judge 버전과 대상 수 미리보기. --submit 전에는 모델 호출 없음.
+  --source-run-id '<answers-run-id>' --output-dir artifacts/evaluation/review-packet
+# 세 모델 각각 10회 채점 계획. --submit 없이는 모델 호출·채점 run 생성을 하지 않는다.
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py judge \
-  --source-run-id '<source-run-id>' --repeat 3 --output-dir artifacts/evaluation/rejudge
-# 위 명령에 --submit을 붙이면 모델 호출을 수행한다. 각 반복은 별도 Run이며 QA는 재생성하지 않는다.
+  --source-run-id '<answers-run-id>' --repeat 10 --output-dir artifacts/evaluation/rejudge
+# --model-rater chatgpt 등으로 특정 모델을 선택할 수 있다.
+# --submit을 추가하면 선택 모델 수 × repeat 개의 grading run을 만들고 실제 유료 호출한다.
 ```
 
-검수자는 `review-packet.json`의 차원별 rubric·질문·답변·허용된 근거만 읽고,
-`human-labels.jsonl`의 `label`을 pass/fail/not_applicable로 입력하고 이유를 적는다.
-미검수는 null로 두며 불확실성·누락 데이터를 N/A로 바꾸지 않는다. 문항 ID·답변 해시·protocol은 수정하지 않는다.
-이름과 `round`로 평가자·반복을 구분한다. 비교 전까지 다른 Judge의 결과를 보지 않는다. 다른 검수자는 별도 디렉터리로 export한다.
+사람 채점은 로그인한 계정의 웹 검수를 사용한다. 내보낸 참고 자료는 채점 원본이 아니며,
+원시 JSONL을 수동 작성해 분석에 넣는 경로는 유지하지 않는다.
 
 ```bash
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
-  --source-run-id '<source-run-id>' \
-  --judge-run-id '<source-run-id>' --judge-run-id '<rejudge-run-id>' \
-  --human-labels artifacts/evaluation/human-review/human-labels.jsonl \
-  --output-dir artifacts/evaluation/agreement
+  --source-run-id '<answers-run-id>' \
+  --grading-run-id '<model-grading-run-id>' --grading-run-id '<human-grading-run-id>' \
+  --output-dir artifacts/evaluation/agreement --log
+# UI에서 내려받은 완료한 grading-result.json은 --grading-file '<path>'로 추가할 수 있다.
 ```
 
 `agreement.json`은 차원별 모델–모델·모델–사람 일치율, Cohen’s kappa, 유효 쌍 수·혼동행렬을 제공한다.
-같은 Judge 버전의 반복은 repeat_consistency, 버전이 달라진 비교는 judge_revision으로 구분한다.
+같은 평가자·프로필의 반복은 repeat_consistency, 같은 주체의 다른 프로필은 judge_revision으로 구분한다.
+
+사람–모델 비교는 purpose=human_alignment로 우선 표시한다. Cohen’s κ는 Ragas가 제공하는
+scikit-learn 기반 구현을 사용한다. 종합 Fleiss’ κ·Krippendorff’s α는 각각 statsmodels·krippendorff로 계산한다.
+종합 비교를 하려면 한 평가자당 한 회차만 골라 최소 세 평가자의 run을 전달한다.
+CLI는 완료한 grading만 받으며, 이때 α의 결측은 주로 N/A·채점 오류에서 발생한다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
+  --source-run-id '<answers-run-id>' \
+  --grading-run-id '<human-round-run-id>' \
+  --grading-run-id '<chatgpt-round-run-id>' \
+  --grading-run-id '<claude-round-run-id>' \
+  --grading-run-id '<gemini-round-run-id>' \
+  --output-dir artifacts/evaluation/panel-agreement --log
+```
+
+`panels`에 전체 집단과 조건을 충족하는 사람/모델 하위 집단의 계수·구성·유효/제외 건수를 남긴다.
+Fleiss는 모두 이진 판정한 문항만, α는 두 명 이상이 이진 판정한 문항을 사용한다. N/A·오류·미제출은
+각각 집계한다. 여러 회차를 넣어도 쌍별 반복 분석은 가능하지만, 중복 주체가 있는 종합 계수는
+multiple_gradings_per_subject로 계산하지 않는다. 미정 계수는 JSON에 null·사유를 남기고 MLflow metric에는 쓰지 않는다.
+패키지 버전과 분석 정책은 `analysis_protocol`에 기록한다. 분석 명령은 생성·Judge를 호출하지 않는다.
+--log는 별도 analysis run에 입력 grading manifest·비교 결과와 유효한 일치율·κ metric을 기록한다.
 N/A·오류·미입력은 이진 kappa에서 제외하고 적용 가능 여부의 일치율·제외 건수를 따로 표시한다.
 유효 쌍이 2개 미만이거나 양쪽이 동일한 상수 라벨이면 kappa는 null로 남긴다.
 라벨 불균형과 작은 표본의 영향을 받으므로 kappa 하나나 다수결을 정답·신뢰성의 증거로 쓰지 않는다.
@@ -372,7 +401,7 @@ worker 시간에는 프로필 갱신·이력 조회·QA 실행·QA 결과 저장
 소규모 세트의 기본 집계는 평균·중앙값·최댓값이며 p95는 산출하지 않는다.
 
 MLflow 지표 이름은 key다. 코드에서 새 이름을 기록해도 이전 Run의 key가 자동으로 변경되지 않는다.
-이후 실행에는 `evidence_recall`을 사용하고, 과거 `evidence_recall_at_k` 기록은 보존한다.
+새 평가에는 `ragas.*`를 기록하며 과거 자체 Recall metric은 자동 변경·backfill하지 않는다.
 
 ## 검증 한계
 
@@ -391,3 +420,29 @@ PostgreSQL 통합 테스트는 전용 테스트 DB가 설정된 환경에서 별
 기존 Corpus 27개·스냅샷 1개·청킹 결과 54개·벡터 인덱스 1개를 유지했다.
 런타임 npm 의존성 보안 검사는 별도로 확인하며, 개발 도구에 low severity advisory 4개가 남아 있다. `npm audit --omit=dev`는 0개다.
 정적 배포 이미지에는 Node/npm 개발 도구를 포함하지 않는다.
+
+## Analysis A/B 비교
+
+완료한 analysis 한 쌍을 읽어 대응 문항의 품질·QA 자원·정합성을 비교한다. 같은 Dataset·rubric·평가자 ID 집단을
+요구하며 한 평가자의 여러 회차를 독립 표본으로 넣지 않는다. 분석 정책·버전이 바뀌었다면 먼저 analyze를 다시
+실행한다. 이 과정과 comparison 모두 생성·Judge를 호출하지 않는다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/compare.py \
+  --baseline-analysis-run-id '<analysis-A-id>' \
+  --candidate-analysis-run-id '<analysis-B-id>' \
+  --purpose system --hypothesis '검색 도구 예산 증가가 근거 확보와 답변 품질을 높이는가' \
+  --output-dir artifacts/evaluation/compare-A-B
+# --log를 추가하면 baseline experiment에 독립 comparison run을 기록한다.
+```
+
+기본은 로컬 comparison-result.json·comparison-inputs.json을 생성하며 기존 파일은 덮어쓰지 않는다.
+로컬 미리보기 후 --log로 다시 실행할 때에도 새 출력 디렉터리를 지정한다.
+--log 사용 시 원본은 수정하지 않고 새 run에 기록한다. 성공하면 comparison-run.json에 run ID를 저장한다.
+저장 실패는 해당 run을 FAILED로 표시하며 로컬 결과는 보존한다.
+
+--purpose system은 서로 다른 answers와 동일한 평가자 프로필을 요구한다. --purpose judge는 같은 answers와
+동일한 사람 판정을 요구하며 모델 프로필 변경을 허용한다. 다른 모델 계열로 평가자 ID 자체를 바꾸는 매핑은 지원하지 않는다.
+--seed(기본 42)·--bootstrap-resamples(기본 2000, 0이면 구간 생략)·--confidence-level(기본 0.95)을 설정할 수 있다.
+구간은 대응 평균 차이의 문항 재표집 결과이며 반복 시행 변동이나 κ·α의 신뢰구간이 아니다.
+자세한 호환 검사·관측 교집합·결측 처리와 metric 의미는 [comparison 계약](evaluation-schema.md#조건-간-comparison)을 따른다.

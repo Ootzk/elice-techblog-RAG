@@ -5,9 +5,13 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from elice_knowledge.agreement import analyze, machine_labels, review_packet
+from elice_knowledge.agreement import analyze, review_packet
 from elice_knowledge.evaluation_bundle import validate_bundle
-from elice_knowledge.judges import configure, evaluate_answers, frozen_judges
+from elice_knowledge.evaluation_schema import tags, validate_grading
+from elice_knowledge.judge_runs import evaluate_models
+from elice_knowledge.judges import RATERS, configure, frozen_judges
+from elice_knowledge.reliability import report_metrics
+from elice_knowledge.service_store import ServiceStore
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import client
 
@@ -28,19 +32,24 @@ def main():
     parser.add_argument("action", choices=("export", "judge", "analyze"))
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--judge-run-id", action="append", default=[])
-    parser.add_argument("--human-labels", action="append", type=Path, default=[])
-    parser.add_argument("--rater", default="reviewer")
+    parser.add_argument(
+        "--grading-run-id",
+        action="append",
+        default=[],
+        help="Select grading runs; use one round per subject for panel coefficients",
+    )
+    parser.add_argument("--model-rater", action="append", choices=RATERS)
+    parser.add_argument("--grading-file", action="append", type=Path, default=[])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--submit", action="store_true")
     parser.add_argument(
         "--log",
         action="store_true",
-        help="Log agreement and human assessments to MLflow",
+        help="Log the analysis report and reliability metrics to MLflow",
     )
     args = parser.parse_args()
-    if not 1 <= args.repeat <= 5:
-        parser.error("--repeat must be between 1 and 5")
+    if not 1 <= args.repeat <= 100:
+        parser.error("--repeat must be between 1 and 100")
     settings = Settings()
     experiment = configure(settings)
     tracking = client(settings)
@@ -53,26 +62,26 @@ def main():
     if bundle["source_run_id"] != args.source_run_id:
         raise ValueError("source_run_mismatch")
     if args.action == "export":
-        packet, labels = review_packet(bundle, args.rater)
-        path = args.output_dir / "human-labels.jsonl"
+        packet, _ = review_packet(bundle, "preview")
+        path = args.output_dir / "review-packet.json"
         if path.exists():
             raise FileExistsError(
-                "Use a new output directory; existing human labels are preserved"
+                "Use a new output directory; existing packet is preserved"
             )
-        write_json(args.output_dir / "review-packet.json", packet)
-        path.write_text(
-            "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in labels)
+        write_json(
+            path,
+            {
+                "schema": bundle["schema"],
+                "source_run_id": args.source_run_id,
+                "source_bundle_digest": bundle["digest"],
+                "items": packet,
+            },
         )
-        print(
-            json.dumps(
-                {
-                    "packet": str(args.output_dir / "review-packet.json"),
-                    "labels": str(path),
-                }
-            )
-        )
+        print(json.dumps({"packet": str(path)}))
     elif args.action == "judge":
         specs = frozen_judges(settings, bundle["kind"])
+        if args.model_rater:
+            specs = [s for s in specs if s["rater"] in args.model_rater]
         if not args.submit:
             print(
                 json.dumps(
@@ -84,105 +93,71 @@ def main():
                         ),
                         "judges": specs,
                         "repeat": args.repeat,
+                        "planned_grading_runs": args.repeat
+                        * len({s["rater"] for s in specs}),
                     },
                     indent=2,
                 )
             )
             return
-        for _ in range(args.repeat):
-            run_id = tracking.create_run(
-                experiment,
-                tags={
-                    "mlflow.runName": "saved-answer-judging",
-                    "activity": "rejudging",
-                    "source_run_id": args.source_run_id,
-                    "source_bundle_digest": bundle["digest"],
-                },
-            ).info.run_id
-            try:
-                tracking.log_dict(run_id, bundle, "evaluation-bundle.json")
-                tracking.log_dict(run_id, specs, "judge-versions.json")
-                metrics, judgments = evaluate_answers(
-                    settings, run_id, bundle["records"], bundle["cases"], specs
-                )
-                tracking.set_terminated(run_id, "FINISHED")
-                write_json(
-                    args.output_dir / (run_id + ".json"),
-                    {"run_id": run_id, "metrics": metrics, "judgments": judgments},
-                )
-                print(
-                    json.dumps({"run_id": run_id, "source_run_id": args.source_run_id}),
-                    flush=True,
-                )
-            except Exception:
-                tracking.set_terminated(run_id, "FAILED")
-                raise
+        results = evaluate_models(
+            ServiceStore(settings),
+            bundle,
+            specs,
+            repeat=args.repeat,
+            raters=args.model_rater,
+        )
+        for result in results:
+            write_json(args.output_dir / (result["grading_id"] + ".json"), result)
+            print(json.dumps(result), flush=True)
+        if any(row["state"] == "FAILED" for row in results):
+            raise SystemExit("Model grading failed; inspect the grading runs")
     else:
-        entries = []
-        for run_id in args.judge_run_id:
-            judged_bundle = validate_bundle(
-                read_artifact(
-                    tracking, run_id, "evaluation-bundle.json", args.output_dir
-                )
+        results = []
+        if len(set(args.grading_run_id)) != len(args.grading_run_id):
+            parser.error("Duplicate grading run IDs")
+        for run_id in args.grading_run_id:
+            run = tracking.get_run(run_id)
+            if any(
+                run.data.tags.get(key) != value
+                for key, value in tags("grading").items()
+            ):
+                raise ValueError("unsupported_grading_run_schema")
+            results.append(
+                read_artifact(tracking, run_id, "grading-result.json", args.output_dir)
             )
-            if judged_bundle["digest"] != bundle["digest"]:
-                raise ValueError("judged_answers_differ_from_source")
-            results = read_artifact(
-                tracking, run_id, "judge-results.json", args.output_dir
-            )
-            entries.extend(machine_labels(bundle, results["cases"], run_id))
-        human = []
-        for path in args.human_labels:
-            rows = [
-                json.loads(line)
-                for line in path.read_text().splitlines()
-                if line.strip()
-            ]
-            if any(not row["rater"].startswith("human:") for row in rows):
-                raise ValueError("Human rater must start with human:")
-            human.extend(rows)
-        entries.extend(human)
+        results.extend(json.loads(path.read_text()) for path in args.grading_file)
+        if not results:
+            parser.error("analyze requires --grading-run-id or --grading-file")
+        for result in results:
+            validate_grading(bundle, result)
+            if not result["complete"]:
+                raise ValueError("analysis_requires_complete_grading")
+        entries = [row for result in results for row in result["labels"]]
         report = analyze(bundle, entries)
+        report["grading_run_ids"] = args.grading_run_id
+        report["schema"] = bundle["schema"]
         write_json(args.output_dir / "agreement.json", report)
         if args.log:
-            import mlflow
-            from mlflow.entities import AssessmentSource, AssessmentSourceType
-
             run_id = tracking.create_run(
                 experiment,
-                tags={
-                    "mlflow.runName": "judge-agreement",
-                    "source_run_id": args.source_run_id,
-                    "source_bundle_digest": bundle["digest"],
-                },
+                tags=tags(
+                    "analysis",
+                    **{
+                        "mlflow.runName": "grading-agreement",
+                        "mlflow.parentRunId": args.source_run_id,
+                        "source_run_id": args.source_run_id,
+                        "source_bundle_digest": bundle["digest"],
+                    },
+                ),
             ).info.run_id
             try:
                 tracking.log_dict(run_id, report, "agreement.json")
-                tracking.log_dict(run_id, {"labels": entries}, "review-labels.json")
-                for row in human:
-                    if row["label"] not in {"pass", "fail", "not_applicable"}:
-                        continue
-                    case = next(
-                        c for c in bundle["cases"] if c["record_id"] == row["record_id"]
-                    )
-                    if not case.get("trace_id"):
-                        raise ValueError("source_qa_trace_missing")
-                    mlflow.log_feedback(
-                        trace_id=case["trace_id"],
-                        name="human-" + row["dimension"],
-                        value=row["label"],
-                        rationale=row.get("rationale"),
-                        source=AssessmentSource(
-                            source_type=AssessmentSourceType.HUMAN,
-                            source_id=row["rater"],
-                        ),
-                        metadata={
-                            "answer_digest": row["answer_digest"],
-                            "review_run_id": run_id,
-                        },
-                    )
+                tracking.log_dict(run_id, {"results": results}, "grading-inputs.json")
+                for name, value in report_metrics(report).items():
+                    tracking.log_metric(run_id, name, value)
                 tracking.set_terminated(run_id, "FINISHED")
-                print(json.dumps({"review_run_id": run_id}))
+                print(json.dumps({"analysis_run_id": run_id}))
             except Exception:
                 tracking.set_terminated(run_id, "FAILED")
                 raise

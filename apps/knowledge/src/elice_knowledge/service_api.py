@@ -186,6 +186,10 @@ def mount_service(app, settings):
     def review_progress(run_id: str, number: int, owner=session_dependency):
         return {"items": reviews.progress(run_id, owner["principal_id"], number)}
 
+    @router.get("/admin/reviews/{run_id}/rounds/{number}/origin")
+    def grading_origin(run_id: str, number: int, owner=code_admin_dependency):
+        return reviews.grading_origin(run_id, owner["principal_id"], number)
+
     @router.put("/reviews/{run_id}/rounds/{number}/cases/{position}/draft")
     def save_review_draft(
         run_id: str, number: int, position: int, body: ReviewDraft, owner=session_dependency
@@ -223,6 +227,10 @@ def mount_service(app, settings):
                 for label in row["labels"]
             ]
         }
+
+    @router.get("/reviews/{run_id}/rounds/{number}/result")
+    def review_result(run_id: str, number: int, owner=session_dependency):
+        return reviews.result(run_id, owner["principal_id"], number)
 
     @router.post("/reviews/{run_id}/rounds/{number}/sync")
     def sync_review(run_id: str, number: int, owner=session_dependency):

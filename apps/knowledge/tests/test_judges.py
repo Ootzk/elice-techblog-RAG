@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from threading import Barrier, Lock
 from types import SimpleNamespace
 
 import pandas as pd
@@ -61,60 +62,140 @@ def test_dimension_inputs_do_not_leak_reference_or_unseen_candidates():
         evaluation_row(records[0], cases[0], "groundedness")
 
 
-def test_dimension_versions_na_denominators_and_error_artifacts(monkeypatch):
-    records, cases = examples()
-    specs = [
-        dict(name="qa-gold-" + dim + "-chatgpt", dimension=dim, rater="chatgpt", version=2)
-        for dim in DIMENSIONS["gold"]
+def model_specs():
+    return [
+        dict(
+            name=d,
+            dimension=d,
+            rater="chatgpt",
+            version=2,
+            model="gateway:/fake",
+            instructions=instructions(d),
+        )
+        for d in DIMENSIONS["gold"]
     ]
+
+
+def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
+    from elice_knowledge.ragas_metrics import payload
+
+    records, cases = examples()
     calls, artifacts = [], []
     broken = [False]
     monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
-    monkeypatch.setattr("mlflow.genai.scorers.get_scorer", lambda **kw: kw)
     monkeypatch.setattr("mlflow.start_run", lambda **kw: nullcontext())
 
-    def evaluate(**kwargs):
-        calls.append(kwargs)
-        name = kwargs["scorers"][0]["name"]
-        return SimpleNamespace(
-            tables={
-                "eval_results": pd.DataFrame(
-                    [
-                        {
-                            "tags": item["tags"],
-                            "trace_id": "trace",
-                            name + "/value": None
-                            if broken[0]
-                            else "not_applicable"
-                            if item["tags"]["record_id"] == "r2"
-                            else "yes",
-                            name + "/rationale": "reason",
-                        }
-                        for item in kwargs["data"]
-                    ]
-                )
-            }
-        )
+    async def metric(settings, model, dimension, data, rubric):
+        calls.append((dimension, data))
+        return (None if broken[0] else 0.75 if dimension == "completeness" else 1.0), "reason", None
 
+    def evaluate(**kwargs):
+        rows = []
+        for item in kwargs["data"]:
+            row = {"tags": item["tags"], "trace_id": "trace"}
+            for judge in kwargs["scorers"]:
+                result = judge.run(**{k: item[k] for k in ("inputs", "outputs", "expectations")})
+                row[judge.name + "/value"] = result.value
+                row[judge.name + "/rationale"] = result.rationale
+            rows.append(row)
+        return SimpleNamespace(tables={"eval_results": pd.DataFrame(rows[::-1])})
+
+    monkeypatch.setattr("elice_knowledge.ragas_metrics.metric_score", metric)
     monkeypatch.setattr("mlflow.genai.evaluate", evaluate)
     monkeypatch.setattr(
-        "mlflow.MlflowClient",
-        lambda: SimpleNamespace(
-            log_dict=lambda *a: artifacts.append(a), log_metric=lambda *a: None
-        ),
+        "mlflow.MlflowClient", lambda: SimpleNamespace(log_dict=lambda *a: artifacts.append(a))
     )
-    metrics, results = evaluate_answers(Settings(), "run", records, cases, specs)
-    assert len(calls) == 4 and len(calls[0]["data"]) == 1
-    assert calls[0]["scorers"][0]["version"] == 2
-    assert metrics["qa-gold-groundedness-chatgpt_scored_cases"] == 1
-    assert metrics["qa-gold-groundedness-chatgpt_not_applicable_cases"] == 1
-    assert results[1]["judges"]["qa-gold-correctness-chatgpt"]["value"] is None
+    _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
+    assert [r["record_id"] for r in rows] == ["r1", "r2"]
+    assert rows[0]["judges"]["completeness"]["status"] == "fail"
+    assert rows[0]["measurements"][1]["score"] == 0.75
+    assert rows[1]["judges"]["correctness"]["status"] == "not_applicable"
+    assert rows[1]["judges"]["groundedness"]["status"] == "not_applicable"
+    for dimension, data in calls:
+        if dimension in {"groundedness", "relevance"}:
+            assert "reference" not in data and "reference" not in str(data)
+            assert "unseen secret" not in str(data)
+    assert payload(records[0], cases[0], "generation_context_recall")["retrieved_contexts"] == [
+        "seen"
+    ]
+    assert payload(records[0], cases[0], "retrieved_context_recall")["retrieved_contexts"] == [
+        "unseen secret"
+    ]
     assert artifacts[0][2] == "judge-results.json"
-    broken[0] = True
-    with pytest.raises(RuntimeError, match="judge_assessment_failed"):
-        evaluate_answers(Settings(), "run", records, cases, specs)
-    assert any(
-        cell["status"] == "error"
-        for row in artifacts[-1][1]["cases"]
-        for cell in row["judges"].values()
+
+
+@pytest.mark.parametrize(("record_workers", "scorer_workers"), [(1, 4), (2, 2)])
+def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
+    monkeypatch, tmp_path, record_workers, scorer_workers
+):
+    import mlflow
+
+    previous_uri = mlflow.get_tracking_uri()
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", previous_uri)
+    monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
+    mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_MAX_WORKERS", str(record_workers))
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", str(scorer_workers))
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_ENABLE_SCORER_TRACING", "false")
+    experiment = mlflow.create_experiment(
+        "parallel-test", artifact_location=str(tmp_path / "artifacts")
     )
+    monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: experiment)
+    tracking = mlflow.MlflowClient()
+    run = tracking.create_run(experiment)
+    barrier, lock = Barrier(4), Lock()
+    active, peak, calls = 0, 0, []
+
+    async def metric(settings, model, dimension, data, rubric):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            calls.append(dimension)
+        try:
+            barrier.wait(timeout=15)
+            if dimension == "relevance":
+                raise RuntimeError("fake scorer failure")
+            return 1.0, "fake judgment", None
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr("elice_knowledge.ragas_metrics.metric_score", metric)
+    records, cases = examples()
+    records = [records[0], {**records[0], "id": "r3", "inputs": {"question": "Q2"}}]
+    cases = [cases[0], {**cases[0], "record_id": "r3"}]
+    try:
+        _, results = evaluate_answers(
+            Settings(mlflow_tracking_uri=None),
+            run.info.run_id,
+            records,
+            cases,
+            model_specs(),
+            raise_on_error=False,
+        )
+        assert peak == 4 and active == 0 and len(calls) == 16
+        assert results[0]["judges"]["relevance"]["status"] == "error"
+        assert results[0]["judges"]["correctness"]["status"] == "pass"
+        assert len(results[0]["measurements"]) == 8
+        assert len(tracking.search_runs([experiment])) == 1
+        assert mlflow.active_run() is None
+    finally:
+        mlflow.set_tracking_uri(previous_uri)
+
+
+def test_concurrency_limits_fail_before_model_work(monkeypatch):
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_MAX_WORKERS", "0")
+    monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: pytest.fail("too late"))
+    records, cases = examples()
+    with pytest.raises(ValueError, match="MLFLOW_GENAI_EVAL_MAX_WORKERS"):
+        evaluate_answers(Settings(), "run", records, cases, model_specs())
+
+
+def test_all_inputs_validated_before_paid_work(monkeypatch):
+    records, cases = examples()
+    del cases[0]["result"]["generation_sources"]
+    monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
+    monkeypatch.setattr("elice_knowledge.ragas_metrics.scorer", lambda *a: pytest.fail("too soon"))
+    with pytest.raises(ValueError, match="generation_sources_missing"):
+        evaluate_answers(Settings(), "run", records, cases, model_specs())

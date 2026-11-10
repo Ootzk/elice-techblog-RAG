@@ -59,7 +59,7 @@
     "evidence": "every positive quote is a whitespace-normalized literal substring of a frozen policy chunk",
     "absence_cases": "27-document context search and relevant article inspection; not lexical absence alone",
     "semantic_review": "human_reviewed",
-    "scorer_limitation": "evidence-v1 does not grade required_points, unacceptable_claims or cross-document synthesis",
+    "scorer_limitation": "Ragas claim-based scores depend on reference coverage and LLM decomposition; they do not guarantee detection of all forbidden claims or synthesis errors",
     "question_style": "user scenarios without article-title or benchmark-configuration lookup hints; nonessential numeric details are optional",
     "registration_tool": "tools/evaluation/register.py"
   },
