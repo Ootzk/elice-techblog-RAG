@@ -85,7 +85,7 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
     monkeypatch.setattr("mlflow.start_run", lambda **kw: nullcontext())
 
-    async def metric(settings, model, dimension, data, rubric):
+    async def metric(settings, model, dimension, data, rubric, *, request_options=None):
         calls.append((dimension, data))
         return (None if broken[0] else 0.75 if dimension == "completeness" else 1.0), "reason", None
 
@@ -146,7 +146,7 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
     barrier, lock = Barrier(4), Lock()
     active, peak, calls = 0, 0, []
 
-    async def metric(settings, model, dimension, data, rubric):
+    async def metric(settings, model, dimension, data, rubric, *, request_options=None):
         nonlocal active, peak
         with lock:
             active += 1

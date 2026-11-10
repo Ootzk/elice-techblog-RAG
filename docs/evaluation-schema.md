@@ -52,6 +52,12 @@ grading run에는 다음 태그를 함께 기록한다.
 모델/평가 기준이 바뀌면 프로필 해시가 달라지며 동일 조건의 반복으로 취급하지 않는다.
 모델 프로필에는 Ragas 버전·구현 해시·모델 요청 조건·pass threshold를 추가한다. 등록된 MLflow scorer의
 모델 URI와 rubric을 고정하지만, 오프라인 품질 점수 계산은 기존 make_judge 대신 Ragas가 수행한다.
+Gateway 호출의 기본 출력 한도는 비스트리밍 프록시 상한에 맞춰 `max_completion_tokens=2000`으로 기록한다.
+모델별 지원 차이가 있는 `temperature`·`top_p`는 보내지 않고 프로필에 `null`로 기록한다.
+ChatGPT 평가자는 긴 채점 JSON을 받을 수 있도록 스트리밍과 `max_completion_tokens=8192`,
+`reasoning_effort=none`을 사용한다. SDK가 완성된 JSON을 스키마로 검증하며 부분 응답은 채점으로
+채택하지 않는다. 평가자별 요청 옵션도 프로필에 저장한다.
+`temperature`·`top_p`는 공급자 기본값을 사용하며, 고정 seed나 완전히 동일한 재채점을 보장하지 않는다.
 일반 대화의 서버 측 online 자동 Judge와 오프라인 Eval Harness는 구분한다.
 사람 프로필은 원본에 고정한 rubric과 적용 계약으로 결정한다. 로그인 코드가 사람 신원이며 대리 선택하지 않는다.
 한 모델 run에는 그 모델의 모든 차원이 들어간다. 세 모델을 하나의 grading run에 넣지 않는다.

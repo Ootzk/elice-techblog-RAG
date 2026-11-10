@@ -17,6 +17,10 @@ CONTEXT_METRICS = (
     "generation_context_precision",
 )
 PASS_THRESHOLD = 1.0
+MAX_OUTPUT_TOKENS = 2000
+RATER_REQUEST_OPTIONS = {
+    "chatgpt": {"reasoning_effort": "none", "stream": True, "max_completion_tokens": 8192}
+}
 
 
 @lru_cache(maxsize=1)
@@ -54,9 +58,10 @@ def contract():
         "context_order": "first-seen-deduplicated",
         "internal_llm_concurrency": 1,
         "structured_output": "json",
-        "temperature": 0,
-        "max_tokens": 4096,
-        "top_p": 1,
+        "temperature": None,
+        "max_completion_tokens": MAX_OUTPUT_TOKENS,
+        "rater_request_options": RATER_REQUEST_OPTIONS,
+        "top_p": None,
         "max_retries": 1,
     }
 
@@ -102,7 +107,7 @@ def question(record):
     return json.dumps(record["inputs"], ensure_ascii=False)
 
 
-async def metric_score(settings, model, dimension, data, rubric):
+async def metric_score(settings, model, dimension, data, rubric, *, request_options=None):
     """One SDK scorer invocation. Each invocation permits one outbound request at a time."""
     import httpx
     from openai import AsyncOpenAI
@@ -131,14 +136,21 @@ async def metric_score(settings, model, dimension, data, rubric):
         timeout=settings.generation_timeout_seconds,
         http_client=httpx.AsyncClient(auth=auth),
     ) as client:
+        options = {"max_completion_tokens": MAX_OUTPUT_TOKENS, **(request_options or {})}
+        streaming = options.pop("stream", False)
         inner = llm_factory(
             model.removeprefix("gateway:/"),
             client=client,
-            temperature=0,
-            max_tokens=4096,
-            top_p=1,
             max_retries=1,
+            **options,
         )
+        # Gateway aliases hide model families from Ragas' parameter inference.
+        # Remove its default so only the explicit completion budget is sent.
+        inner.model_args.pop("max_tokens", None)
+        # Some Gateway models accept only their default sampling parameters.
+        # Record these as unspecified rather than claiming temperature=0.
+        inner.model_args.pop("temperature", None)
+        inner.model_args.pop("top_p", None)
         gate = asyncio.Semaphore(1)
         judgments = []
 
@@ -148,7 +160,21 @@ async def metric_score(settings, model, dimension, data, rubric):
 
             async def agenerate(self, prompt, response_model):
                 async with gate:
-                    output = await inner.agenerate(prompt, response_model)
+                    if streaming:
+                        # The SDK assembles and validates the final structured response;
+                        # partial objects are never accepted as completed judgments.
+                        async with client.chat.completions.stream(
+                            model=model.removeprefix("gateway:/"),
+                            messages=[{"role": "user", "content": prompt}],
+                            response_format=response_model,
+                            **options,
+                        ) as stream:
+                            completed = await stream.get_final_completion()
+                        output = completed.choices[0].message.parsed
+                        if output is None:
+                            raise ValueError("missing_structured_judgment")
+                    else:
+                        output = await inner.agenerate(prompt, response_model)
                     judgments.append(
                         {
                             "response_model": response_model.__name__,
@@ -209,7 +235,14 @@ def scorer(settings, spec, dimension=None):
         if "retrieved_contexts" in data and not data["retrieved_contexts"]:
             return Feedback(value=0.0, rationale="평가할 근거 문맥이 없음")
         value, reason, _ = asyncio.run(
-            metric_score(settings, spec["model"], dimension, data, spec["instructions"])
+            metric_score(
+                settings,
+                spec["model"],
+                dimension,
+                data,
+                spec["instructions"],
+                request_options=RATER_REQUEST_OPTIONS.get(spec["rater"], {}),
+            )
         )
         return Feedback(value=value if value is not None else "not_applicable", rationale=reason)
 

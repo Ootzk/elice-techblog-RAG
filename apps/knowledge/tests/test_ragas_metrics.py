@@ -25,6 +25,8 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
             await self.http.aclose()
 
     class FakeLLM(InstructorBaseRagasLLM):
+        model_args = {"max_tokens": 1024}
+
         def generate(self, *args):
             raise AssertionError("Only async metrics expected")
 
@@ -135,7 +137,12 @@ def test_scope_deduplication_na_and_measurement_coverage():
     assert len(contract()["implementation_digest"]) == 64
 
 
-def test_real_instructor_and_openai_sdk_use_gateway_structured_json(monkeypatch):
+@pytest.mark.parametrize(
+    "streaming,finish_reason", [(False, "stop"), (True, "stop"), (True, "length")]
+)
+def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
+    monkeypatch, streaming, finish_reason
+):
     import json
 
     import httpx
@@ -145,6 +152,31 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(monkeypatch)
 
     def transport(request):
         requests.append(request)
+        if streaming:
+            content = json.dumps({"value": "yes", "reason": "검증"})
+            chunks = [
+                {"content": content[:15], "role": "assistant"},
+                {"content": content[15:]},
+                {},
+            ]
+            events = [
+                dict(
+                    id="fake-completion",
+                    object="chat.completion.chunk",
+                    created=1,
+                    model="configured-judge",
+                    choices=[
+                        dict(index=0, delta=delta, finish_reason=finish_reason if i == 2 else None)
+                    ],
+                )
+                for i, delta in enumerate(chunks)
+            ]
+            body = "".join("data: " + json.dumps(e) + "\n\n" for e in events)
+            return httpx.Response(
+                200,
+                content=(body + "data: [DONE]\n\n").encode(),
+                headers={"content-type": "text/event-stream"},
+            )
         return httpx.Response(
             200,
             json={
@@ -172,21 +204,37 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(monkeypatch)
 
     monkeypatch.setattr(httpx, "AsyncClient", MockClient)
     monkeypatch.setenv("MLFLOW_TRACKING_TOKEN", "fake-gateway-token")
-    score, reason, _ = asyncio.run(
-        metric_score(
-            Settings(mlflow_tracking_uri="http://mlflow.test:5000"),
-            "gateway:/configured-judge",
-            "relevance",
-            {"payload": "candidate"},
-            "Check relevance",
+    request_options = contract()["rater_request_options"]["chatgpt"] if streaming else None
+
+    def run():
+        return asyncio.run(
+            metric_score(
+                Settings(mlflow_tracking_uri="http://mlflow.test:5000"),
+                "gateway:/configured-judge",
+                "relevance",
+                {"payload": "candidate"},
+                "Check relevance",
+                request_options=request_options,
+            )
         )
-    )
-    assert score == 1 and reason == "검증"
+
+    if finish_reason == "length":
+        from openai import LengthFinishReasonError
+
+        with pytest.raises(LengthFinishReasonError):
+            run()
+    else:
+        score, reason, _ = run()
+        assert score == 1 and reason == "검증"
     assert len(requests) == 1
     assert str(requests[0].url) == "http://mlflow.test:5000/gateway/mlflow/v1/chat/completions"
     body = json.loads(requests[0].content)
     assert body["model"] == "configured-judge"
-    assert body["response_format"] == {"type": "json_object"}
-    assert body["temperature"] == 0
-    assert body["max_tokens"] == 4096
+    assert body["response_format"]["type"] == ("json_schema" if streaming else "json_object")
+    assert "temperature" not in body and contract()["temperature"] is None
+    assert "top_p" not in body and contract()["top_p"] is None
+    assert "max_tokens" not in body
+    assert body["max_completion_tokens"] == (8192 if streaming else 2000)
+    if streaming:
+        assert body["stream"] and body["reasoning_effort"] == "none"
     assert requests[0].headers["authorization"] == "Bearer fake-gateway-token"
