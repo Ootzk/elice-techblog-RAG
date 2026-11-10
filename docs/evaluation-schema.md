@@ -122,6 +122,20 @@ analysis의 κ는 같은 답변의 대응되는 정상 이진 판정만 사용�
 그 모델의 차원별 scorer 실행 → 공통 labels·metric 저장 → FINISHED 또는 FAILED.
 최초 Dataset 평가도 이 경로로 모델별 자식 run을 만든다. Judge만 반복하는 CLI도 같은 경로를 사용한다.
 
+한 모델의 모든 차원을 한 번의 `mlflow.genai.evaluate()`에 전달한다. SDK가 질문과 차원을 병렬 실행하고
+결과를 모두 모은 뒤 공통 grading을 저장한다. 등록 scorer의 고정 버전을 호출하는 어댑터가
+차원별 입력을 분리하며, 사전 N/A는 모델을 호출하지 않는다. 한 항목의 호출 오류는 해당 판정에만
+error로 남기고 다른 항목의 성공 결과는 보존한다. 오류가 있으면 grading은 FAILED다.
+모델 간·반복 회차 간 실행은 순차로 유지한다.
+
+동시성은 프로세스별 `MLFLOW_GENAI_EVAL_MAX_WORKERS`(질문, 기본 2, 범위 1–32)와
+`MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`(질문당 차원, 기본 4, 범위 1–16)로 제한한다.
+Gold 기본값은 최대 8개, Iron은 질문당 한 차원이므로 최대 2개 Judge 호출이다.
+동시에 여러 worker 작업·CLI를 실행하면 호출 수는 합산되며, Gateway 전체의 전역 제한은 아니다.
+실행에 사용한 두 값을 `judge-results.json`의 execution에 기록한다.
+평가의 실행 단위인 scorer와 관측 단위인 trace는 다르다. SDK의 scorer tracing은 별도 옵션이며
+병렬 실행 자체가 네 개의 독립 grading run이나 trace를 의미하지 않는다.
+
 사람: 회차 시작 → 공통 grading 할당·MLflow run 생성(RUNNING) → 초안/최종 제출을 DB에 저장 →
 명시적 동기화로 해당 grading run의 artifact·metric 갱신 → 모든 문항 제출 시 FINISHED.
 진행 중인 같은 사람 회차는 이어서 사용하며 완료 후 새 회차를 만든다. 초안과 이전 점수를 새 회차에 복사하지 않는다.
