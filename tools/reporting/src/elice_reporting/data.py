@@ -36,17 +36,17 @@ def _digest(value):
 
 def _validate_gradings(gradings):
     for grading in gradings:
-        if grading.get("schema") != "evaluation-v1":
+        if grading.get("schema") != "evaluation-v2":
             raise ValueError("Unsupported grading schema")
         if (
-            grading.get("rater_type") == "model"
-            and grading.get("measurement_contract") != "ragas-v1"
+            grading.get("contract") != "rubric-v1"
+            or grading.get("measurement_contract") != "ragas-diagnostics-v1"
         ):
-            raise ValueError("Only ragas-v1 model grading results are supported")
+            raise ValueError("Only rubric-v1 grading results are supported")
 
 
 def _validate(kind, report, inputs, source, run_id=None):
-    if kind not in {"analysis", "comparison"} or report.get("schema") != "evaluation-v1":
+    if kind not in {"analysis", "comparison"} or report.get("schema") != "evaluation-v2":
         raise ValueError("Unsupported report schema or kind")
     if kind == "comparison":
         if report.get("comparison_contract") != "comparison-v1":
@@ -68,10 +68,18 @@ def _validate(kind, report, inputs, source, run_id=None):
         ) != bundle.get("digest"):
             raise ValueError("Analysis input binding mismatch")
         _validate_gradings(inputs["gradings"])
+        rubric_digest = report.get("rubric_digest")
+        if rubric_digest != _digest(report.get("rubric")) or any(
+            g.get("rubric_digest") != rubric_digest or _digest(g.get("rubric")) != rubric_digest
+            for g in inputs["gradings"]
+        ):
+            raise ValueError("Analysis requires the same rubric snapshot")
         expected = {g["rater_profile_digest"] for g in inputs["gradings"]}
         for key, profile in inputs.get("profiles", {}).items():
             if key not in expected or _digest(profile) != key:
                 raise ValueError("Analysis grading profile binding mismatch")
+            if profile.get("rubric_digest") != rubric_digest:
+                raise ValueError("Analysis grading rubric binding mismatch")
     return ReportData(kind, report, inputs, source, run_id)
 
 
@@ -128,7 +136,7 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
     if (
         run.info.status != "FINISHED"
         or run.data.tags.get("evaluation.kind") != kind
-        or run.data.tags.get("evaluation.schema") != "evaluation-v1"
+        or run.data.tags.get("evaluation.schema") != "evaluation-v2"
     ):
         raise ValueError("Select a finished compatible analysis/comparison run")
     if kind == "analysis":
@@ -236,7 +244,7 @@ def analysis_frames(data):
             pair=_identity(r["left"]) + " ↔ " + _identity(r["right"]),
             cohen_kappa=r["cohen_kappa"],
             agreement=r["agreement"],
-            binary_pairs=r["binary_pairs"],
+            valid_pairs=r["valid_pairs"],
             excluded_pairs=r["excluded_pairs"],
             undefined_reason=r["kappa_undefined_reason"],
         )
@@ -253,7 +261,7 @@ def analysis_frames(data):
             **{k: v for k, v in label.items() if k not in {"rater", "round"}},
         )
         for g in data.inputs["gradings"]
-        for label in g["labels"]
+        for label in g["ratings"]
     ]
     return dict(
         pairs=pd.DataFrame(
@@ -266,7 +274,7 @@ def analysis_frames(data):
                 "pair",
                 "cohen_kappa",
                 "agreement",
-                "binary_pairs",
+                "valid_pairs",
                 "excluded_pairs",
                 "undefined_reason",
             ],

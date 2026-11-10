@@ -21,8 +21,9 @@ MATRIX_TITLE_HEIGHT = 24
 
 DIMENSIONS = ("correctness", "completeness", "groundedness", "relevance")
 STATES = {
-    "pass": ("#2166ac", "✓"),
-    "fail": ("#d6604d", "×"),
+    "0": ("#d6604d", "0"),
+    "1": ("#c59635", "1"),
+    "2": ("#2166ac", "2"),
     "not_applicable": ("#cbd5e1", "—"),
     "error": ("#9385ba", "!"),
     "missing": ("#f7f9fb", "·"),
@@ -275,7 +276,7 @@ def kappa_colorbar(height=680):
                 orientation="vertical",
                 height=height - 64,
                 width=14,
-                title="Cohen κ",
+                title="선형 가중 Cohen κ",
                 major_label_text_font_size="11px",
                 title_text_font_size="12px",
                 major_tick_line_color=None,
@@ -336,7 +337,7 @@ def kappa_cells(data, subjects, dimension):
                     else "동일 평가 회차"
                     if x == y
                     else "미기록",
-                    valid=row["binary_pairs"] if row else None,
+                    valid=row["valid_pairs"] if row else None,
                     excluded=row["excluded_pairs"] if row else None,
                 )
             )
@@ -358,45 +359,40 @@ def kappa_cells(data, subjects, dimension):
     )
 
 
-def _score_display(subject, measurement):
-    value = measurement.get("score")
-    if value is not None and not pd.isna(value):
-        return str(value)
-    if measurement.get("status") == "not_applicable":
-        return "N/A"
-    if measurement.get("status") == "error":
-        return "채점 오류"
-    if subject["rater"].startswith("human:"):
-        return "수치 점수 없음 · 사람 판정"
-    return "유효 점수 미기록"
-
-
 def grading_cells(data, subjects, record_id, dimensions=DIMENSIONS):
     cells = []
     gradings = {subject_key(g): g for g in data.inputs["gradings"]}
     for x, subject in enumerate(subjects):
         grading = gradings.get(subject["key"], {})
-        labels = {(r["record_id"], r["dimension"]): r for r in grading.get("labels", [])}
-        measurements = {(r["record_id"], r["metric"]): r for r in grading.get("measurements", [])}
+        ratings = {(r["record_id"], r["dimension"]): r for r in grading.get("ratings", [])}
+        rubric = grading.get("rubric", data.report["rubric"])
         for y, dimension in enumerate(dimensions):
-            label = labels.get((record_id, dimension), {})
-            measurement = measurements.get((record_id, dimension), {})
-            state = label.get("label", "missing")
-            fill, symbol = STATES.get(state, ("#fff3cd", "?"))
+            rating = ratings.get((record_id, dimension), {})
+            status, score = rating.get("status", "missing"), rating.get("score")
+            state = str(score) if status == "scored" else status
+            fill, symbol = STATES[state]
+            if rubric["kind"] == "iron" and score == 1:
+                fill = STATES["2"][0]
+            display = (
+                f"{score} · {rubric['scale_labels'][str(score)]}"
+                if status == "scored"
+                else {"not_applicable": "N/A", "error": "채점 오류", "missing": "미기록"}[status]
+            )
             cells.append(
                 dict(
                     x=x,
                     y=len(dimensions) - 1 - y,
                     fill=fill,
-                    ink="#fff" if state == "pass" else "#192b3e",
+                    ink="#fff" if status == "scored" else "#192b3e",
                     display=symbol,
                     rater=subject["rater"],
                     round=subject["round"],
                     dimension=dimension,
-                    label=state,
-                    score=measurement.get("score"),
-                    score_display=_score_display(subject, measurement),
-                    rationale=label.get("rationale", ""),
+                    label=display,
+                    status=status,
+                    score=score,
+                    score_display=display,
+                    rationale=rating.get("rationale", ""),
                 )
             )
     return pd.DataFrame(cells)
@@ -505,7 +501,7 @@ def kappa_heatmaps(data, subjects):
             subjects,
             column_subjects=subjects,
             tooltips=[
-                ("Cohen κ", "@value"),
+                ("선형 가중 Cohen κ", "@value"),
                 ("유효", "@valid"),
                 ("제외", "@excluded"),
                 ("사유", "@reason"),
@@ -565,7 +561,7 @@ def agreement_browser(data, subjects):
                     row["dimension"],
                     row["left"]["round"],
                     row["right"]["round"],
-                    row["binary_pairs"],
+                    row["valid_pairs"],
                     row["excluded_pairs"],
                     row["agreement"] if row["agreement"] is not None else "미정의",
                     row["cohen_kappa"] if row["cohen_kappa"] is not None else "미정의",
@@ -586,7 +582,7 @@ def agreement_browser(data, subjects):
                     "유효",
                     "제외",
                     "일치율",
-                    "Cohen κ",
+                    "선형 가중 Cohen κ",
                     "사유",
                 )
             )
@@ -632,8 +628,17 @@ def grading_heatmap(data, subjects, record_id):
     )
 
 
-def grading_legend():
-    names = {"not_applicable": "N/A", "missing": "미기록"}
+def grading_legend(rubric=None):
+    names = {
+        "0": "0 · 부족",
+        "1": "1 · 부분 충족",
+        "2": "2 · 충분",
+        "not_applicable": "N/A",
+        "error": "채점 오류",
+        "missing": "미기록",
+    }
+    if rubric and rubric["kind"] == "iron":
+        names.update({"0": "0 · 위반", "1": "1 · 준수"})
     return pn.pane.HTML(
         '<div style="display:flex;gap:18px;flex-wrap:wrap;font:12px system-ui">'
         + "".join(
@@ -642,6 +647,7 @@ def grading_legend():
             'vertical-align:middle;margin-right:5px"></i>'
             f"{escape(names.get(state, state))} ({symbol})</span>"
             for state, (color, symbol) in STATES.items()
+            if not (rubric and rubric["kind"] == "iron" and state == "2")
         )
         + "</div>"
     )

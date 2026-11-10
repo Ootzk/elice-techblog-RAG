@@ -13,15 +13,16 @@ from elice_knowledge.judges import frozen_judges
 from elice_knowledge.performance import summarize as performance_summary
 from elice_knowledge.qa import QARequest
 from elice_knowledge.ragas_metrics import contract
+from elice_knowledge.rubrics import load_rubric
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client as tracking_client
 
 SCORER = {
-    "name": "ragas-v1",
+    "name": "rubric-v1",
     "ragas": contract(),
-    "quality": "per-model-ragas-grading",
+    "quality": "shared-rubric-ordinal-grading",
     "answerability": "answered-status-vs-expected",
-    "version": 1,
+    "version": 2,
 }
 SCORER_KEY = digest(SCORER)
 
@@ -117,6 +118,7 @@ def enqueue_evaluation(store, request):
                         "scorer_key": SCORER_KEY,
                         "dataset_kind": kind,
                         "judges": judges,
+                        "rubric": load_rubric(kind),
                     }
                 ),
             ),

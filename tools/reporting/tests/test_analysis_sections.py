@@ -69,18 +69,18 @@ def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_defi
     assert "원본 grading" in text
     definitions = metric_guide(data)
     definition_text = "\n".join(p.object for p in definitions.select(pn.pane.HTML))
-    assert "generation_sources" in definition_text
+    assert "생성" in definition_text
     assert all("<table" in p.object for p in definitions.objects if isinstance(p, pn.pane.HTML))
     headings = [
         p.object
         for p in definitions.objects
         if isinstance(p, pn.pane.Markdown) and p.object.startswith("### ")
     ]
-    assert headings == ["### Grading · 개별 답변 채점", "### Analysis · 평가자 간 일치도"]
-    assert definitions.objects[1].object.startswith("- **원점수:**")
-    assert "- **통과 판정:**" in definitions.objects[1].object
-    assert "- **N/A:**" in definitions.objects[1].object
-    assert "- **오류/미기록:**" in definitions.objects[1].object
+    assert headings == ["### Grading · 공통 rubric 등급", "### Analysis · 평가자 간 일치도"]
+    assert definitions.objects[1].object.startswith("- **등급:**")
+    assert "- **판정:**" in definitions.objects[1].object
+    assert "- **N/A·오류·미기록:**" in definitions.objects[1].object
+    assert "- **진단 지표:**" in definitions.objects[1].object
     assert isinstance(definitions.objects[2], pn.pane.HTML)
     assert not definitions.select(pn.Accordion)
     assert "Fleiss" not in text and "우연 일치" in definition_text
@@ -92,7 +92,12 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
     data = deepcopy(demo("analysis"))
     grading = data.inputs["gradings"][2]
     old_digest = grading["rater_profile_digest"]
-    profile = {"type": "model", "scorers": [{"model": "gateway:/judge-claude"}]}
+    profile = {
+        "type": "model",
+        "scorers": [{"model": "gateway:/judge-claude"}],
+        "rubric": grading["rubric"],
+        "rubric_digest": grading["rubric_digest"],
+    }
     key = _digest(profile)
     grading["rater_profile_digest"] = key
     data.report["grading_run_ids"] = ["grading-1"]
@@ -108,7 +113,7 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
             else "grading"
             if run_id == "grading-1"
             else "answers",
-            "evaluation.schema": "evaluation-v1",
+            "evaluation.schema": "evaluation-v2",
             "source_run_id": data.report["source_run_id"],
             "source_bundle_digest": data.inputs["bundle"]["digest"],
             "rater_profile_digest": key,
@@ -171,6 +176,8 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
 
 
 def test_reason_filters_support_each_all_combination_and_escape_saved_reasons():
+    from html import unescape
+
     from elice_reporting.analysis_sections import rationale_browser, rationale_filter_code
 
     node = shutil.which("node")
@@ -179,13 +186,15 @@ def test_reason_filters_support_each_all_combination_and_escape_saved_reasons():
     script = (
         """
 const rater={value:'all'},dimension={value:'all'};
-const group_0={},group_1={},card_0_0={},card_0_1={},card_1_0={},card_1_1={};
+const group_0={},group_1={},table_0={},table_1={};
+const rows=[['<tr>human-c</tr>','<tr>model-c</tr>'],
+            ['<tr>human-g</tr>','<tr>model-g</tr>']];
+const start='<table>',end='</table>';
 function update(){
 """
-        + rationale_filter_code([2, 2])
+        + rationale_filter_code(2)
         + """
-return [[group_0.visible,group_1.visible],
-[card_0_0.visible,card_0_1.visible,card_1_0.visible,card_1_1.visible]];}
+return [[group_0.visible,group_1.visible],[table_0.text,table_1.text]];}
 const results=[update()];
 rater.value='0'; results.push(update());
 rater.value='all';dimension.value='1';results.push(update());
@@ -194,80 +203,48 @@ console.log(JSON.stringify(results));
 """
     )
     output = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
-    assert json.loads(output.stdout) == [
-        [[True, True], [True, True, True, True]],
-        [[True, False], [True, True, True, True]],
-        [[True, True], [False, True, False, True]],
-        [[False, True], [True, False, True, False]],
+    results = json.loads(output.stdout)
+    assert [row[0] for row in results] == [[True, True], [True, True], [False, True], [True, False]]
+    tables = [[unescape(table) for table in row[1]] for row in results]
+    assert tables[0] == [
+        "<table><tr>human-c</tr><tr>model-c</tr></table>",
+        "<table><tr>human-g</tr><tr>model-g</tr></table>",
     ]
+    assert tables[1][0] == "<table><tr>human-c</tr></table>"
+    assert tables[2] == tables[0]
+    assert tables[3][0] == "<table><tr>model-c</tr></table>"
+    # The callback must escape the complete table once for Panel's HTML model.
+    assert results[0][1][0].startswith("&lt;table&gt;")
     data = demo("analysis")
-    data.inputs["gradings"][0]["labels"][0]["rationale"] = "<script>unsafe()</script>"
-    view = rationale_browser(data, analysis_subjects(data), "0")
-    markup = "".join(p.object for p in view.select(pn.pane.HTML))
+    subjects = analysis_subjects(data)
+    first_model = next(s for s in subjects if s["rater"].startswith("model:"))
+    grading = next(g for g in data.inputs["gradings"] if g["rater_id"] == first_model["rater"])
+    grading["ratings"][0]["rationale"] = "<script>unsafe()</script>"
+    view = rationale_browser(data, subjects, "0")
+    panes = view.select(pn.pane.HTML)
+    markup = "".join(p.object for p in panes)
     assert "&lt;script&gt;unsafe()&lt;/script&gt;" in markup
     assert "<script>unsafe()" not in markup
+    tables = [p.object for p in panes if '<table class="rationale-table">' in p.object]
+    assert len(tables) == 4
+    assert all("<th>평가자</th><th>사유</th><th>점수</th>" in table for table in tables)
+    assert all(table.count("<img ") == 1 for table in tables)
+    assert first_model["icon"] in tables[0]
+    assert "groundedness" not in tables[2]  # Metric names belong to group headings only.
     assert len(view.select(pn.widgets.Select)) == 2
 
 
-def test_ragas_reasons_render_claim_verdict_and_reason_without_duplicate_extraction():
+def test_stored_ordinal_reason_is_escaped_without_reinterpreting_score():
     from elice_reporting.analysis_sections import rationale_markup
 
-    reason = json.dumps(
-        [
-            dict(response_model="ClaimDecompositionOutput", output=dict(claims=["claim <one>"])),
-            dict(
-                response_model="NLIStatementOutput",
-                output=dict(
-                    statements=[
-                        dict(
-                            statement="claim <one>",
-                            verdict=0,
-                            reason="Evidence does not support <script>bad</script>",
-                        )
-                    ]
-                ),
-            ),
-            dict(response_model="ClaimDecompositionOutput", output=dict(claims=["required fact"])),
-            dict(
-                response_model="NLIStatementOutput",
-                output=dict(
-                    statements=[
-                        dict(statement="required fact", verdict=1, reason="Included in the answer")
-                    ]
-                ),
-            ),
-        ]
-    )
-    html = rationale_markup(reason, "completeness")
-    assert "1. 답변 내용 검증" in html and "2. 필수 내용 누락 검사" in html
-    assert "감사 로그" in html and "중간 결과" in html
-    assert "사실 자체가 반드시 거짓" in html
-    assert html.count("claim &lt;one&gt;") == 1
-    assert html.count("required fact") == 1
-    assert "확인 못함" in html and "확인됨" in html
-    assert "Evidence does not support &lt;script&gt;bad&lt;/script&gt;" in html
-    assert "<script>bad</script>" not in html
-    assert "response_model" not in html and "ClaimDecompositionOutput" not in html
-    assert "<table" in html and "NLIStatementOutput" not in html
-    assert "&lt;b&gt;stored human comment&lt;/b&gt;" in rationale_markup(
-        "<b>stored human comment</b>", "correctness"
-    )
-    # Retain extraction that is not represented by the following verification.
-    mismatch = json.loads(reason)
-    mismatch[0]["output"]["claims"].append("unmatched claim")
-    assert "unmatched claim" in rationale_markup(json.dumps(mismatch), "completeness")
-
-
-def test_strict_recorded_threshold_is_explained_without_reclassifying_results():
+    text = "필수 항목 일부 누락. <script>unsafe()</script>"
+    html = rationale_markup(text)
+    assert "&lt;script&gt;unsafe()&lt;/script&gt;" in html
+    assert "<script>unsafe()" not in html
     data = demo("analysis")
-    data.inputs["profiles"] = {"model-profile": {"ragas": {"pass_threshold": 1.0}}}
-    text = metric_guide(data).objects[1].object
-    assert "0.99도 fail" in text and "프로젝트의 엄격한 이진 변환 기준" in text
-    assert "반올림" in text and "답변 전체가 틀렸다는 뜻은 아닙니다" in text
-    assert "κ" in text and "서로 다른 규칙" in text
-    data.inputs["profiles"]["model-profile"]["ragas"]["pass_threshold"] = 0.8
-    relaxed = metric_guide(data).objects[1].object
-    assert "0.99도 fail" not in relaxed and "0.8" in relaxed
+    notes = metric_guide(data).objects[1].object
+    assert "pass/fail 대신" in notes and "변환하지 않습니다" in notes
+    assert "0.99도 fail" not in notes
 
 
 def test_context_browser_preserves_exact_selected_text_and_distinguishes_search_only():
@@ -317,3 +294,36 @@ def test_context_empty_and_missing_are_not_conflated():
         )
     )
     assert len(changed.select(pn.widgets.Select)[0].options) == 2
+
+
+def test_grounding_guidance_distinguishes_no_context_from_missing_context():
+    from elice_reporting.analysis_sections import grounding_scope
+
+    empty = grounding_scope({"generation_sources": []}).object
+    assert "문맥 자료: 0개" in empty
+    assert "사실 주장 없이 답변을 유보" in empty and "N/A" in empty
+    assert "근거 없이 구체적인 사실" in empty and "0점" in empty
+    assert "질문 적합성" in empty
+    missing = grounding_scope({}).object
+    assert "미기록" in missing and "문맥 자료: 0개" not in missing
+    present = grounding_scope({"generation_sources": [{"text": "context"}]}).object
+    assert "문맥 자료: 1개" in present and "N/A" not in present
+
+
+def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context():
+    from elice_reporting.analysis_sections import grounding_scope
+
+    result = {
+        "status": "insufficient_evidence",
+        "generation_sources": [{"text": "related context"} for _ in range(14)],
+    }
+    before = deepcopy(result)
+    text = grounding_scope(result, {"answerable": False}).object
+    assert "문맥 자료: 14개" in text and "문맥 자료: 0개" not in text
+    assert "데이터셋 기준" in text and "질문에 답할 근거가 부족한 문항" in text
+    assert "자료가 전달됐더라도" in text
+    assert "근거 충실도 N/A" in text and "근거 충실도 0점" in text
+    assert "유보 응답이라도 구체적인 사실 주장" in text
+    assert result == before
+    # Runtime abstention also needs guidance, independently of the reference answerability.
+    assert "근거 충실도 N/A" in grounding_scope(result).object

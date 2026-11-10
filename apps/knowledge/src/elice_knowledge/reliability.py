@@ -1,46 +1,42 @@
-"""Library-backed nominal agreement with explicit cohorts and missing-value policy."""
+"""Library-backed ordinal agreement with explicit cohorts and missing-value policy."""
 
 import math
 from collections import Counter
 from importlib.metadata import version
 
-BINARY = {"fail": 0, "pass": 1}
 
-
-def protocol():
+def protocol(scale=(0, 1, 2)):
     return {
-        "name": "agreement-v1",
-        "cohen": "ragas.DiscreteMetric.get_correlation",
+        "name": "agreement-ordinal-v1",
+        "cohen": "sklearn.metrics.cohen_kappa_score",
         "fleiss": "statsmodels.stats.inter_rater.fleiss_kappa(method=fleiss)",
-        "krippendorff": "krippendorff.alpha(level_of_measurement=nominal)",
+        "krippendorff": "krippendorff.alpha(level_of_measurement=ordinal)",
         "versions": {
             p: version(p) for p in ("ragas", "scikit-learn", "statsmodels", "krippendorff")
         },
-        "measurement_level": "nominal",
-        "cohen_weights": None,
+        "measurement_level": "ordinal",
+        "fleiss_measurement_level": "nominal",
+        "scale": list(scale),
+        "cohen_weights": "linear",
         "minimum_cases": 2,
         "minimum_panel_subjects": 3,
         "minimum_alpha_ratings_per_case": 2,
         "panel_policy": "one_round_and_profile_per_subject",
-        "fleiss_cases": "all_selected_subjects_have_binary_labels",
-        "alpha_cases": "at_least_two_selected_subjects_have_binary_labels",
+        "fleiss_cases": "all_selected_subjects_have_scores",
+        "alpha_cases": "at_least_two_selected_subjects_have_scores",
         "excluded_statuses": ["not_applicable", "error", "pending_or_missing"],
         "primary_comparison": "human_model_cohen_kappa",
     }
 
 
-def cohen(left, right):
-    if len(left) < 2:
+def cohen(left, right, *, scale=(0, 1, 2), weights="linear"):
+    if len(left) != len(right) or len(left) < 2:
         return None, "insufficient_pairs"
     if len(set(left) | set(right)) < 2:
         return None, "constant_identical_labels"
-    from ragas.metrics import DiscreteMetric
+    from sklearn.metrics import cohen_kappa_score
 
-    value = float(
-        DiscreteMetric(name="agreement", allowed_values=["pass", "fail"]).get_correlation(
-            left, right
-        )
-    )
+    value = float(cohen_kappa_score(left, right, labels=list(scale), weights=weights))
     return (value, None) if math.isfinite(value) else (None, "non_finite_result")
 
 
@@ -57,14 +53,22 @@ def purpose(left, right, comparison):
     )
 
 
-def panel(selected, case_ids, *, scope):
+def panel(selected, case_ids, *, scope, scale=(0, 1, 2)):
     """Rows are selected grading rounds; columns are frozen answer records."""
     import numpy as np
 
     members = [dict(rater=key[1], profile_digest=key[2], round=key[3]) for key, _ in selected]
     counts = Counter(m["rater"] for m in members)
     matrix = np.array(
-        [[BINARY.get(labels.get(key), np.nan) for key in case_ids] for _, labels in selected],
+        [
+            [
+                labels.get(key)
+                if type(labels.get(key)) is int and labels.get(key) in scale
+                else np.nan
+                for key in case_ids
+            ]
+            for _, labels in selected
+        ],
         dtype=float,
     ).reshape(len(selected), len(case_ids))
     present = np.isfinite(matrix)
@@ -78,17 +82,17 @@ def panel(selected, case_ids, *, scope):
         "subjects": len(counts),
         "selected_gradings": len(selected),
         "total_cases": len(case_ids),
-        "complete_binary_cases": int(complete.sum()),
+        "complete_cases": int(complete.sum()),
         "pairable_cases": int(pairable.sum()),
         "fleiss_excluded_cases": int((~complete).sum()),
         "alpha_excluded_cases": int((~pairable).sum()),
-        "binary_ratings": int(present.sum()),
+        "valid_ratings": int(present.sum()),
         "alpha_effective_subjects": int(present[:, pairable].any(axis=1).sum()),
         "rater_coverage": [
             {
                 **member,
-                "binary_ratings": int(present[i].sum()),
-                "alpha_binary_ratings": int(present[i, pairable].sum()),
+                "valid_ratings": int(present[i].sum()),
+                "alpha_valid_ratings": int(present[i, pairable].sum()),
             }
             for i, member in enumerate(members)
         ],
@@ -132,14 +136,16 @@ def panel(selected, case_ids, *, scope):
         if field == "fleiss_kappa":
             from statsmodels.stats.inter_rater import fleiss_kappa
 
-            table = np.column_stack([(ratings == i).sum(axis=0) for i in (0, 1)])
+            table = np.column_stack([(ratings == i).sum(axis=0) for i in scale])
             value = float(fleiss_kappa(table, method="fleiss"))
         else:
             import krippendorff
 
             value = float(
                 krippendorff.alpha(
-                    reliability_data=ratings, value_domain=[0, 1], level_of_measurement="nominal"
+                    reliability_data=ratings,
+                    value_domain=list(scale),
+                    level_of_measurement="ordinal",
                 )
             )
         if math.isfinite(value):
@@ -149,7 +155,7 @@ def panel(selected, case_ids, *, scope):
     return result
 
 
-def multirater(selected, case_ids):
+def multirater(selected, case_ids, scale=(0, 1, 2)):
     """Report the selected panel and homogeneous subsets without pooling repetitions."""
     cohorts = [("all", selected)]
     humans = [row for row in selected if row[0][1].startswith("human:")]
@@ -158,7 +164,7 @@ def multirater(selected, case_ids):
         for name, rows in (("humans_only", humans), ("models_only", models)):
             if len({key[1] for key, _ in rows}) >= 3:
                 cohorts.append((name, rows))
-    return [panel(rows, case_ids, scope=name) for name, rows in cohorts]
+    return [panel(rows, case_ids, scope=name, scale=scale) for name, rows in cohorts]
 
 
 def report_metrics(report):
@@ -172,7 +178,10 @@ def report_metrics(report):
         for name in (
             "agreement",
             "cohen_kappa",
-            "binary_pairs",
+            "valid_pairs",
+            "cohen_kappa_unweighted",
+            "cohen_kappa_quadratic",
+            "mean_absolute_difference",
             "excluded_pairs",
             "paired_items",
             "unpaired_items",
@@ -189,12 +198,12 @@ def report_metrics(report):
             "krippendorff_alpha",
             "subjects",
             "total_cases",
-            "complete_binary_cases",
+            "complete_cases",
             "pairable_cases",
             "fleiss_excluded_cases",
             "alpha_excluded_cases",
             "alpha_effective_subjects",
-            "binary_ratings",
+            "valid_ratings",
             "not_applicable_ratings",
             "error_ratings",
             "missing_ratings",

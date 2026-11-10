@@ -13,15 +13,18 @@ from test_reliability import source_with_four_cases
 from elice_knowledge.agreement import analyze
 from elice_knowledge.comparison import compare, comparison_metrics, scalar
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import SCHEMA, answer_digest
+from elice_knowledge.evaluation_bundle import answer_digest
+from elice_knowledge.evaluation_schema import SCHEMA
 from elice_knowledge.judges import DIMENSIONS
-from elice_knowledge.ragas_metrics import CONTEXT_METRICS
+from elice_knowledge.ragas_metrics import DIAGNOSTICS
+from elice_knowledge.rubrics import load_rubric
 
 
 def refresh(snapshot):
     report = analyze(
         snapshot["bundle"],
-        [label for grading in snapshot["gradings"] for label in grading["labels"]],
+        [r for g in snapshot["gradings"] for r in g["ratings"]],
+        snapshot["gradings"][0]["rubric"],
     )
     snapshot["analysis"] = {**report, "schema": SCHEMA, "grading_run_ids": []}
     return snapshot
@@ -46,9 +49,9 @@ def frozen(name, *, patterns=None, source=None, failed=(), ids=None):
                 c.update(error="generation_failed", result=None)
         bundle["digest"] = digest({k: v for k, v in bundle.items() if k != "digest"})
     patterns = patterns or {
-        "human:alice": ["pass", "pass", "fail", "pass"],
-        "model:chatgpt": ["pass", "fail", "fail", "pass"],
-        "model:claude": ["fail", "fail", "fail", "pass"],
+        "human:alice": [2, 2, 0, 2],
+        "model:chatgpt": [2, 0, 0, 2],
+        "model:claude": [0, 0, 0, 2],
     }
     records = {r["id"]: r for r in bundle["records"]}
     grades = []
@@ -69,22 +72,20 @@ def frozen(name, *, patterns=None, source=None, failed=(), ids=None):
                         rater=rater,
                         round="1",
                         protocol=profile,
-                        label=values[int(key)],
+                        score=values[int(key)] if type(values[int(key)]) is int else None,
+                        status="scored" if type(values[int(key)]) is int else values[int(key)],
                         rationale="fixture",
                     )
                 )
             if kind == "model":
-                for dimension in (*DIMENSIONS["gold"], *CONTEXT_METRICS):
-                    value = (
-                        int(values[int(key)] == "pass") if dimension in DIMENSIONS["gold"] else 1
-                    )
+                for dimension in DIAGNOSTICS:
                     measurements.append(
                         dict(
                             record_id=key,
                             metric=dimension,
+                            score=1.0,
                             status="scored",
-                            score=value,
-                            rationale="fixture",
+                            rationale="diagnostic fixture",
                         )
                     )
         grade = dict(
@@ -96,11 +97,14 @@ def frozen(name, *, patterns=None, source=None, failed=(), ids=None):
             rater_profile_digest=profile,
             round=1,
             complete=True,
-            labels=labels,
+            ratings=labels,
+            contract="rubric-v1",
+            rubric=load_rubric("gold"),
+            rubric_digest=digest(load_rubric("gold")),
+            diagnostics=kind == "model",
+            measurement_contract="ragas-diagnostics-v1",
             measurements=measurements,
         )
-        if kind == "model":
-            grade["measurement_contract"] = "ragas-v1"
         grades.append(grade)
     return refresh(
         dict(analysis_run_id="analysis-" + name, experiment_id="9", bundle=bundle, gradings=grades)
@@ -122,9 +126,9 @@ def run(left, right, **kwargs):
 def test_paired_quality_resources_intervals_and_content_digest():
     a = frozen("a")
     patterns = {
-        "human:alice": ["pass", "pass", "fail", "pass"],
-        "model:chatgpt": ["pass", "pass", "fail", "pass"],
-        "model:claude": ["fail", "fail", "fail", "pass"],
+        "human:alice": [2, 2, 0, 2],
+        "model:chatgpt": [2, 2, 0, 2],
+        "model:claude": [0, 0, 0, 2],
     }
     source = deepcopy(a["bundle"])
     source["source_run_id"] = "answers-b"
@@ -138,9 +142,9 @@ def test_paired_quality_resources_intervals_and_content_digest():
     row = next(
         r
         for r in report["quality"]
-        if r["rater"] == "model:chatgpt" and r["metric"] == "quality.correctness.pass_rate"
+        if r["rater"] == "model:chatgpt" and r["metric"] == "rubric.correctness.mean"
     )
-    assert row["delta_mean"] == 0.25 and row["paired_cases"] == 4
+    assert row["delta_mean"] == 0.5 and row["paired_cases"] == 4
     assert row["counts"] == {"improved": 1, "regressed": 0, "tie": 3}
     assert row["confidence_interval"] is not None
     assert (
@@ -156,7 +160,7 @@ def test_paired_quality_resources_intervals_and_content_digest():
     assert report["digest"] == digest({k: v for k, v in report.items() if k != "digest"})
     assert run(a, b) == report
     assert all(math.isfinite(v) for v in comparison_metrics(report).values())
-    assert any("ragas.correctness.mean.delta_mean" in k for k in comparison_metrics(report))
+    assert any("ragas.factual_precision.mean.delta_mean" in k for k in comparison_metrics(report))
     json.dumps(report, allow_nan=False)
 
 
@@ -200,7 +204,7 @@ def test_incompatible_or_stale_inputs_are_rejected(change, match):
     elif change == "profile":
         g = b["gradings"][1]
         g["rater_profile_digest"] = digest("changed")
-        for row in g["labels"]:
+        for row in g["ratings"]:
             row["protocol"] = g["rater_profile_digest"]
         refresh(b)
     elif change == "duplicate":
@@ -217,7 +221,7 @@ def test_judge_comparison_freezes_answers_and_human_votes_and_labels_score_shift
     b["analysis_run_id"] = "analysis-b"
     g = b["gradings"][1]
     g["rater_profile_digest"] = digest("judge-v2")
-    for row in g["labels"]:
+    for row in g["ratings"]:
         row["protocol"] = g["rater_profile_digest"]
     refresh(b)
     report = run(a, b, purpose="judge")
@@ -227,7 +231,7 @@ def test_judge_comparison_freezes_answers_and_human_votes_and_labels_score_shift
     with pytest.raises(ValueError, match="same_frozen_answers"):
         run(a, frozen("other"), purpose="judge")
     human = b["gradings"][0]
-    human["labels"][0]["label"] = "fail"
+    human["ratings"][0]["score"] = 0
     refresh(b)
     with pytest.raises(ValueError, match="human_reference_changed"):
         run(a, b, purpose="judge")
@@ -262,7 +266,7 @@ def test_cli_local_preview_and_independent_comparison_run(tmp_path, monkeypatch,
                 "source_bundle_digest": source["digest"],
             }
         else:
-            tags = {"evaluation.kind": "answers", "evaluation.schema": SCHEMA}
+            tags = {"evaluation.kind": "answers", "evaluation.schema": "evaluation-v1"}
         return SimpleNamespace(
             info=SimpleNamespace(status="FINISHED", experiment_id="9"),
             data=SimpleNamespace(tags=tags),
@@ -324,9 +328,9 @@ def test_cli_local_preview_and_independent_comparison_run(tmp_path, monkeypatch,
 def test_reliability_uses_common_observers_and_keeps_original_exclusions_visible():
     a, b = frozen("a"), frozen("b")
     grade = b["gradings"][1]
-    for row in grade["labels"]:
+    for row in grade["ratings"]:
         if row["record_id"] == "0" and row["dimension"] == "groundedness":
-            row["label"] = "not_applicable"
+            row.update(score=None, status="not_applicable")
     for row in grade["measurements"]:
         if row["record_id"] == "0" and row["metric"] == "groundedness":
             row.update(status="not_applicable", score=None)
@@ -348,15 +352,11 @@ def test_reliability_uses_common_observers_and_keeps_original_exclusions_visible
     )
     assert (
         support["candidate"] == "not_applicable"
-        and support["baseline"] == "pass"
+        and support["baseline"] == 2
         and not support["included"]
     )
     panel = next(p for p in report["reliability"]["panels"] if p["dimension"] == "groundedness")
-    assert (
-        panel["baseline"]["complete_binary_cases"]
-        == panel["candidate"]["complete_binary_cases"]
-        == 3
-    )
+    assert panel["baseline"]["complete_cases"] == panel["candidate"]["complete_cases"] == 3
     assert panel["baseline"]["pairable_cases"] == panel["candidate"]["pairable_cases"] == 4
 
 
@@ -420,7 +420,7 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
         profile = {"type": g["rater_type"], "name": g["rater_id"]}
         key = digest(profile)
         g["rater_profile_digest"] = key
-        for label in g["labels"]:
+        for label in g["ratings"]:
             label["protocol"] = key
         profiles[key] = profile
     refresh(data)
@@ -444,7 +444,7 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
                 "source_bundle_digest": data["bundle"]["digest"],
             }
         else:
-            tags = {"evaluation.kind": "answers", "evaluation.schema": SCHEMA}
+            tags = {"evaluation.kind": "answers", "evaluation.schema": "evaluation-v1"}
         return SimpleNamespace(
             info=SimpleNamespace(status="FINISHED", experiment_id="9"),
             data=SimpleNamespace(tags=tags),
@@ -481,7 +481,7 @@ def test_judge_comparison_saves_profile_changes_without_treating_scores_as_quali
     key = digest(old)
     g = a["gradings"][1]
     g["rater_profile_digest"] = key
-    for label in g["labels"]:
+    for label in g["ratings"]:
         label["protocol"] = key
     a["profiles"] = {key: old}
     refresh(a)
@@ -491,7 +491,7 @@ def test_judge_comparison_saves_profile_changes_without_treating_scores_as_quali
     key = digest(new)
     g = b["gradings"][1]
     g["rater_profile_digest"] = key
-    for label in g["labels"]:
+    for label in g["ratings"]:
         label["protocol"] = key
     b["profiles"] = {key: new}
     refresh(b)

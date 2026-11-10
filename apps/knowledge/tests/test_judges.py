@@ -85,9 +85,13 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
     monkeypatch.setattr("mlflow.start_run", lambda **kw: nullcontext())
 
-    async def metric(settings, model, dimension, data, rubric, *, request_options=None):
+    async def metric(
+        settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+    ):
         calls.append((dimension, data))
-        return (None if broken[0] else 0.75 if dimension == "completeness" else 1.0), "reason", None
+        if dimension == "groundedness" and "insufficient_evidence" in str(data):
+            return "not_applicable", "No factual assertions", None
+        return (None if broken[0] else "1" if dimension == "completeness" else "2"), "reason", None
 
     def evaluate(**kwargs):
         rows = []
@@ -107,8 +111,8 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     )
     _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
     assert [r["record_id"] for r in rows] == ["r1", "r2"]
-    assert rows[0]["judges"]["completeness"]["status"] == "fail"
-    assert rows[0]["measurements"][1]["score"] == 0.75
+    assert rows[0]["judges"]["completeness"]["score"] == 1
+    assert rows[0]["measurements"] == []
     assert rows[1]["judges"]["correctness"]["status"] == "not_applicable"
     assert rows[1]["judges"]["groundedness"]["status"] == "not_applicable"
     for dimension, data in calls:
@@ -146,7 +150,9 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
     barrier, lock = Barrier(4), Lock()
     active, peak, calls = 0, 0, []
 
-    async def metric(settings, model, dimension, data, rubric, *, request_options=None):
+    async def metric(
+        settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+    ):
         nonlocal active, peak
         with lock:
             active += 1
@@ -156,7 +162,7 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
             barrier.wait(timeout=15)
             if dimension == "relevance":
                 raise RuntimeError("fake scorer failure")
-            return 1.0, "fake judgment", None
+            return "2", "fake judgment", None
         finally:
             with lock:
                 active -= 1
@@ -174,10 +180,10 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
             model_specs(),
             raise_on_error=False,
         )
-        assert peak == 4 and active == 0 and len(calls) == 16
+        assert peak == 4 and active == 0 and len(calls) == 8
         assert results[0]["judges"]["relevance"]["status"] == "error"
-        assert results[0]["judges"]["correctness"]["status"] == "pass"
-        assert len(results[0]["measurements"]) == 8
+        assert results[0]["judges"]["correctness"]["score"] == 2
+        assert results[0]["measurements"] == []
         assert len(tracking.search_runs([experiment])) == 1
         assert mlflow.active_run() is None
     finally:

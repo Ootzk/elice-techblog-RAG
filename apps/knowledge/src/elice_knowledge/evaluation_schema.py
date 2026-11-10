@@ -1,30 +1,48 @@
-"""Shared grading manifest, validation and neutral metrics for models and people."""
+"""Shared rubric-based grading with explicit ordinal scores and diagnostic measurements."""
 
 import math
 import re
 from numbers import Real
 
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import SCHEMA, answer_digest, validate_bundle
-from elice_knowledge.judges import DIMENSIONS, inapplicable
+from elice_knowledge.evaluation_bundle import SCHEMA as ANSWERS_SCHEMA
+from elice_knowledge.evaluation_bundle import answer_digest, validate_bundle
+from elice_knowledge.judges import DIMENSIONS, inapplicable, offline_instructions
+from elice_knowledge.rubrics import CONTRACT, snapshot, validate_rubric
+
+SCHEMA = "evaluation-v2"
 
 
 def tags(kind, **values):
-    return {"evaluation.schema": SCHEMA, "evaluation.kind": kind, **values}
+    return {
+        "evaluation.schema": ANSWERS_SCHEMA if kind == "answers" else SCHEMA,
+        "evaluation.kind": kind,
+        **values,
+    }
 
 
-def human_profile(bundle):
-    return {"type": "human", "rubrics": bundle["rubrics"], "contract": "dimension-v1"}
+def human_profile(bundle, rubric=None):
+    rubric = snapshot(bundle, rubric)
+    return {
+        "type": "human",
+        "rubric": rubric,
+        "rubric_digest": digest(rubric),
+        "contract": CONTRACT,
+    }
 
 
-def model_profile(bundle, specs):
+def model_profile(bundle, specs, *, rubric=None, diagnostics=False):
+    rubric = snapshot(bundle, rubric)
     if (
         not specs
         or len({s["rater"] for s in specs}) != 1
         or {s["dimension"] for s in specs} != set(DIMENSIONS[bundle["kind"]])
         or len(specs) != len(DIMENSIONS[bundle["kind"]])
         or len({s["model"] for s in specs}) != 1
-        or any(s["instructions"] != bundle["rubrics"][s["dimension"]] for s in specs)
+        or any(
+            s["instructions"] != offline_instructions(bundle["kind"], s["dimension"], rubric)
+            for s in specs
+        )
     ):
         raise ValueError("rater_profile_mismatch")
     from elice_knowledge.ragas_metrics import contract
@@ -32,19 +50,38 @@ def model_profile(bundle, specs):
     return {
         "ragas": contract(),
         "type": "model",
+        "rubric": rubric,
+        "rubric_digest": digest(rubric),
+        "diagnostics": diagnostics,
         "scorers": sorted(specs, key=lambda s: s["dimension"]),
-        "contract": "dimension-v1",
+        "contract": CONTRACT,
     }
+
+
+def validate_rating(rating, scale, *, draft=False):
+    status, score = rating.get("status"), rating.get("score")
+    if draft and status == "pending" and score is None:
+        return
+    if status not in {"scored", "not_applicable", "error"}:
+        raise ValueError("invalid_rating_status")
+    if (status == "scored" and (type(score) is not int or score not in scale)) or (
+        status != "scored" and score is not None
+    ):
+        raise ValueError("invalid_rating_score")
 
 
 def validate_grading(bundle, result):
     validate_bundle(bundle)
     if (
         result.get("schema") != SCHEMA
+        or result.get("contract") != CONTRACT
         or result.get("source_run_id") != bundle["source_run_id"]
-        or (result.get("source_bundle_digest") != bundle["digest"])
+        or result.get("source_bundle_digest") != bundle["digest"]
     ):
         raise ValueError("grading_source_mismatch")
+    rubric = validate_rubric(result.get("rubric", {}), bundle["kind"])
+    if result.get("rubric_digest") != digest(rubric):
+        raise ValueError("grading_rubric_mismatch")
     kind = result.get("rater_type")
     if kind not in {"human", "model"} or not result.get("rater_id", "").startswith(kind + ":"):
         raise ValueError("grading_rater_mismatch")
@@ -52,16 +89,17 @@ def validate_grading(bundle, result):
         raise ValueError("grading_round_invalid")
     if (
         type(result.get("complete")) is not bool
-        or not isinstance(result.get("labels"), list)
+        or not isinstance(result.get("ratings"), list)
         or not re.fullmatch(r"[a-f0-9]{64}", result.get("rater_profile_digest", ""))
     ):
         raise ValueError("grading_manifest_invalid")
     records = {r["id"]: r for r in bundle["records"]}
     cases = {c["record_id"]: c for c in bundle["cases"] if not c["error"]}
-    expected = {(key, dimension) for key in cases for dimension in DIMENSIONS[bundle["kind"]]}
+    expected = {(key, d) for key in cases for d in DIMENSIONS[bundle["kind"]]}
     seen = set()
-    for row in result["labels"]:
+    for row in result["ratings"]:
         key = (row["record_id"], row["dimension"])
+        validate_rating(row, rubric["scale"])
         if (
             key not in expected
             or key in seen
@@ -69,31 +107,26 @@ def validate_grading(bundle, result):
             or row["rater"] != result["rater_id"]
             or row["round"] != str(result["round"])
             or row["protocol"] != result["rater_profile_digest"]
-            or row["label"] not in {"pass", "fail", "not_applicable", "error"}
         ):
-            raise ValueError("grading_label_mismatch")
+            raise ValueError("grading_rating_mismatch")
         seen.add(key)
         if (
-            row["label"] != "error"
+            row["status"] != "error"
             and inapplicable(records[key[0]], cases[key[0]], key[1])
-            and row["label"] != "not_applicable"
-        ) or (key[1] == "behavior" and row["label"] == "not_applicable"):
+            and row["status"] != "not_applicable"
+        ) or (key[1] in {"behavior", "relevance"} and row["status"] == "not_applicable"):
             raise ValueError("grading_applicability_mismatch")
     if result["complete"] and seen != expected:
         raise ValueError("grading_incomplete")
-    from elice_knowledge.ragas_metrics import CONTEXT_METRICS, PASS_THRESHOLD
+    from elice_knowledge.ragas_metrics import DIAGNOSTICS
 
-    allowed = set(DIMENSIONS[bundle["kind"]]) | (
-        set(CONTEXT_METRICS) if bundle["kind"] == "gold" else set()
-    )
     measured = set()
     for cell in result.get("measurements", []):
-        key = (cell.get("record_id"), cell.get("metric"))
-        value = cell.get("score")
+        key, value = (cell.get("record_id"), cell.get("metric")), cell.get("score")
         if (
             kind != "model"
             or key[0] not in cases
-            or key[1] not in allowed
+            or key[1] not in DIAGNOSTICS
             or key in measured
             or cell.get("status") not in {"scored", "not_applicable", "error"}
             or (
@@ -109,44 +142,42 @@ def validate_grading(bundle, result):
         ):
             raise ValueError("grading_measurement_mismatch")
         measured.add(key)
-    if kind == "model":
-        if result.get("measurement_contract") != "ragas-v1":
-            raise ValueError("unsupported_grading_metrics")
-        if result["complete"] and measured != {
-            (key, metric) for key in cases for metric in allowed
-        }:
-            raise ValueError("grading_measurements_incomplete")
-        labels = {(r["record_id"], r["dimension"]): r["label"] for r in result["labels"]}
-        for cell in result["measurements"]:
-            key = (cell["record_id"], cell["metric"])
-            if key in labels:
-                expected_label = (
-                    ("pass" if cell["score"] >= PASS_THRESHOLD else "fail")
-                    if cell["status"] == "scored"
-                    else cell["status"]
-                )
-                if labels[key] != expected_label:
-                    raise ValueError("grading_score_label_mismatch")
+    if result.get("measurement_contract") != "ragas-diagnostics-v1":
+        raise ValueError("unsupported_grading_metrics")
+    if (
+        result["complete"]
+        and result.get("diagnostics")
+        and measured != {(key, metric) for key in cases for metric in DIAGNOSTICS}
+    ):
+        raise ValueError("grading_measurements_incomplete")
+    if not result.get("diagnostics") and measured:
+        raise ValueError("unexpected_diagnostics")
     return result
 
 
-def grading_result(bundle, grading, labels, measurements=()):
+def grading_result(bundle, grading, ratings, measurements=()):
+    profile = grading["profile"]
     expected = sum(not c["error"] for c in bundle["cases"]) * len(DIMENSIONS[bundle["kind"]])
-    result = {
-        "schema": SCHEMA,
-        "source_run_id": bundle["source_run_id"],
-        "source_bundle_digest": bundle["digest"],
-        "rater_type": grading["rater_type"],
-        "rater_id": grading["rater_id"],
-        "rater_profile_digest": grading["profile_digest"],
-        "round": grading["round"],
-        "complete": len(labels) == expected,
-        "labels": labels,
-        "measurements": list(measurements),
-    }
-    if grading["rater_type"] == "model":
-        result["measurement_contract"] = "ragas-v1"
-    return validate_grading(bundle, result)
+    return validate_grading(
+        bundle,
+        {
+            "schema": SCHEMA,
+            "contract": CONTRACT,
+            "source_run_id": bundle["source_run_id"],
+            "source_bundle_digest": bundle["digest"],
+            "rater_type": grading["rater_type"],
+            "rater_id": grading["rater_id"],
+            "rater_profile_digest": grading["profile_digest"],
+            "round": grading["round"],
+            "rubric": profile["rubric"],
+            "rubric_digest": profile["rubric_digest"],
+            "complete": len(ratings) == expected,
+            "ratings": ratings,
+            "diagnostics": profile.get("diagnostics", False),
+            "measurement_contract": "ragas-diagnostics-v1",
+            "measurements": list(measurements),
+        },
+    )
 
 
 def metrics(bundle, result):
@@ -154,19 +185,21 @@ def metrics(bundle, result):
     count = sum(not c["error"] for c in bundle["cases"])
     values = {"source_failed_cases": len(bundle["cases"]) - count}
     for dimension in DIMENSIONS[bundle["kind"]]:
-        statuses = [r["label"] for r in result["labels"] if r["dimension"] == dimension]
-        scored = statuses.count("pass") + statuses.count("fail")
-        prefix = "quality." + dimension + "."
+        rows = [r for r in result["ratings"] if r["dimension"] == dimension]
+        scores = [r["score"] for r in rows if r["status"] == "scored"]
+        prefix = "rubric." + dimension + "."
         values.update(
             {
-                prefix + "scored_cases": scored,
-                prefix + "not_applicable_cases": statuses.count("not_applicable"),
-                prefix + "error_cases": statuses.count("error"),
-                prefix + "pending_cases": count - len(statuses),
+                prefix + "scored_cases": len(scores),
+                prefix + "not_applicable_cases": sum(r["status"] == "not_applicable" for r in rows),
+                prefix + "error_cases": sum(r["status"] == "error" for r in rows),
+                prefix + "pending_cases": count - len(rows),
             }
         )
-        if scored:
-            values[prefix + "pass_rate"] = statuses.count("pass") / scored
+        for score in result["rubric"]["scale"]:
+            values[prefix + f"score_{score}_count"] = scores.count(score)
+        if scores:
+            values[prefix + "mean"] = sum(scores) / len(scores)
     return values
 
 

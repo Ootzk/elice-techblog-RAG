@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 
 from elice_knowledge.comparison import compare, comparison_metrics
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import SCHEMA
-from elice_knowledge.evaluation_schema import tags
+from elice_knowledge.evaluation_bundle import SCHEMA as ANSWERS_SCHEMA
+from elice_knowledge.evaluation_schema import SCHEMA, tags
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import client
 
@@ -32,7 +32,7 @@ def snapshot(tracking, run_id, directory):
     original = tracking.get_run(source)
     if (
         original.data.tags.get("evaluation.kind") != "answers"
-        or original.data.tags.get("evaluation.schema") != SCHEMA
+        or original.data.tags.get("evaluation.schema") != ANSWERS_SCHEMA
         or original.info.status not in {"FINISHED", "FAILED"}
         or run.data.tags.get("source_run_id") != source
     ):

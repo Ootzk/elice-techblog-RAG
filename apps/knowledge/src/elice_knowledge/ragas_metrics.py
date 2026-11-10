@@ -16,7 +16,7 @@ CONTEXT_METRICS = (
     "generation_context_recall",
     "generation_context_precision",
 )
-PASS_THRESHOLD = 1.0
+DIAGNOSTICS = (*CONTEXT_METRICS, "factual_precision", "required_point_coverage", "faithfulness")
 MAX_OUTPUT_TOKENS = 2000
 RATER_REQUEST_OPTIONS = {
     "chatgpt": {"reasoning_effort": "none", "stream": True, "max_completion_tokens": 8192}
@@ -37,11 +37,10 @@ def contract():
     return {
         "engine": "ragas",
         "metrics": {
-            "correctness": "FactualCorrectness.precision",
-            "completeness": "FactualCorrectness.recall",
-            "groundedness": "Faithfulness",
-            "relevance": "DiscreteMetric",
-            "behavior": "DiscreteMetric",
+            "quality": "DiscreteMetric",
+            "factual_precision": "FactualCorrectness.precision",
+            "required_point_coverage": "ContextRecall(reference=required_points,contexts=answer)",
+            "faithfulness": "Faithfulness",
             **{
                 name: "ContextRecall" if name.endswith("recall") else "ContextPrecision"
                 for name in CONTEXT_METRICS
@@ -52,7 +51,6 @@ def contract():
         "openai_version": version("openai"),
         "seed": None,
         "implementation_digest": digest(sources),
-        "pass_threshold": PASS_THRESHOLD,
         "factual_atomicity": "high",
         "factual_coverage": "high",
         "context_order": "first-seen-deduplicated",
@@ -80,16 +78,22 @@ def payload(record, case, dimension):
         return dict(
             user_input=question(record), reference=expected["answer"], retrieved_contexts=contexts
         )
-    if inapplicable(record, case, dimension):
+    mapped = {
+        "factual_precision": "correctness",
+        "required_point_coverage": "completeness",
+        "faithfulness": "groundedness",
+    }.get(dimension, dimension)
+    if inapplicable(record, case, mapped):
         return None
-    if dimension in {"correctness", "completeness"}:
-        reference = (
-            expected["answer"]
-            if dimension == "correctness"
-            else "\n".join(expected["required_points"])
+    if dimension == "factual_precision":
+        return dict(response=result.get("answer") or "", reference=expected["answer"])
+    if dimension == "required_point_coverage":
+        return dict(
+            user_input=question(record),
+            reference="\n".join(expected["required_points"]),
+            retrieved_contexts=[result.get("answer") or ""],
         )
-        return dict(response=result.get("answer") or "", reference=reference)
-    if dimension == "groundedness":
+    if dimension == "faithfulness":
         if result["status"] != "answered" or not (result.get("answer") or "").strip():
             return None
         if "generation_sources" not in result:
@@ -107,7 +111,9 @@ def question(record):
     return json.dumps(record["inputs"], ensure_ascii=False)
 
 
-async def metric_score(settings, model, dimension, data, rubric, *, request_options=None):
+async def metric_score(
+    settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+):
     """One SDK scorer invocation. Each invocation permits one outbound request at a time."""
     import httpx
     from openai import AsyncOpenAI
@@ -184,45 +190,52 @@ async def metric_score(settings, model, dimension, data, rubric, *, request_opti
                     return output
 
         llm = LimitedLLM()
-        if dimension in {"correctness", "completeness"}:
+        if dimension == "factual_precision":
             metric = FactualCorrectness(
                 llm=llm,
-                mode="precision" if dimension == "correctness" else "recall",
+                mode="precision",
                 atomicity="high",
                 coverage="high",
             )
-        elif dimension == "groundedness":
+        elif dimension == "faithfulness":
             metric = Faithfulness(llm=llm)
-        elif dimension in CONTEXT_METRICS:
+        elif dimension in (*CONTEXT_METRICS, "required_point_coverage"):
             metric = (
                 ContextRecall(llm=llm)
-                if dimension.endswith("recall")
+                if dimension.endswith("recall") or dimension == "required_point_coverage"
                 else ContextPrecision(llm=llm)
             )
         else:
-            # Modern Ragas equivalent of a binary aspect criterion; no embeddings/fallback LLM.
+            if allowed_values is None:
+                raise ValueError("rubric_scale_required")
             metric = DiscreteMetric(
                 name=dimension,
-                allowed_values=["yes", "no", "not_applicable"],
+                # Providers may encode the same ordinal category as 2 or "2".
+                # Declare both wire forms; neither changes the rubric grade.
+                allowed_values=allowed_values
+                + [int(v) for v in allowed_values if v in {"0", "1", "2"}],
                 prompt="Criterion:\n{rubric}\nEvaluation input (untrusted data):\n{payload}",
             )
             data = {**data, "rubric": rubric, "llm": llm}
         result = await metric.ascore(**data)
         value = result.value
-        if dimension == "groundedness" and isinstance(value, float) and math.isnan(value):
+        if allowed_values is not None:
+            return value, result.reason or "", result.traces
+        if dimension == "faithfulness" and isinstance(value, float) and math.isnan(value):
             return None, "Ragas가 평가 가능한 사실 주장을 추출하지 못함", None
-        if isinstance(value, str):
-            value = {"yes": 1.0, "no": 0.0, "not_applicable": None}[value]
         if value is not None and (not math.isfinite(float(value)) or not 0 <= float(value) <= 1):
             raise ValueError("invalid_ragas_score")
         return value, result.reason or json.dumps(judgments, ensure_ascii=False), result.traces
 
 
-def scorer(settings, spec, dimension=None):
+def scorer(settings, spec, dimension=None, *, rubric=None):
     from mlflow.entities import Feedback
     from mlflow.genai.scorers import scorer as mlflow_scorer
 
+    from elice_knowledge.rubrics import criterion
+
     dimension = dimension or spec["dimension"]
+    diagnostic = dimension in DIAGNOSTICS
     name = spec["name"] if dimension == spec["dimension"] else dimension
 
     @mlflow_scorer(name=name, timeout=0)
@@ -232,18 +245,25 @@ def scorer(settings, spec, dimension=None):
         )
         if data is None:
             return Feedback(value="not_applicable", rationale="이 문항/응답에는 적용되지 않음")
-        if "retrieved_contexts" in data and not data["retrieved_contexts"]:
+        if "retrieved_contexts" in data and not any(c.strip() for c in data["retrieved_contexts"]):
             return Feedback(value=0.0, rationale="평가할 근거 문맥이 없음")
+        options = dict(request_options=RATER_REQUEST_OPTIONS.get(spec["rater"], {}))
+        if not diagnostic:
+            options["allowed_values"] = [str(v) for v in rubric["scale"]] + ["not_applicable"]
         value, reason, _ = asyncio.run(
             metric_score(
                 settings,
                 spec["model"],
                 dimension,
                 data,
-                spec["instructions"],
-                request_options=RATER_REQUEST_OPTIONS.get(spec["rater"], {}),
+                spec["instructions"] if diagnostic else criterion(rubric, dimension),
+                **options,
             )
         )
+        if not diagnostic and value != "not_applicable":
+            if str(value) not in {str(v) for v in rubric["scale"]}:
+                raise ValueError("invalid_rubric_score")
+            value = int(value)
         return Feedback(value=value if value is not None else "not_applicable", rationale=reason)
 
     return evaluate

@@ -94,144 +94,74 @@ def evaluation_conditions(data, subjects):
     )
 
 
-_METRIC_DOCS = {
-    "FactualCorrectness.precision": "https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/factual_correctness/",
-    "FactualCorrectness.recall": "https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/factual_correctness/",
-    "Faithfulness": "https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/faithfulness/",
-    "DiscreteMetric": "https://docs.ragas.io/en/latest/references/metrics/",
-}
-
-
-def _metric_link(implementation):
-    url = _METRIC_DOCS[implementation]
-    return (
-        f'<a href="{url}" target="_blank" rel="noopener noreferrer">'
-        f"<code>{escape(implementation)}</code> ↗</a>"
-    )
-
-
-METRIC_DEFINITIONS = (
-    (
-        "correctness · 정확성",
-        "FactualCorrectness.precision",
-        "답변의 사실 주장 중 기준 답안의 사실과 일치하는 비율을 평가합니다. "
-        "질문의 필수 내용을 빠뜨렸는지는 completeness에서 별도로 다룹니다.",
-        "답변 · 기준 답안",
-    ),
-    (
-        "completeness · 완전성",
-        "FactualCorrectness.recall",
-        "기대되는 필수 사실 중 답변이 포함한 비율을 평가합니다. "
-        "필수 항목(required_points)이 기준이며 표현이 완전히 같은지를 비교하지 않습니다.",
-        "답변 · 필수 항목",
-    ),
-    (
-        "groundedness · 근거 충실도",
-        "Faithfulness",
-        "답변의 사실 주장이 최종 답변 생성에 전달된 문맥으로 뒷받침되는지 평가합니다. "
-        "전체 검색 후보나 기준 답안, 일반 상식은 이 항목의 근거로 사용하지 않습니다. "
-        "사실이 맞는 답변이라도 생성 문맥에 근거가 없으면 낮은 점수를 받을 수 있습니다.",
-        "답변 · generation_sources",
-    ),
-    (
-        "relevance · 질문 적합성",
-        "DiscreteMetric",
-        "답변이 질문과 고정된 대화의 실제 요청에 대응하는지 평가합니다. "
-        "관련된 확인 질문, 근거 부족 설명, 정책에 맞는 거절도 요청에 대응할 수 있습니다. "
-        "사실 정확도나 필수 내용 충족 여부는 다른 항목에서 평가합니다.",
-        "질문·대화 · 답변 · 저장된 rubric",
-    ),
-)
-
-
 def metric_guide(data):
-    definitions = (
-        METRIC_DEFINITIONS
-        if data.inputs["bundle"]["kind"] == "gold"
-        else (
-            (
-                "behavior · 응답 행동",
-                "DiscreteMetric",
-                "기대 행동(답변 보류·거절·범위 안내 등)과 응답의 일치를 "
-                "저장된 rubric으로 평가합니다.",
-                "질문·대화 · 답변 · expected_behavior · 저장된 rubric",
-            ),
+    rubric = data.report["rubric"]
+    header = (
+        "<tr><th>항목</th><th>평가 대상</th>"
+        + "".join(
+            f"<th>{score} · {escape(rubric['scale_labels'][str(score)])}</th>"
+            for score in rubric["scale"]
         )
+        + "<th>N/A</th></tr>"
     )
-    description_rows = "".join(
-        f"<tr><td>{escape(name)}</td><td>{_metric_link(implementation)}</td>"
-        f"<td>{escape(inputs)}</td><td>{escape(definition)}</td></tr>"
-        for name, implementation, definition, inputs in definitions
+    rows = "".join(
+        "<tr><td>"
+        + escape(d["title"])
+        + "</td><td>"
+        + escape(d["description"])
+        + "</td>"
+        + "".join("<td>" + escape(d["levels"][str(score)]) + "</td>" for score in rubric["scale"])
+        + "<td>"
+        + escape(d["not_applicable"])
+        + "</td></tr>"
+        for d in rubric["dimensions"].values()
     )
-    descriptions = pn.pane.HTML(
-        '<table style="width:100%;border-collapse:collapse;font:14px system-ui">'
-        "<thead><tr><th>지표</th><th>모델 평가 구현</th>"
-        "<th>입력 범위</th><th>평가 기준</th></tr></thead>"
-        "<tbody>" + description_rows + "</tbody></table>",
-        stylesheets=[
-            "th,td{text-align:left;vertical-align:top;padding:12px;"
-            "border-bottom:1px solid #e4e9ef;}"
-            "th{color:#526071;}td{line-height:1.65;}"
-        ],
-        sizing_mode="stretch_width",
-    )
-    thresholds = sorted(
-        {
-            str(p["ragas"]["pass_threshold"])
-            for p in data.inputs.get("profiles", {}).values()
-            if p.get("ragas", {}).get("pass_threshold") is not None
-        }
-    )
-    threshold_note = (
-        "저장된 모델 통과 임계값: " + ", ".join(thresholds) + "."
-        if thresholds
-        else "통과 임계값: 프로필 미기록."
-    )
-    if thresholds == ["1.0"]:
-        threshold_note += (
-            " 이 실행은 각 문항·항목별 원점수 1.0 이상만 pass이며 0.99도 fail입니다. "
-            "Ragas가 강제하는 합격선이 아니라 프로젝트의 엄격한 이진 변환 기준입니다. "
-            "지표의 반올림이 포함된 원점수를 기준으로 하므로 모든 개별 검증이 "
-            "확인됐다는 뜻과 완전히 같지는 않습니다."
-        )
-    score_note = "모델 평가 점수는 0~1 범위입니다."
-    grading_notes = pn.pane.Markdown(
-        "- **원점수:** " + score_note + "\n"
-        "- **통과 판정:** 저장된 pass/fail을 그대로 표시합니다. "
-        "사람은 rubric에 따라 직접 판정합니다. " + threshold_note + "\n"
-        "- **fail의 의미:** 저장된 통과 기준 미달입니다. 답변 전체가 틀렸다는 뜻은 아닙니다. "
-        "원점수와 개별 주장 검증을 함께 확인하세요.\n"
-        "- **사람–모델 비교:** 사람의 rubric 판정과 모델의 수치 임계값은 서로 다른 규칙입니다. "
-        "κ에는 모델의 내용 판단뿐 아니라 이 통과 기준 차이도 영향을 줍니다.\n"
-        "- **N/A:** 적용 대상이 아닌 항목이며 fail이나 0점으로 대체하지 않습니다.\n"
-        "- **오류/미기록:** 채점 실패와 판정 부재를 구분하며 "
-        "일치도 계산에서 유효 이진 판정으로 취급하지 않습니다."
-    )
-    rules = [
-        (
-            "Cohen κ",
-            "κ = (관측 일치율 − 우연 일치율) / (1 − 우연 일치율). 두 평가자의 판정 일치도를 "
-            "우연 일치에 대해 보정합니다. "
-            "대칭이며 +1은 완전 일치, 0은 우연 수준, 음수도 가능합니다. "
-            "답변 정확도와는 다른 지표입니다. 유효 표본과 미정의 사유는 hover에 표시합니다.",
-        ),
-        (
-            "Fleiss κ",
-            "여러 평가자의 범주 판정 일치도를 우연 일치에 대해 보정합니다. "
-            "선택된 평가자 전원이 이진 판정을 제공한 문항을 사용합니다.",
-        ),
-        (
-            "Krippendorff α · 명목형",
-            "여러 평가자의 불일치 정도를 기대 불일치와 비교합니다. "
-            "문항별로 최소 두 평가자의 판정이 있으면 사용하므로 일부 판정 누락을 허용합니다.",
-        ),
-    ]
     return pn.Column(
-        pn.pane.Markdown("### Grading · 개별 답변 채점"),
-        grading_notes,
-        descriptions,
+        pn.pane.Markdown("### Grading · 공통 rubric 등급"),
+        pn.pane.Markdown(
+            "- **등급:** 사람과 모델 모두 아래 기준으로 직접 채점합니다. "
+            "비율 점수를 등급으로 변환하지 않습니다.\n"
+            "- **판정:** pass/fail 대신 저장된 등급과 한국어 사유를 표시합니다.\n"
+            "- **N/A·오류·미기록:** 0점이 아니며 유효 등급 일치도 계산에서 제외합니다.\n"
+            "- **진단 지표:** 별도로 실행한 Ragas 비율 점수는 "
+            "등급이나 사람 판정과 혼합하지 않습니다.\n"
+            "- **모델 등급 채점:** [Ragas "
+            "DiscreteMetric](https://docs.ragas.io/en/latest/references/metrics/)을 사용합니다.\n"
+            f"- **rubric:** `{rubric['id']}` · `{data.report['rubric_digest']}`"
+        ),
+        pn.pane.HTML(
+            '<table style="width:100%;font:13px/1.6 system-ui"><thead>'
+            + header
+            + "</thead><tbody>"
+            + rows
+            + "</tbody></table>",
+            stylesheets=[
+                "th,td{text-align:left;vertical-align:top;padding:10px;b "
+                "rder-bottom:1px solid #e4e9ef;}"
+            ],
+        ),
         pn.pane.Markdown("### Analysis · 평가자 간 일치도"),
-        _table(rules),
+        _table(
+            [
+                (
+                    "선형 가중 Cohen κ",
+                    "동일 rubric의 등급 차이에 비례한 불일치를 우연 일치로 보정합니다. "
+                    "전체 등급 순서는 고정합니다. "
+                    "일반 κ·제곱 가중 κ는 원본 analysis에 보조 저장합니다.",
+                ),
+                (
+                    "Fleiss κ · 명목형 보조",
+                    "세 명 이상이 정확히 같은 등급을 부여했는지 측정합니다. "
+                    "순서형 주 지표가 아니며 한 주체의 여러 회차는 패널에 중복 투입하지 않습니다.",
+                ),
+                (
+                    "Krippendorff α · 순서형",
+                    "여러 주체의 순서형 등급 일치도를 비교하며 "
+                    "문항마다 최소 두 개의 유효 등급이 있으면 사용합니다. "
+                    "미기록·N/A는 점수로 채우지 않습니다.",
+                ),
+            ]
+        ),
         sizing_mode="stretch_width",
     )
 
@@ -260,6 +190,11 @@ def item_browser(data, subjects, case_ids):
                 text_block("질문", question),
                 text_block("답변", result.get("answer")),
                 *([text_block("생성 오류", case["error"])] if case.get("error") else []),
+                *(
+                    [grounding_scope(result, records[record_id].get("expectations", {}))]
+                    if bundle["kind"] == "gold"
+                    else []
+                ),
                 pn.Row(
                     pn.pane.HoloViews(grading_heatmap(data, subjects, record_id)),
                     rationale_browser(data, subjects, record_id),
@@ -276,7 +211,43 @@ def item_browser(data, subjects, case_ids):
     selector.jscallback(
         args={f"item_{i}": item for i, item in enumerate(items)}, value=item_switch_code(len(items))
     )
-    return pn.Column(selector, grading_legend(), *items, sizing_mode="stretch_width")
+    return pn.Column(
+        selector, grading_legend(data.report["rubric"]), *items, sizing_mode="stretch_width"
+    )
+
+
+def grounding_scope(result, expectations=None):
+    """Describe the recorded context, without assigning or overriding any grade."""
+    sources = result.get("generation_sources")
+    unanswerable = (expectations or {}).get("answerable") is False
+    abstained = result.get("status") == "insufficient_evidence"
+    if sources is None:
+        text = (
+            "**생성에 전달된 문맥 자료: 미기록**\n\n"
+            "생성 문맥이 저장되지 않은 상태입니다. 근거가 0개인 경우와 구분해야 하며, "
+            "이 기록만으로 근거 충실도를 판단할 수 없습니다."
+        )
+    else:
+        text = f"**생성에 전달된 문맥 자료: {len(sources)}개**"
+        if unanswerable:
+            text += "\n\n**데이터셋 기준: 질문에 답할 근거가 부족한 문항**"
+        if abstained:
+            text += "\n\n**응답 상태: 근거 부족으로 답변 유보**"
+        if not sources or unanswerable or abstained:
+            text += (
+                "\n\n자료가 전달됐더라도 질문에 답할 근거를 확보했다는 뜻은 아닙니다. "
+                if sources
+                else "\n\n생성에 전달된 문맥 자료가 없습니다. "
+            )
+            text += (
+                "답변 근거가 부족하다는 사실만으로 N/A나 0점을 결정하지 않습니다. "
+                "답변이 실제로 무엇을 주장했는지 확인합니다.\n\n"
+                "- 사실 주장 없이 답변을 유보했다면 → **근거 충실도 N/A**\n"
+                "- 근거 없이 구체적인 사실을 주장했다면 → **근거 충실도 0점**\n"
+                "- 유보가 질문에 적절했는지는 → **질문 적합성**에서 평가\n\n"
+                "유보 응답이라도 구체적인 사실 주장이 포함돼 있다면 그 주장은 검증 대상입니다."
+            )
+    return pn.pane.Markdown(text, sizing_mode="stretch_width")
 
 
 def context_browser(result):
@@ -357,175 +328,102 @@ def context_browser(result):
     )
 
 
-def rationale_filter_code(counts):
-    code = []
-    for i, count in enumerate(counts):
-        code.append(f"group_{i}.visible = rater.value === 'all' || rater.value === '{i}';")
-        for j in range(count):
-            code.append(
-                f"card_{i}_{j}.visible = dimension.value === 'all' || dimension.value === '{j}';"
-            )
+RATIONALE_TABLE_START = (
+    '<table class="rationale-table"><colgroup>'
+    '<col style="width:64px"><col><col style="width:100px"></colgroup>'
+    "<thead><tr><th>평가자</th><th>사유</th><th>점수</th></tr></thead><tbody>"
+)
+RATIONALE_TABLE_END = "</tbody></table>"
+RATIONALE_STYLE = """
+.rationale-table { width:100%; table-layout:fixed; border-collapse:collapse;
+    font:13px/1.65 system-ui,sans-serif; }
+.rationale-table th,.rationale-table td { text-align:left; vertical-align:top;
+    padding:10px 8px; border-bottom:1px solid #e4e9ef; overflow-wrap:anywhere; }
+.rationale-table th { color:#526071; background:#f1f5f9; }
+.rationale-table td:last-child { white-space:nowrap; }
+"""
+
+
+def rationale_filter_code(count):
+    code = [
+        "const escape = value => String(value).replace(/[&<>\"']/g, "
+        "char => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[char]));"
+    ]
+    for j in range(count):
+        code.extend(
+            [
+                f"group_{j}.visible = dimension.value === 'all' || dimension.value === '{j}';",
+                f"const selected_{j} = rater.value === 'all' ? rows[{j}] "
+                f": [rows[{j}][Number(rater.value)]];",
+                f"table_{j}.text = escape(start + selected_{j}.join('') + end);",
+            ]
+        )
     return "\n".join(code)
 
 
-def rationale_markup(reason, dimension):
-    """Format stored Ragas verifications; never summarize or regenerate reasons."""
+def rationale_markup(reason):
+    """Display the saved reason verbatim with safe wrapping."""
+    return (
+        '<div style="white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7">'
+        + escape(reason or "저장된 사유 없음")
+        + "</div>"
+    )
 
-    def plain(value):
-        return (
-            '<div style="white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65">'
-            + escape(value)
-            + "</div>"
-        )
 
-    try:
-        steps = json.loads(reason)
-    except (ValueError, TypeError):
-        return plain(reason or "저장된 사유 없음")
-    if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
-        return plain(json.dumps(steps, ensure_ascii=False, indent=2))
-    sections = []
-    verification_index = 0
-    for i, step in enumerate(steps):
-        output = step.get("output", {})
-        if not isinstance(output, dict):
-            sections.append(plain(json.dumps(step, ensure_ascii=False, indent=2)))
-            continue
-        statements = output.get("statements")
-        if (
-            isinstance(statements, list)
-            and statements
-            and all(
-                isinstance(s, dict) and {"statement", "reason", "verdict"} <= s.keys()
-                for s in statements
-            )
-        ):
-            verification_index += 1
-            if dimension == "correctness":
-                heading = "답변 내용 검증"
-                explanation = (
-                    "답변을 개별 주장으로 나누고, 각 주장을 기준 답안에서 "
-                    "확인할 수 있는지 검사합니다. "
-                    "기준 답안의 필수 내용을 빠뜨렸는지는 완전성에서 별도로 봅니다."
-                )
-            elif dimension == "completeness" and verification_index == 1:
-                heading = "1. 답변 내용 검증"
-                explanation = (
-                    "답변에 쓴 각 주장을 기준 필수 내용에서 확인할 수 있는지 "
-                    "검사한 중간 결과입니다. "
-                    "예를 들어 트레이스 설명이 맞아도 감사 로그 설명을 빠뜨렸는지는 "
-                    "이 검사만으로 알 수 없습니다."
-                )
-            elif dimension == "completeness":
-                heading = "2. 필수 내용 누락 검사"
-                explanation = (
-                    "반드시 포함해야 할 내용을 하나씩 꺼내 답변이 실제로 담았는지 검사합니다. "
-                    "예를 들어 트레이스와 감사 로그가 모두 필수인데 트레이스만 설명했다면, "
-                    "감사 로그 내용은 답변에서 확인하지 못한 것으로 표시될 수 있습니다. "
-                    "두 검사는 확인 대상과 대조 자료가 서로 다릅니다."
-                )
-            elif dimension == "groundedness":
-                heading = "답변 내용의 근거 확인"
-                explanation = (
-                    "답변의 각 주장을 최종 답변 생성에 전달된 문맥이 뒷받침하는지 검사합니다. "
-                    "기준 답안이나 전달되지 않은 검색 결과는 이 검사의 근거가 아닙니다."
-                )
-            else:
-                heading, explanation = "주장 검증", "저장된 주장별 검증 결과입니다."
-            rows = []
-            for index, statement in enumerate(statements, 1):
-                verdict = statement["verdict"]
-                label, color = (
-                    ("확인됨", "#2166ac")
-                    if verdict == 1
-                    else (("확인 못함", "#b64e3a") if verdict == 0 else (str(verdict), "#64748b"))
-                )
-                rows.append(
-                    '<tr style="vertical-align:top">'
-                    f'<td style="width:42%;padding:12px 9px;border-bottom:1px solid #e4e9ef">'
-                    f'<small style="color:#64748b">{index}</small><br>'
-                    f"{escape(statement['statement'])}</td>"
-                    '<td style="width:14%;padding:12px 6px;border-bottom:1px solid #e4e9ef;'
-                    f'color:{color}">'
-                    f"{escape(label)}</td>"
-                    '<td style="padding:12px 9px;border-bottom:1px solid #e4e9ef;'
-                    'white-space:pre-wrap">'
-                    f"{escape(statement['reason'])}</td></tr>"
-                )
-            sections.append(
-                f'<h5 style="font-size:14px;margin:16px 0 8px">{heading}</h5>'
-                f'<p style="font:13px/1.65 system-ui;color:#526071">{escape(explanation)}</p>'
-                '<p style="font:12px/1.6 system-ui;color:#64748b">'
-                "확인 못함은 해당 대조 자료에서 뒷받침되지 않았다는 Judge 판정이며, "
-                "사실 자체가 반드시 거짓이라는 뜻은 아닙니다.</p>"
-                '<table style="width:100%;table-layout:fixed;border-collapse:collapse;'
-                'font:13px/1.6 system-ui;overflow-wrap:anywhere"><thead><tr>'
-                '<th style="width:42%;text-align:left">주장</th>'
-                '<th style="width:14%;text-align:left">판정</th>'
-                '<th style="text-align:left">저장된 판정 사유</th></tr></thead><tbody>'
-                + "".join(rows)
-                + "</tbody></table>"
-            )
-            continue
-        # Omit duplicate extraction text only when the next verification contains
-        # every extracted statement in the same order. Unmatched data stays visible.
-        extracted = output.get("claims", output.get("statements"))
-        next_output = steps[i + 1].get("output", {}) if i + 1 < len(steps) else {}
-        verified = next_output.get("statements", []) if isinstance(next_output, dict) else []
-        if isinstance(extracted, list) and all(isinstance(s, str) for s in extracted):
-            if extracted == [s.get("statement") for s in verified if isinstance(s, dict)]:
-                continue
-            sections.append(
-                "<h5>추출된 주장</h5><ul>"
-                + "".join('<li style="margin:8px 0">' + escape(s) + "</li>" for s in extracted)
-                + "</ul>"
-            )
-            continue
-        sections.append(plain(json.dumps(step, ensure_ascii=False, indent=2)))
-    return "".join(sections) or plain(reason or "저장된 사유 없음")
+def rationale_row(subject, row):
+    return (
+        '<tr><td><img width="36" height="36" '
+        f'src="{escape(subject["icon"], quote=True)}" '
+        f'alt="{escape(subject["label"], quote=True)}" '
+        f'title="{escape(subject["label"], quote=True)}"></td><td>'
+        + rationale_markup(row["rationale"])
+        + '</td><td><span style="display:inline-block;padding:2px 7px;border-radius:5px;'
+        f'background:{row["fill"]};color:{row["ink"]}">'
+        + escape(row["score_display"])
+        + "</span></td></tr>"
+    )
 
 
 def rationale_browser(data, subjects, record_id):
-    """Preloaded, escaped reasons; both filters work without a Python server."""
+    """Group reasons by dimension and filter the frozen table rows entirely offline."""
+    rubric = data.report["rubric"]
     dimensions = DIMENSIONS if data.inputs["bundle"]["kind"] == "gold" else ("behavior",)
     cells = grading_cells(data, subjects, record_id, dimensions)
     raters = {"전체 평가자": "all"}
     raters.update({s["label"]: str(i) for i, s in enumerate(subjects)})
     initial = next((i for i, s in enumerate(subjects) if s["rater"].startswith("model:")), 0)
     rater = pn.widgets.Select(label="평가자 · 회차", options=raters, value=str(initial))
+    titles = {d: f"{rubric['dimensions'][d]['title']} · {d}" for d in dimensions}
     dimension = pn.widgets.Select(
         label="Judge 항목",
-        options={"전체 항목": "all", **{d: str(i) for i, d in enumerate(dimensions)}},
+        options={"전체 항목": "all", **{titles[d]: str(i) for i, d in enumerate(dimensions)}},
         value="0",
     )
-    args, groups = {"rater": rater, "dimension": dimension}, []
-    for i, subject in enumerate(subjects):
-        cards = []
-        for j, name in enumerate(dimensions):
-            row = cells[(cells.x == i) & (cells.dimension == name)].iloc[0]
-            card = pn.pane.HTML(
-                '<section style="border-top:1px solid #e4e9ef;padding:10px 0">'
-                f"<b>{escape(name)}</b> · {escape(row['label'])}"
-                f'<span style="color:#64748b"> · {escape(row["score_display"])}</span>'
-                '<div style="margin-top:12px">'
-                + rationale_markup(row["rationale"], name)
-                + "</div></section>",
-                sizing_mode="stretch_width",
-                visible=j == 0,
-            )
-            args[f"card_{i}_{j}"] = card
-            cards.append(card)
-        group = pn.Column(
-            pn.pane.HTML(f'<h4 style="margin:12px 0">{escape(subject["label"])}</h4>'),
-            *cards,
+    args = {"rater": rater, "dimension": dimension}
+    rows, groups = [], []
+    for j, name in enumerate(dimensions):
+        entries = [
+            rationale_row(subject, cells[(cells.x == i) & (cells.dimension == name)].iloc[0])
+            for i, subject in enumerate(subjects)
+        ]
+        rows.append(entries)
+        table = pn.pane.HTML(
+            RATIONALE_TABLE_START + entries[initial] + RATIONALE_TABLE_END,
+            stylesheets=[RATIONALE_STYLE],
             sizing_mode="stretch_width",
-            visible=i == initial,
         )
-        args[f"group_{i}"] = group
+        group = pn.Column(
+            pn.pane.HTML(f'<h4 style="margin:12px 0 8px">{escape(titles[name])}</h4>'),
+            table,
+            sizing_mode="stretch_width",
+            visible=j == 0,
+        )
+        args[f"table_{j}"] = table
+        args[f"group_{j}"] = group
         groups.append(group)
-    code = rationale_filter_code([len(dimensions)] * len(subjects))
+    args.update(rows=rows, start=RATIONALE_TABLE_START, end=RATIONALE_TABLE_END)
     for control in (rater, dimension):
-        control.jscallback(args=args, value=code)
+        control.jscallback(args=args, value=rationale_filter_code(len(dimensions)))
     return pn.Column(
         pn.Row(rater, dimension, sizing_mode="stretch_width"),
         pn.Column(

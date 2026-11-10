@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from elice_knowledge.access_codes import AccessCodes
 from elice_knowledge.evaluation import SCORER, SCORER_KEY, dataset_snapshot, enqueue_evaluation
@@ -77,11 +77,13 @@ class ExtendCode(BaseModel):
 class ReviewImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    rubric_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,80}$")
 
 
 class ReviewScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    label: Literal["pass", "fail", "not_applicable"]
+    status: Literal["scored", "not_applicable"]
+    score: StrictInt | None = Field(default=None, ge=0, le=2)
     rationale: str = Field(min_length=1, max_length=4000)
 
     @field_validator("rationale")
@@ -101,7 +103,8 @@ class ReviewSubmission(BaseModel):
 
 class ReviewDraftScore(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    label: Literal["", "pass", "fail", "not_applicable"]
+    status: Literal["pending", "scored", "not_applicable"]
+    score: StrictInt | None = Field(default=None, ge=0, le=2)
     rationale: str = Field(default="", max_length=4000)
 
 
@@ -168,7 +171,7 @@ def mount_service(app, settings):
 
     @router.post("/reviews", status_code=201)
     def start_review(body: ReviewImport, owner=session_dependency):
-        return reviews.start(body.run_id, owner["principal_id"])
+        return reviews.start(body.run_id, owner["principal_id"], rubric_id=body.rubric_id)
 
     @router.get("/admin/reviews/{run_id}/origin")
     def review_origin(run_id: str, owner=code_admin_dependency):
@@ -178,63 +181,67 @@ def mount_service(app, settings):
     def review_sources(owner=session_dependency):
         return {"items": reviews.sources(owner["principal_id"])}
 
-    @router.get("/reviews/{run_id}/rounds/{number}/cases/{position}")
-    def review_case(run_id: str, number: int, position: int, owner=session_dependency):
-        return reviews.case(run_id, owner["principal_id"], number, position)
+    @router.get("/reviews/{run_id}/gradings/{grading_id}/cases/{position}")
+    def review_case(run_id: str, grading_id: UUID, position: int, owner=session_dependency):
+        return reviews.case(run_id, owner["principal_id"], grading_id, position)
 
-    @router.get("/reviews/{run_id}/rounds/{number}/progress")
-    def review_progress(run_id: str, number: int, owner=session_dependency):
-        return {"items": reviews.progress(run_id, owner["principal_id"], number)}
+    @router.get("/reviews/{run_id}/gradings/{grading_id}/progress")
+    def review_progress(run_id: str, grading_id: UUID, owner=session_dependency):
+        return {"items": reviews.progress(run_id, owner["principal_id"], grading_id)}
 
-    @router.get("/admin/reviews/{run_id}/rounds/{number}/origin")
-    def grading_origin(run_id: str, number: int, owner=code_admin_dependency):
-        return reviews.grading_origin(run_id, owner["principal_id"], number)
+    @router.get("/admin/reviews/{run_id}/gradings/{grading_id}/origin")
+    def grading_origin(run_id: str, grading_id: UUID, owner=code_admin_dependency):
+        return reviews.grading_origin(run_id, owner["principal_id"], grading_id)
 
-    @router.put("/reviews/{run_id}/rounds/{number}/cases/{position}/draft")
+    @router.put("/reviews/{run_id}/gradings/{grading_id}/cases/{position}/draft")
     def save_review_draft(
-        run_id: str, number: int, position: int, body: ReviewDraft, owner=session_dependency
+        run_id: str, grading_id: UUID, position: int, body: ReviewDraft, owner=session_dependency
     ):
         return reviews.save_draft(
             run_id,
             owner["principal_id"],
-            number,
+            grading_id,
             position,
             body.answer_digest,
             body.revision,
             {key: value.model_dump() for key, value in body.scores.items()},
         )
 
-    @router.post("/reviews/{run_id}/rounds/{number}/cases/{position}")
+    @router.post("/reviews/{run_id}/gradings/{grading_id}/cases/{position}")
     def save_review(
-        run_id: str, number: int, position: int, body: ReviewSubmission, owner=session_dependency
+        run_id: str,
+        grading_id: UUID,
+        position: int,
+        body: ReviewSubmission,
+        owner=session_dependency,
     ):
         return reviews.save(
             run_id,
             owner["principal_id"],
-            number,
+            grading_id,
             position,
             body.answer_digest,
             {key: value.model_dump() for key, value in body.scores.items()},
             body.draft_revision,
         )
 
-    @router.get("/reviews/{run_id}/rounds/{number}/labels")
-    def review_labels(run_id: str, number: int, owner=session_dependency):
+    @router.get("/reviews/{run_id}/gradings/{grading_id}/ratings")
+    def review_ratings(run_id: str, grading_id: UUID, owner=session_dependency):
         return {
-            "labels": [
+            "ratings": [
                 label
-                for row in reviews.labels(run_id, owner["principal_id"], number)
-                for label in row["labels"]
+                for row in reviews.ratings(run_id, owner["principal_id"], grading_id)
+                for label in row["ratings"]
             ]
         }
 
-    @router.get("/reviews/{run_id}/rounds/{number}/result")
-    def review_result(run_id: str, number: int, owner=session_dependency):
-        return reviews.result(run_id, owner["principal_id"], number)
+    @router.get("/reviews/{run_id}/gradings/{grading_id}/result")
+    def review_result(run_id: str, grading_id: UUID, owner=session_dependency):
+        return reviews.result(run_id, owner["principal_id"], grading_id)
 
-    @router.post("/reviews/{run_id}/rounds/{number}/sync")
-    def sync_review(run_id: str, number: int, owner=session_dependency):
-        return reviews.sync(run_id, owner["principal_id"], number)
+    @router.post("/reviews/{run_id}/gradings/{grading_id}/sync")
+    def sync_review(run_id: str, grading_id: UUID, owner=session_dependency):
+        return reviews.sync(run_id, owner["principal_id"], grading_id)
 
     def identity(row):
         return {"id": row["principal_id"], "label": row["label"], "role": row["role"]}

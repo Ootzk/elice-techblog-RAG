@@ -45,9 +45,10 @@ def test_blind_packet_and_binding_reject_changed_answers_and_duplicates():
     assert "unseen material" not in json.dumps(packet)
     grounding = next(row for row in packet if row["dimension"] == "groundedness")
     assert "expectations" not in grounding
-    assert all(row["label"] is None for row in labels)
+    assert all(row["score"] is None for row in labels)
     assert analyze(source, labels)["human_labels"] == 0
-    labels[0]["label"] = "pass"
+    labels[0]["score"] = 2
+    labels[0]["status"] = "scored"
     with pytest.raises(ValueError, match="duplicate_review_label"):
         analyze(source, labels + [labels[0]])
     labels[0]["answer_digest"] = "different-answer"
@@ -60,16 +61,16 @@ def test_blind_packet_and_binding_reject_changed_answers_and_duplicates():
 
 def test_binary_kappa_na_exclusion_and_constant_labels():
     stats = pairwise(
-        dict(a="pass", b="pass", c="fail", d="fail", e="not_applicable", f="error"),
-        dict(a="pass", b="fail", c="fail", d="fail", e="pass", f="pass"),
+        dict(a=2, b=2, c=0, d=0, e="not_applicable", f="error"),
+        dict(a=2, b=0, c=0, d=0, e=2, f=2),
     )
-    assert stats["binary_pairs"] == 4 and stats["excluded_pairs"] == 2
+    assert stats["valid_pairs"] == 4 and stats["excluded_pairs"] == 2
     assert stats["agreement"] == 0.75 and stats["cohen_kappa"] == 0.5
-    assert stats["confusion"]["pass_fail"] == 1
+    assert stats["confusion"]["2_0"] == 1
     assert stats["applicability_pairs"] == 5 and stats["applicability_agreement"] == 0.8
-    stats = pairwise(dict(a="pass", b="pass"), dict(a="pass", b="pass"))
+    stats = pairwise(dict(a=2, b=2), dict(a=2, b=2))
     assert stats["agreement"] == 1 and stats["cohen_kappa"] is None
-    assert pairwise({"a": "pass"}, {"a": "pass"})["cohen_kappa"] is None
+    assert pairwise({"a": 2}, {"a": 2})["cohen_kappa"] is None
 
 
 def test_rounds_compare_identical_answers_and_distinguish_rubric_changes():
@@ -80,7 +81,8 @@ def test_rounds_compare_identical_answers_and_distinguish_rubric_changes():
 
     _, first = review_packet(source, "alice")
     for row in first:
-        row["label"] = "pass"
+        row["score"] = 2
+        row["status"] = "scored"
         row["rater"] = "model:chatgpt"
         row["protocol"] = digest({"model": "chatgpt", "version": 1})
     second = deepcopy(first)

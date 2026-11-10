@@ -72,24 +72,20 @@ def test_item_heatmap_has_four_rows_and_preserves_all_label_states():
     data = demo("analysis")
     subjects = analysis_subjects(data)
     human = data.inputs["gradings"][0]
-    for row, state in zip(
-        human["labels"][:4], ("pass", "fail", "not_applicable", "error"), strict=True
+    for row, (status, score) in zip(
+        human["ratings"][:4],
+        [("scored", 2), ("scored", 0), ("not_applicable", None), ("error", None)],
+        strict=True,
     ):
-        row["label"] = state
+        row.update(status=status, score=score)
     cells = grading_cells(data, subjects, "0")
     assert len(cells) == len(subjects) * 4
     assert tuple(cells[cells.x == 0]["dimension"]) == DIMENSIONS
     assert set(cells.x) == set(range(len(subjects)))
     assert set(cells.y) == {0, 1, 2, 3}
-    assert set(cells[cells.x == 0]["label"]) == {
-        "pass",
-        "fail",
-        "not_applicable",
-        "error",
-    }
-    assert all(pd.isna(v) for v in cells[cells.x == 0]["score"])
-    assert set(grading_cells(data, subjects, "missing-id")["label"]) == {"missing"}
-    assert len({color for color, _ in STATES.values()}) == 5
+    assert set(cells[cells.x == 0]["status"]) == {"scored", "not_applicable", "error"}
+    assert set(grading_cells(data, subjects, "missing-id")["status"]) == {"missing"}
+    assert len({color for color, _ in STATES.values()}) == 6
 
 
 def test_bokeh_heatmap_has_embedded_icons_and_real_hover_fields():
@@ -151,24 +147,20 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
         assert (figure.width, figure.height) == (matrix_size(subjects),) * 2
         assert all(isinstance(tool, HoverTool) for tool in figure.tools)
         assert {label for tool in figure.tools for label, _ in tool.tooltips} == {
-            "Cohen κ",
+            "선형 가중 Cohen κ",
             "유효",
             "제외",
             "사유",
         }
 
 
-def test_missing_score_is_explicit_and_human_ratings_need_no_numeric_score():
+def test_ordinal_scores_are_shared_by_humans_and_models_independent_of_diagnostics():
     data = demo("analysis")
     model = data.inputs["gradings"][1]
     model["measurements"] = []
-    subjects = analysis_subjects(data)
-    cells = grading_cells(data, subjects, "0")
-    values = cells[cells.rater == model["rater_id"]]
-    assert values["score"].isna().all()
-    assert set(values["score_display"]) == {"유효 점수 미기록"}
-    human = cells[cells.rater.str.startswith("human:")]
-    assert set(human["score_display"]) == {"수치 점수 없음 · 사람 판정"}
+    cells = grading_cells(data, analysis_subjects(data), "0")
+    assert all(v in {0, 1, 2} for v in cells["score"])
+    assert all("수치 점수 없음" not in v for v in cells["score_display"])
 
 
 def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
@@ -208,7 +200,7 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
                 cohen_kappa=0.25,
                 kappa_undefined_reason=None,
                 agreement=0.75,
-                binary_pairs=4,
+                valid_pairs=4,
                 excluded_pairs=0,
             )
         )

@@ -62,13 +62,13 @@ def test_readable_case_uses_generation_context_and_escapes_model_text():
     assert "&lt;b&gt;" in text_block("title", "<b>").object
 
 
-def test_pre_ragas_model_grading_is_rejected(tmp_path):
+def test_old_grading_contract_is_rejected(tmp_path):
     data = demo("analysis")
-    data.inputs["gradings"][1].pop("measurement_contract")
+    data.inputs["gradings"][1].pop("contract")
     report, inputs = tmp_path / "analysis.json", tmp_path / "inputs.json"
     report.write_text(json.dumps(data.report))
     inputs.write_text(json.dumps(data.inputs))
-    with pytest.raises(ValueError, match="ragas-v1"):
+    with pytest.raises(ValueError, match="rubric-v1"):
         from_files("analysis", report, inputs)
 
 
@@ -95,7 +95,7 @@ def test_mlflow_loading_is_read_only_and_uses_frozen_artifacts(kind, tmp_path, m
     def run(key):
         tags = {
             "evaluation.kind": kind if key == "report-run" else "answers",
-            "evaluation.schema": "evaluation-v1",
+            "evaluation.schema": "evaluation-v2",
             "source_bundle_digest": report.get("source_digest"),
             "comparison_digest": report.get("digest"),
         }
@@ -227,6 +227,11 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
                 if kind == "analysis"
                 else "assert details.active == []\n"
             )
+            + (
+                "assert focus is not None and not chart_data.empty\n"
+                if kind == "comparison"
+                else ""
+            )
             + "assert case_ids == list(available_ids)\n"
             + (
                 "assert len(examples_view.objects[2:]) == len(available_ids)\n"
@@ -257,3 +262,13 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
         if cell.cell_type == "code"
         for out in cell.outputs
     )
+
+
+def test_analysis_rejects_mixed_rubric_snapshots(tmp_path):
+    data = demo("analysis")
+    data.inputs["gradings"][1]["rubric_digest"] = "different-rubric"
+    report, inputs = tmp_path / "analysis.json", tmp_path / "inputs.json"
+    report.write_text(json.dumps(data.report))
+    inputs.write_text(json.dumps(data.inputs))
+    with pytest.raises(ValueError, match="same rubric"):
+        from_files("analysis", report, inputs)
