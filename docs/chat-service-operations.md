@@ -450,4 +450,4 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/comp
 동일한 사람 판정을 요구하며 모델 프로필 변경을 허용한다. 다른 모델 계열로 평가자 ID 자체를 바꾸는 매핑은 지원하지 않는다.
 --seed(기본 42)·--bootstrap-resamples(기본 2000, 0이면 구간 생략)·--confidence-level(기본 0.95)을 설정할 수 있다.
 구간은 대응 평균 차이의 문항 재표집 결과이며 반복 시행 변동이나 κ·α의 신뢰구간이 아니다.
-자세한 호환 검사·관측 교집합·결측 처리와 metric 의미는 [comparison 계약](evaluation-schema.md#조건-간-comparison)을 따른다.
+자세한 호환 검사·관측 교집합·결측 처리와 metric 의미는 [comparison 계약](evaluation-schema.md#comparison과-보고서)을 따른다.

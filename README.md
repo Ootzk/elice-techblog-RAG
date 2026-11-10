@@ -773,6 +773,12 @@ answers는 `evaluation-v1`, grading·analysis·comparison은 `evaluation-v2`·`r
 이전 이진 채점과 호환 코드는 유지하지 않으며 고정 답변은 재사용합니다. 정확한 계약은
 [평가 저장 스키마](docs/evaluation-schema.md)에 정의합니다.
 
+실험 관계는 **조건 하나 → 여러 answers → 각 answers의 여러 grading**입니다. analysis는 answers 하나의
+선택한 grading들을 읽고 회차별 판정을 유지합니다. 같은 조건에서 만든 A1·A2 같은 답변 반복은
+`repeatability`로, 서로 다른 조건 A·B는 `comparison`으로 구분할 계획입니다.
+[관계도와 현재 구현 범위](docs/evaluation-schema.md#실험-단위와-관계)에 정리했습니다.
+현재 comparison CLI는 analysis 한 쌍과 주체당 grading 하나만 받으며, repeatability는 아직 구현하지 않았습니다.
+
 Comparison은 analysis A/B의 공통 관측에서 등급·선택적 진단·QA 자원 사용량의 대응 평균 차이와
 SciPy paired bootstrap 구간을 저장합니다. system 비교는 평가자·기준을, judge 비교는 답변·사람 판정을
 고정합니다. κ·α도 공통 관측에서 다시 계산합니다. Judge 점수 상승을 답변 개선으로 표시하지 않습니다.

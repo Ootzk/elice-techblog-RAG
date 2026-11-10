@@ -1,9 +1,60 @@
 # 평가 저장 스키마
 
 답변 생성과 채점을 분리해 같은 답변을 여러 주체가 여러 번 평가한다. 답변 고정본은
-`evaluation-v1`, grading·analysis·comparison은 `evaluation-v2`를 사용한다. 등급 채점 계약은
+`evaluation-v1`, 현재 구현된 grading·analysis·comparison은 `evaluation-v2`를 사용한다. 등급 채점 계약은
 `rubric-v1`이다. 이전 이진 채점 결과는 조회·분석에서 제외하고 변환·backfill하지 않는다.
 기존 answers는 재사용하며 원격 실행·DB의 옛 기록은 자동 삭제하지 않는다.
+
+## 실험 단위와 관계
+
+조건은 Dataset·Corpus·QA 프로필처럼 답변 생성에 적용한 설정의 논리적 묶음이다.
+하나의 조건에서 answers를 여러 번 실행하면 A1·A2처럼 서로 다른 고정 답변이 생긴다.
+grading 한 run은 **answers 하나를 한 평가 주체가 한 번 채점한 결과**다.
+같은 모델·사람이 같은 answers를 여러 번 채점해도 매번 별도 grading run을 만든다.
+answers를 다시 실행한 것은 답변 변동이고, 같은 answers를 다시 채점한 것은 채점 변동이다.
+
+```mermaid
+flowchart TD
+    CA["조건 A · 동일 QA 설정"] --> A1["answers A1"]
+    CA --> A2["answers A2"]
+    CB["조건 B · 변경된 QA 설정"] --> B1["answers B1"]
+    CB --> B2["answers B2"]
+    A1 --> GA1["grading · 주체별·회차별 여러 run"]
+    A2 --> GA2["grading · 주체별·회차별 여러 run"]
+    B1 --> GB1["grading · 주체별·회차별 여러 run"]
+    B2 --> GB2["grading · 주체별·회차별 여러 run"]
+    GA1 --> IA1["analysis A1"]
+    GA2 --> IA2["analysis A2"]
+    GB1 --> IB1["analysis B1"]
+    GB2 --> IB2["analysis B2"]
+    IA1 -. 참조 .-> RA["repeatability A · 설계 중"]
+    IA2 -. 참조 .-> RA
+    IB1 -. 참조 .-> RB["repeatability B · 설계 중"]
+    IB2 -. 참조 .-> RB
+    RA -. 참조 .-> CMP["comparison A ↔ B · 반복 입력 방식 설계 중"]
+    RB -. 참조 .-> CMP
+```
+
+| 관계 | 단위와 의미 |
+| --- | --- |
+| 조건 → answers | 1:N. 같은 설정에서 답변을 여러 번 생성한다. 조건은 현재 별도 MLflow run이 아니라 QA 프로필 등으로 식별하는 논리적 묶음이다. |
+| answers → grading | 1:N. 주체·프로필·회차별로 고정 답변을 채점한다. |
+| answers → analysis | 1:N. analysis 하나는 answers 하나에서 선택한 grading들을 분석한다. 다른 선택으로 다시 분석할 수 있다. |
+| grading ↔ analysis | 참조 관계. analysis는 grading 여러 개를 읽고, 원본 grading은 다른 analysis에서도 재사용할 수 있다. |
+| analysis → repeatability | 같은 조건의 answers에서 나온 analysis 여러 개를 참조하는 목표 구조다. |
+| repeatability → comparison | 조건 A와 B의 반복 결과를 참조하는 목표 구조다. |
+
+analysis는 같은 모델의 여러 회차를 별도 관측으로 보존하고, Cohen κ를 회차 쌍별로 계산한다.
+회차 등급을 평균·다수결로 합쳐 하나의 평가자로 만들지 않는다. repeatability에서는 같은 조건의
+여러 answers를 질문 ID로 연결하되, A1의 Judge 1회차와 A2의 Judge 1회차를 대응 관측으로 가정하지 않는다.
+반복성의 집계 방법과 보고서 표현은 아직 결정하지 않았다.
+`comparison`은 앞으로 조건 A/B의 차이를 보는 이름으로 사용하고 `condition_change`라는 별도 종류를 만들지 않는다.
+
+현재 `review.py analyze`는 answers 하나와 여러 grading 회차를 받아 analysis를 만든다.
+`repeatability` run·CLI·보고서는 아직 없다. 현재 `compare.py`의 `comparison-v1`은 analysis 한 쌍과
+평가 주체당 grading 하나씩만 받는다. 같은 조건의 A1/A2를 회차 번호끼리 대응시킨 결과는
+반복성의 최종 결과로 취급하지 않으며, 여러 answers·반복 grading을 받는 comparison 계약은 아직 설계 중이다.
+현재 CLI의 `system`·`judge` 비교 모드와 향후 조건 간 반복 비교의 범위도 이 설계에서 정리한다.
 
 ## Run과 계보
 
@@ -16,7 +67,8 @@ answers A1: 고정된 질문·기대 조건·답변·문맥
 └─ grading: human:<로그인 코드 ID> / 프로필 H / 2회차
 
 analysis: 같은 A1에 연결된 지정 grading들의 정합성
-comparison: 조건 A/B의 analysis·answers·grading 비교
+repeatability: 같은 조건의 여러 analysis를 비교하는 목표 구조 (미구현)
+comparison-v1: 현재는 analysis 한 쌍 비교; 향후 조건 A/B의 반복 결과 비교로 확장 예정
 ```
 
 | 종류 | 단위 | 주요 artifact | Metrics |
@@ -24,10 +76,11 @@ comparison: 조건 A/B의 analysis·answers·grading 비교
 | answers | 데이터셋의 답변 생성 1회 | evaluation-bundle.json, evaluation-results.json | 답변 가능 여부·생성 자원·시간 |
 | grading | 한 주체가 answers 전체를 채점한 1회 | grading-result.json, rater-profile.json | rubric 등급 평균·분포·상태별 건수, 선택적 Ragas 진단 |
 | analysis | 같은 답변에 대한 지정 grading 집합 | agreement.json, grading-inputs.json | 항목별 일치율·가중 κ·다자 계수 |
-| comparison | analysis A/B 한 쌍 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·bootstrap 구간·문항 전이·공통 표본의 계수 차이 |
+| comparison-v1 · 현재 | analysis A/B 한 쌍, 주체당 grading 하나 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·bootstrap 구간·문항 전이·공통 표본의 계수 차이 |
 
-`evaluation.kind` 태그로 종류를 구분한다. grading은 `mlflow.parentRunId`와 source_run_id로
-answers에 연결한다. analysis·comparison은 입력 run과 해시를 artifact로 기록하며 원본을 수정하지 않는다.
+`evaluation.kind` 태그로 현재 구현된 run 종류를 구분한다. grading은 `mlflow.parentRunId`와
+source_run_id로 answers에 연결한다. analysis·comparison은 입력 run과 해시를 artifact로 기록하며
+원본을 수정하지 않는다. 위 표의 repeatability는 아직 저장 계약과 run 종류를 정하지 않아 포함하지 않았다.
 
 ## 고정 답변과 rubric
 
