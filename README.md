@@ -812,6 +812,12 @@ Run에는 기대 조건·실제 답변·최종 문맥·QA 프로필을 고정한
 기준 Run과 유형별 지표·개별 실패를 비교하고, 비용·실패율도 함께 확인하는 구성입니다.
 이 유료 회귀 평가와 품질 gate는 현재 CI에 연결하지 않았습니다.
 
+### Notebook 실험 보고서 초안
+
+[tools/reporting](tools/reporting/README.md)의 analysis·comparison 템플릿을 복사해 MLflow 결과를 읽고,
+저장된 조건·지표·문항별 결과를 hvPlot/Bokeh 그래프와 HTML 표로 표현합니다. Knowledge와 독립된 환경을 사용하며,
+내보낸 HTML은 Jupyter·MLflow 연결 없이 열 수 있습니다. 합성 데모는 실제 실험 결과와 구분해 표시합니다.
+
 ## 5. 핵심 설계 결정과 Trade-off
 
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
