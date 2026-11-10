@@ -13,6 +13,7 @@
 	} from '#lib/api.js';
 	import Messages from './Messages.svelte';
 	import MessageInput from './MessageInput.svelte';
+	import ServiceNav from '#lib/components/common/ServiceNav.svelte';
 	let identity: Identity | null = null;
 	let wideScreen = false;
 	let desktopSidebarHidden = false;
@@ -392,17 +393,13 @@
 							<p class="text-[11px] text-gray-400">한국어 기술 문서 기반 대화</p>
 						</div>
 					</div>
-					<div class="flex items-center gap-3">
-						{#if identity?.role === 'admin'}<a
-								href="/admin/authentication"
-								class="rounded-lg border border-[#d9e2d4] bg-[#eff4eb] px-3 py-2 text-sm font-medium text-[#3f5840] hover:bg-[#e1ebdc]"
-								>관리자 ↗</a
-							>{/if}
+					<div class="ml-auto flex flex-wrap items-center justify-end gap-3">
 						{#if current}<button
 								class="text-xs text-gray-400 hover:text-red-700 disabled:opacity-30"
 								disabled={generating || busy}
 								on:click={remove}>대화 삭제</button
 							>{/if}
+						<ServiceNav active="chat" admin={identity?.role === 'admin'} />
 					</div>
 				</header>
 				<div bind:this={scroll} class="flex-1 overflow-y-auto min-h-0 px-5 md:px-8">

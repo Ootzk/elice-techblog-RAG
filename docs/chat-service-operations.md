@@ -1,5 +1,8 @@
 # 대화 서비스 실행과 Dataset 평가
 
+사람 검수 화면(`/review`)의 평가 실행 가져오기·코드별 배정·채점·MLflow 동기화는
+[Human Review 운영과 API](human-review.md)를 따른다.
+
 ## 실행 구성
 
 `apps/web`는 Open WebUI 프론트엔드에서 추출·수정한 Svelte 화면이다.
