@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from elice_knowledge.agreement import analyze, machine_labels, pairwise, review_packet
+from elice_knowledge.agreement import analyze, pairwise, review_packet
 from elice_knowledge.evaluation_bundle import create_bundle, validate_bundle
 
 
@@ -74,23 +74,21 @@ def test_binary_kappa_na_exclusion_and_constant_labels():
 
 def test_rounds_compare_identical_answers_and_distinguish_rubric_changes():
     source = bundle()
-    judged = [
-        {
-            "record_id": "r1",
-            "judges": {
-                "qa-gold-correctness-chatgpt": {
-                    "dimension": "correctness",
-                    "rater": "chatgpt",
-                    "version": 1,
-                    "status": "pass",
-                }
-            },
-        }
-    ]
-    first = machine_labels(source, judged, "round-1")
-    second = machine_labels(source, judged, "round-2")
+    from copy import deepcopy
+
+    from elice_knowledge.corpus import digest
+
+    _, first = review_packet(source, "alice")
+    for row in first:
+        row["label"] = "pass"
+        row["rater"] = "model:chatgpt"
+        row["protocol"] = digest({"model": "chatgpt", "version": 1})
+    second = deepcopy(first)
+    for row in second:
+        row["round"] = "2"
     assert analyze(source, first + second)["comparisons"][0]["comparison"] == "repeat_consistency"
-    judged[0]["judges"]["qa-gold-correctness-chatgpt"]["version"] = 2
-    third = machine_labels(source, judged, "round-3")
+    third = deepcopy(first)
+    for row in third:
+        row["protocol"] = digest({"model": "chatgpt", "version": 2})
     assert analyze(source, first + third)["comparisons"][0]["comparison"] == "judge_revision"
     assert bundle()["cases"][0]["result"]["answer"] == "fact"

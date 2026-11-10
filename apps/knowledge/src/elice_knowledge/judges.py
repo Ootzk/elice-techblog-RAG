@@ -39,7 +39,14 @@ def frozen_judges(settings, kind):
 
     experiment_id = configure(settings)
     return [
-        dict(name=judge.name, version=judge.scorer_version, dimension=dimension, rater=rater)
+        dict(
+            name=judge.name,
+            version=judge.scorer_version,
+            dimension=dimension,
+            rater=rater,
+            instructions=judge.instructions,
+            model=judge.model,
+        )
         for dimension in DIMENSIONS[kind]
         for rater in RATERS
         for judge in [
@@ -106,7 +113,7 @@ def judgment_metrics(judgments, specs):
     return metrics
 
 
-def evaluate_answers(settings, run_id, records, cases, specs):
+def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=True):
     import mlflow
     from mlflow.genai.scorers import get_scorer
 
@@ -169,8 +176,9 @@ def evaluate_answers(settings, run_id, records, cases, specs):
     metrics = judgment_metrics(rows, specs)
     tracking = mlflow.MlflowClient()
     tracking.log_dict(run_id, {"cases": rows, "specs": specs}, "judge-results.json")
-    for name, value in metrics.items():
-        tracking.log_metric(run_id, name, value)
-    if any(cell["status"] == "error" for row in rows for cell in row["judges"].values()):
+    # Shared grading publication owns canonical quality.* metrics. SDK-native metrics are separate.
+    if raise_on_error and any(
+        cell["status"] == "error" for row in rows for cell in row["judges"].values()
+    ):
         raise RuntimeError("judge_assessment_failed: see judge-results.json")
     return metrics, rows

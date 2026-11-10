@@ -177,8 +177,10 @@ Gateway endpoint는 `elice-techblog-rag-judge-{chatgpt,claude,gemini}`가 미리
 호스트에서 worker를 실행하면 환경 변수도 직접 설정한다. prod 기본값은 false다.
 Gold/Iron 접수 시 모든 해당 Judge의 등록 버전을 고정하고, QA 완료 후
 `mlflow.genai.evaluate()`로 채점한다. Judge 오류·누락 판정은 평가 실패로 처리한다.
-Run의 `judge-versions.json`, `judge-results.json`에 버전·문항 ID·판정·이유를 남기고
-Evaluation runs에서 상세 결과를 확인한다. 사례 API의 scores에는 적용 가능한 판정만 0/1로 제공한다. N/A는 0/1로 바꾸지 않는다.
+답변 생성 run은 `evaluation.kind=answers`이며 생성 bundle과 결정적 지표만 보관한다.
+채점은 모델별 grading 자식 run으로 나누고 `grading-result.json`·`rater-profile.json`과
+공통 `quality.<차원>.*` metric을 기록한다. 사례 API scores에 모델 Judge 점수를 섞지 않는다.
+자세한 저장·검증 계약은 [평가 스키마](evaluation-schema.md)를 따른다.
 
 online Judge는 `environment=dev`·`evaluation_mode=online`·`quality_contract=dimension-v1`이며 정상 종료한 Trace를 100% 자동 평가한다.
 일반 QA에는 질문·고정 이력·답변·검색 근거·agent 단계가 담긴 `techblog-qa` 루트 Trace를 기록한다.
@@ -296,34 +298,36 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/eval
   --dataset-id '<dataset-id>' --submit --report artifacts/evaluation/report.json
 ```
 
-원본 Run의 `evaluation-bundle.json`에는 선택한 문항의 기대 조건·QA 프로필·고정 답변·최종 문맥과 내용 해시가 들어간다.
-Judge 실패 시에도 이 파일을 남기므로 QA 생성 없이 새 Judge Run으로 재채점할 수 있다.
+원본 answers run의 `evaluation-bundle.json`에는 선택 문항·기대 조건·QA 프로필·고정 답변·최종 문맥·rubric과 해시가 들어간다.
+`evaluation-v1`의 답변만 재채점하며 이전 결과를 자동 변환하지 않는다.
+반복 모델 채점 CLI도 공통 PostgreSQL 레지스트리를 쓰므로 DATABASE_URL을 설정해야 한다.
+호스트에서 실행할 때 dev DATABASE_URL의 컨테이너 호스트를 실제 공개한 127.0.0.1:5432로 바꿔 연결한다.
 
 ```bash
-# 모델 이름과 기존 Judge 판정을 숨긴 검수 자료와 빈 라벨 JSONL. 모델 호출 없음.
+# 블라인드 검수 참고 자료만 내보낸다. 채점 run이나 사람 판정을 만들지 않는다.
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py export \
-  --source-run-id '<source-run-id>' --rater reviewer --output-dir artifacts/evaluation/human-review
-# 고정 답안에 사용할 Judge 버전과 대상 수 미리보기. --submit 전에는 모델 호출 없음.
+  --source-run-id '<answers-run-id>' --output-dir artifacts/evaluation/review-packet
+# 세 모델 각각 10회 채점 계획. --submit 없이는 모델 호출·채점 run 생성을 하지 않는다.
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py judge \
-  --source-run-id '<source-run-id>' --repeat 3 --output-dir artifacts/evaluation/rejudge
-# 위 명령에 --submit을 붙이면 모델 호출을 수행한다. 각 반복은 별도 Run이며 QA는 재생성하지 않는다.
+  --source-run-id '<answers-run-id>' --repeat 10 --output-dir artifacts/evaluation/rejudge
+# --model-rater chatgpt 등으로 특정 모델을 선택할 수 있다.
+# --submit을 추가하면 선택 모델 수 × repeat 개의 grading run을 만들고 실제 유료 호출한다.
 ```
 
-검수자는 `review-packet.json`의 차원별 rubric·질문·답변·허용된 근거만 읽고,
-`human-labels.jsonl`의 `label`을 pass/fail/not_applicable로 입력하고 이유를 적는다.
-미검수는 null로 두며 불확실성·누락 데이터를 N/A로 바꾸지 않는다. 문항 ID·답변 해시·protocol은 수정하지 않는다.
-이름과 `round`로 평가자·반복을 구분한다. 비교 전까지 다른 Judge의 결과를 보지 않는다. 다른 검수자는 별도 디렉터리로 export한다.
+사람 채점은 로그인한 계정의 웹 검수를 사용한다. 내보낸 참고 자료는 채점 원본이 아니며,
+원시 JSONL을 수동 작성해 분석에 넣는 경로는 유지하지 않는다.
 
 ```bash
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
-  --source-run-id '<source-run-id>' \
-  --judge-run-id '<source-run-id>' --judge-run-id '<rejudge-run-id>' \
-  --human-labels artifacts/evaluation/human-review/human-labels.jsonl \
-  --output-dir artifacts/evaluation/agreement
+  --source-run-id '<answers-run-id>' \
+  --grading-run-id '<model-grading-run-id>' --grading-run-id '<human-grading-run-id>' \
+  --output-dir artifacts/evaluation/agreement --log
+# UI에서 내려받은 완료한 grading-result.json은 --grading-file '<path>'로 추가할 수 있다.
 ```
 
 `agreement.json`은 차원별 모델–모델·모델–사람 일치율, Cohen’s kappa, 유효 쌍 수·혼동행렬을 제공한다.
-같은 Judge 버전의 반복은 repeat_consistency, 버전이 달라진 비교는 judge_revision으로 구분한다.
+같은 평가자·프로필의 반복은 repeat_consistency, 같은 주체의 다른 프로필은 judge_revision으로 구분한다.
+--log는 별도 analysis run에 입력 grading manifest·비교 결과와 유효한 일치율·κ metric을 기록한다.
 N/A·오류·미입력은 이진 kappa에서 제외하고 적용 가능 여부의 일치율·제외 건수를 따로 표시한다.
 유효 쌍이 2개 미만이거나 양쪽이 동일한 상수 라벨이면 kappa는 null로 남긴다.
 라벨 불균형과 작은 표본의 영향을 받으므로 kappa 하나나 다수결을 정답·신뢰성의 증거로 쓰지 않는다.

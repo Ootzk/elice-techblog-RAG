@@ -685,19 +685,12 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
     )
     seen = []
 
-    def judge(settings, run_id, records, cases, frozen):
+    def judge(store, bundle, frozen):
         seen.append(frozen)
-        assert cases[0]["error"] is None
-        return {}, [
-            {
-                "record_id": "r1",
-                "judges": {
-                    "qa-gold-chatgpt": {"value": False, "rationale": "missing", "version": 1}
-                },
-            }
-        ]
+        assert bundle["cases"][0]["error"] is None
+        return [{"run_id": "model-child", "state": "FINISHED", "rater_id": "model:chatgpt"}]
 
-    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_answers", judge)
+    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_models", judge)
     job_id = enqueue_evaluation(
         service,
         EvaluationRequest(
@@ -716,7 +709,12 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
         ).fetchone()
         job = conn.execute("SELECT status FROM qa_jobs WHERE id=%s", (job_id,)).fetchone()
     assert job["status"] == "completed"
-    assert case["scores"]["qa-gold-chatgpt"] == 0.0
+    assert "qa-gold-chatgpt" not in case["scores"]
+    with service.connection() as conn:
+        summary = conn.execute(
+            "SELECT summary FROM evaluation_runs WHERE id=%s", (job_id,)
+        ).fetchone()["summary"]
+    assert summary["grading_runs"][0]["run_id"] == "model-child"
 
 
 @pytest.mark.parametrize("changed_field", ["code_identity", "provider_identity"])

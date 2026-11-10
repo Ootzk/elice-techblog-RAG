@@ -5,7 +5,7 @@ from itertools import combinations
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import answer_digest, validate_bundle
-from elice_knowledge.judges import DIMENSIONS, evaluation_row, instructions
+from elice_knowledge.judges import DIMENSIONS, evaluation_row
 
 LABELS = {"pass", "fail", "not_applicable", "error"}
 
@@ -28,7 +28,7 @@ def review_packet(bundle, rater):
             packet.append(
                 {
                     **identity,
-                    "rubric": instructions(dimension),
+                    "rubric": bundle["rubrics"][dimension],
                     **{key: value for key, value in data.items() if key != "tags"},
                 }
             )
@@ -38,30 +38,11 @@ def review_packet(bundle, rater):
                     "rater": "human:" + rater,
                     "round": "1",
                     "label": None,
-                    "protocol": digest(instructions(dimension)),
+                    "protocol": digest(bundle["rubrics"][dimension]),
                     "rationale": "",
                 }
             )
     return packet, labels
-
-
-def machine_labels(bundle, judgments, round_id):
-    records = {row["id"]: row for row in bundle["records"]}
-    cases = {row["record_id"]: row for row in bundle["cases"]}
-    return [
-        dict(
-            record_id=row["record_id"],
-            answer_digest=answer_digest(records[row["record_id"]], cases[row["record_id"]]),
-            dimension=cell["dimension"],
-            rater=cell["rater"],
-            round=round_id,
-            label=cell["status"],
-            rationale=cell.get("rationale"),
-            protocol=digest({"name": name, "version": cell["version"]}),
-        )
-        for row in judgments
-        for name, cell in row["judges"].items()
-    ]
 
 
 def pairwise(left, right):
@@ -115,7 +96,7 @@ def analyze(bundle, entries):
     validate_bundle(bundle)
     records = {row["id"]: row for row in bundle["records"]}
     cases = {row["record_id"]: row for row in bundle["cases"] if not row["error"]}
-    groups, seen, protocols = defaultdict(dict), set(), {}
+    groups, seen = defaultdict(dict), set()
     for entry in entries:
         case_id = entry["record_id"]
         if (
@@ -127,15 +108,17 @@ def analyze(bundle, entries):
         label = entry["label"]
         if label is not None and label not in LABELS:
             raise ValueError("invalid_review_label")
-        identity = (entry["dimension"], entry["rater"], str(entry["round"]), case_id)
+        identity = (
+            entry["dimension"],
+            entry["rater"],
+            entry["protocol"],
+            str(entry["round"]),
+            case_id,
+        )
         if identity in seen:
             raise ValueError("duplicate_review_label")
         seen.add(identity)
-        protocol = entry["protocol"]
-        if identity[:3] in protocols and protocols[identity[:3]] != protocol:
-            raise ValueError("mixed_judge_protocols_in_round")
-        protocols[identity[:3]] = protocol
-        groups[identity[:3]][case_id] = label
+        groups[identity[:4]][case_id] = label
     comparisons = []
     for dimension in DIMENSIONS[bundle["kind"]]:
         selected = [(key, labels) for key, labels in groups.items() if key[0] == dimension]
@@ -143,15 +126,13 @@ def analyze(bundle, entries):
             comparisons.append(
                 dict(
                     dimension=dimension,
-                    left=dict(rater=a[1], round=a[2]),
-                    right=dict(rater=b[1], round=b[2]),
-                    comparison=(
-                        "repeat_consistency" if protocols[a] == protocols[b] else "judge_revision"
-                    )
+                    left=dict(rater=a[1], round=a[3], profile_digest=a[2]),
+                    right=dict(rater=b[1], round=b[3], profile_digest=b[2]),
+                    comparison=("repeat_consistency" if a[2] == b[2] else "judge_revision")
                     if a[1] == b[1]
                     else "inter_rater",
-                    left_protocol=protocols[a],
-                    right_protocol=protocols[b],
+                    left_protocol=a[2],
+                    right_protocol=b[2],
                     **pairwise(left, right),
                 )
             )

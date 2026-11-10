@@ -2,19 +2,20 @@
 
 import json
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from psycopg.types.json import Jsonb
 from pydantic import SecretStr
 from test_chat_service import browser
 from test_chat_service import service as service  # noqa: F401
 
 from elice_knowledge.agreement import analyze
-from elice_knowledge.evaluation_bundle import create_bundle
-from elice_knowledge.human_review import HumanReview, initialize_reviews
+from elice_knowledge.evaluation_bundle import SCHEMA, create_bundle
+from elice_knowledge.human_review import HumanReview
 from elice_knowledge.main import create_app
 
 RUN = "a1" * 16
@@ -76,22 +77,53 @@ def review(service, monkeypatch):
     )
     writes = []
 
+    class Page(list):
+        token = None
+
     class Tracking:
         fail = False
+        fail_create = False
+        runs = {}
+        metrics = []
 
         def get_experiment_by_name(self, name):
             return SimpleNamespace(experiment_id="exp")
 
         def get_run(self, run_id):
-            return SimpleNamespace(
+            return self.runs.get(run_id) or SimpleNamespace(
                 info=SimpleNamespace(
                     experiment_id="exp", status="FINISHED", run_id=run_id, start_time=123
                 ),
                 data=SimpleNamespace(
-                    tags={"activity": "evaluation", "mlflow.runName": "sample"},
+                    tags={
+                        "activity": "evaluation",
+                        "mlflow.runName": "sample",
+                        "evaluation.schema": SCHEMA,
+                        "evaluation.kind": "answers",
+                    },
                     params={"dataset_id": "gold"},
                 ),
             )
+
+        def search_runs(self, experiments, **kw):
+            query = kw.get("filter_string", "")
+            if "grading_id" in query:
+                key = query.split("'")[1]
+                return Page([r for r in self.runs.values() if r.data.tags.get("grading_id") == key])
+            return Page([self.get_run(RUN)])
+
+        def create_run(self, experiment_id, *, tags):
+            if self.fail_create:
+                raise RuntimeError("unavailable")
+            run_id = uuid4().hex
+            run = SimpleNamespace(
+                info=SimpleNamespace(
+                    experiment_id=experiment_id, run_id=run_id, status="RUNNING", start_time=123
+                ),
+                data=SimpleNamespace(tags=tags.copy(), params={}),
+            )
+            self.runs[run_id] = run
+            return run
 
         def download_artifacts(self, run_id, name, directory):
             path = Path(directory) / name
@@ -101,11 +133,21 @@ def review(service, monkeypatch):
         def log_dict(self, run_id, data, path):
             if self.fail:
                 raise RuntimeError("secret MLflow endpoint")
-            writes.append((run_id, data, path))
+            writes.append((run_id, deepcopy(data), path))
+
+        def set_tag(self, run_id, key, value):
+            self.runs[run_id].data.tags[key] = value
+
+        def log_metric(self, run_id, name, value, **kw):
+            self.metrics.append((run_id, name, value, kw))
+
+        def set_terminated(self, run_id, state):
+            self.runs[run_id].info.status = state
 
     tracking = Tracking()
     service.settings.mlflow_enabled = True
     monkeypatch.setattr("elice_knowledge.human_review.client", lambda _: tracking)
+    monkeypatch.setattr("elice_knowledge.grading.client", lambda _: tracking)
     admin = browser(service, "test-admin-login-code")
     assert admin.post("/api/reviews", json={"run_id": RUN}).status_code == 201
     return SimpleNamespace(
@@ -208,7 +250,7 @@ def test_applicability_validation_and_csrf(review):
     assert client.get(f"/api/reviews/{RUN}/rounds/1/cases/2").status_code == 404
 
 
-def test_sync_failure_preserves_labels_and_retry_uses_source_run(review):
+def test_sync_failure_preserves_labels_and_retry_uses_single_child_run(review):
     client = review.admin
     case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
     client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=submission(case))
@@ -217,13 +259,17 @@ def test_sync_failure_preserves_labels_and_retry_uses_source_run(review):
     assert response.status_code == 503 and "secret" not in response.text
     assert client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()["saved"]["synced"] is False
     review.tracking.fail = False
-    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json() == {"synced": 1}
-    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json() == {"synced": 0}
-    assert len(review.writes) == 1
-    run_id, artifact, path = review.writes[0]
-    assert run_id == RUN and artifact["source_run_id"] == RUN
-    assert artifact["source_digest"] == review.bundle["digest"]
-    assert len(artifact["labels"]) == 4 and path.startswith("human-review/")
+    first = client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()
+    assert first["synced"] == 1 and first["state"] == "RUNNING"
+    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()["synced"] == 0
+    artifacts = [r for r in review.writes if r[2] == "grading-result.json"]
+    assert len(artifacts) == 1
+    run_id, artifact, _ = artifacts[0]
+    assert run_id != RUN and artifact["source_run_id"] == RUN
+    assert artifact["source_bundle_digest"] == review.bundle["digest"]
+    assert len(artifact["labels"]) == 4
+    assert len(review.tracking.runs) == 1
+    assert any(name == "quality.correctness.pass_rate" for _, name, _, _ in review.tracking.metrics)
 
 
 def test_import_rejects_changed_bundle_and_unrelated_experiment(review):
@@ -234,7 +280,7 @@ def test_import_rejects_changed_bundle_and_unrelated_experiment(review):
         info=SimpleNamespace(experiment_id="other", status="FINISHED"),
         data=SimpleNamespace(tags={"activity": "evaluation"}),
     )
-    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 409
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 404
 
 
 def test_review_html_requires_login(review, tmp_path):
@@ -367,12 +413,14 @@ def test_repeated_rounds_start_blank_and_preserve_previous_labels_and_artifacts(
     # An unfinished round is resumed, rather than accidentally starting duplicates.
     assert client.post("/api/reviews", json={"run_id": RUN}).json()["round"] == 1
     finish_round(client, 1)
-    assert client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()["synced"] == 2
+    first_run = client.post(f"/api/reviews/{RUN}/rounds/1/sync").json()
+    assert first_run["synced"] == 2 and first_run["state"] == "FINISHED"
     assert client.post("/api/reviews", json={"run_id": RUN}).json()["round"] == 2
     fresh = client.get(f"/api/reviews/{RUN}/rounds/2/cases/0").json()
     assert fresh["saved"] is None and fresh["draft"] is None
     finish_round(client, 2, label="fail")
-    assert client.post(f"/api/reviews/{RUN}/rounds/2/sync").json()["synced"] == 2
+    second_run = client.post(f"/api/reviews/{RUN}/rounds/2/sync").json()
+    assert second_run["synced"] == 2 and second_run["grading_run_id"] != first_run["grading_run_id"]
     first = client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"]
     second = client.get(f"/api/reviews/{RUN}/rounds/2/labels").json()["labels"]
     assert first[0]["label"] == "pass" and second[0]["label"] == "fail"
@@ -381,8 +429,11 @@ def test_repeated_rounds_start_blank_and_preserve_previous_labels_and_artifacts(
     report = analyze(review.bundle, first + second)
     assert report["comparisons"]
     assert all(row["comparison"] == "repeat_consistency" for row in report["comparisons"])
-    assert any("/round-1/" in path for _, _, path in review.writes)
-    assert any("/round-2/" in path for _, _, path in review.writes)
+    artifacts = [
+        (run, result) for run, result, path in review.writes if path == "grading-result.json"
+    ]
+    assert {r["round"] for _, r in artifacts} == {1, 2}
+    assert len({run for run, _ in artifacts}) == 2
     sources = client.get("/api/reviews").json()["items"]
     assert len(sources) == 2 and all(r["completed"] == 2 and r["synced"] == 2 for r in sources)
     guest = browser(review.service, review.service.test_guest_code)
@@ -444,33 +495,10 @@ def test_drafts_resume_are_private_and_reject_stale_tabs(review):
     assert client.put(path + "/draft", json=body).status_code == 409
 
 
-def test_legacy_reviews_migrate_to_first_round_without_losing_labels(review):
-    client = review.admin
-    case = client.get(f"/api/reviews/{RUN}/rounds/1/cases/0").json()
-    client.post(f"/api/reviews/{RUN}/rounds/1/cases/0", json=submission(case))
-    labels = client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"]
+def test_legacy_bundle_is_rejected_without_migration(review):
+    run_id = "d4" * 16
+    review.bundle.pop("schema")
+    review.bundle["source_run_id"] = run_id
+    assert review.admin.post("/api/reviews", json={"run_id": run_id}).status_code == 422
     with review.service.connection() as conn:
-        conn.execute("DROP TABLE human_review_drafts")
-        conn.execute("DROP TABLE human_reviews")
-        conn.execute("DROP TABLE human_review_rounds")
-        conn.execute("""CREATE TABLE human_review_assignments (
-            run_id text REFERENCES human_review_sources(run_id),
-            reviewer_id uuid REFERENCES access_codes(id),
-            PRIMARY KEY(run_id,reviewer_id))""")
-        conn.execute(
-            "INSERT INTO human_review_assignments VALUES (%s,%s)",
-            (RUN, review.service.test_admin_id),
-        )
-        conn.execute("""CREATE TABLE human_reviews (
-            run_id text,reviewer_id uuid,record_id text, labels jsonb, synced boolean DEFAULT false,
-            created_at timestamptz DEFAULT now(),PRIMARY KEY(run_id,reviewer_id,record_id),
-            FOREIGN KEY(run_id,reviewer_id)
-            REFERENCES human_review_assignments(run_id,reviewer_id))""")
-        conn.execute(
-            "INSERT INTO human_reviews(run_id,reviewer_id,record_id,labels) VALUES (%s,%s,%s,%s)",
-            (RUN, review.service.test_admin_id, "r1", Jsonb(labels)),
-        )
-        initialize_reviews(conn)
-        initialize_reviews(conn)
-    assert client.get(f"/api/reviews/{RUN}/rounds/1/labels").json()["labels"] == labels
-    assert client.get("/api/reviews").json()["items"][0]["completed"] == 1
+        assert conn.execute("SELECT count(*) AS n FROM evaluation_sources").fetchone()["n"] == 1
