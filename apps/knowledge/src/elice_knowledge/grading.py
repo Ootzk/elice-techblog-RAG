@@ -35,6 +35,9 @@ def initialize_grading(conn):
             grading_id uuid NOT NULL REFERENCES grading_runs(id),record_id text NOT NULL,
             labels jsonb NOT NULL,synced boolean NOT NULL DEFAULT false,
             created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(grading_id,record_id))""",
+        """CREATE TABLE IF NOT EXISTS grading_measurements (
+            grading_id uuid NOT NULL REFERENCES grading_runs(id),record_id text NOT NULL,
+            measurements jsonb NOT NULL,PRIMARY KEY(grading_id,record_id))""",
         """CREATE TABLE IF NOT EXISTS grading_drafts (
             grading_id uuid NOT NULL REFERENCES grading_runs(id),record_id text NOT NULL,
             scores jsonb NOT NULL,revision integer NOT NULL,
@@ -185,7 +188,7 @@ class Grading:
             )
             return run_id
 
-    def write_case(self, grading_id, record_id, labels):
+    def write_case(self, grading_id, record_id, labels, measurements=None):
         with self.store.connection() as conn:
             conn.execute("SELECT id FROM grading_runs WHERE id=%s FOR UPDATE", (grading_id,))
             conn.execute(
@@ -199,6 +202,18 @@ class Grading:
             ).fetchone()["labels"]
             if saved != labels:
                 raise ServiceError("review_already_submitted", 409)
+            if measurements is not None:
+                conn.execute(
+                    """INSERT INTO grading_measurements VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
+                    (grading_id, record_id, Jsonb(measurements)),
+                )
+                saved = conn.execute(
+                    "SELECT measurements FROM grading_measurements "
+                    "WHERE grading_id=%s AND record_id=%s",
+                    (grading_id, record_id),
+                ).fetchone()["measurements"]
+                if saved != measurements:
+                    raise ServiceError("review_already_submitted", 409)
 
     def publish(self, grading_id):
         run_id = self.ensure_mlflow(grading_id)
@@ -214,9 +229,23 @@ class Grading:
                 "SELECT * FROM grading_cases WHERE grading_id=%s ORDER BY record_id", (grading_id,)
             ).fetchall()
             result = grading_result(
-                bundle, grading, [label for row in rows for label in row["labels"]]
+                bundle,
+                grading,
+                [label for row in rows for label in row["labels"]],
+                [
+                    {"record_id": r["record_id"], **m}
+                    for r in conn.execute(
+                        "SELECT record_id,measurements FROM grading_measurements "
+                        "WHERE grading_id=%s ORDER BY record_id",
+                        (grading_id,),
+                    ).fetchall()
+                    for m in r["measurements"]
+                ],
             )
             values = metrics(bundle, result)
+            from elice_knowledge.ragas_metrics import measurement_metrics
+
+            values.update(measurement_metrics(result["measurements"]))
             if grading["sync_step"] and all(row["synced"] for row in rows):
                 return {
                     "run_id": run_id,
@@ -231,7 +260,10 @@ class Grading:
             state = "RUNNING"
             if result["complete"]:
                 state = (
-                    "FAILED" if any(r["label"] == "error" for r in result["labels"]) else "FINISHED"
+                    "FAILED"
+                    if any(r["label"] == "error" for r in result["labels"])
+                    or any(m["status"] == "error" for m in result["measurements"])
+                    else "FINISHED"
                 )
                 tracking.set_terminated(run_id, state)
             conn.execute("UPDATE grading_cases SET synced=true WHERE grading_id=%s", (grading_id,))

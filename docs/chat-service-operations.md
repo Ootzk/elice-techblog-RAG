@@ -176,13 +176,18 @@ Gateway endpoint는 `elice-techblog-rag-judge-{chatgpt,claude,gemini}`가 미리
 `compose.dev.yaml`은 API와 worker의 `EVALUATION_JUDGES_ENABLED=true`를 설정한다.
 호스트에서 worker를 실행하면 환경 변수도 직접 설정한다. prod 기본값은 false다.
 Gold/Iron 접수 시 모든 해당 Judge의 등록 버전을 고정하고, QA 완료 후
-`mlflow.genai.evaluate()`로 채점한다. 질문·차원을 SDK에서 병렬 실행하며 기본 상한은
+Ragas로 채점하고 `mlflow.genai.evaluate()`가 병렬 실행과 MLflow 기록을 담당한다.
+등록 scorer의 모델 URI·rubric을 재사용하며 별도의 모델 API 키를 설정하지 않는다.
+질문·지표를 SDK에서 병렬 실행하며 기본 상한은
 프로세스당 질문 2개 × 차원 4개다. `MLFLOW_GENAI_EVAL_MAX_WORKERS`와
 `MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`로 조절한다. 모델·반복 회차는 순차 실행한다.
 Judge 오류·누락 판정은 평가 실패로 처리하되 다른 항목의 성공 결과는 보존한다.
 답변 생성 run은 `evaluation.kind=answers`이며 생성 bundle과 결정적 지표만 보관한다.
 채점은 모델별 grading 자식 run으로 나누고 `grading-result.json`·`rater-profile.json`과
-공통 `quality.<차원>.*` metric을 기록한다. 사례 API scores에 모델 Judge 점수를 섞지 않는다.
+공통 `quality.<차원>.*` 이진 metric과 `ragas.<지표>.*` 원점수 metric을 기록한다.
+Gold는 FactualCorrectness precision/recall·Faithfulness·질문 적합성 DiscreteMetric 및
+누적/최종 문맥의 ContextRecall·ContextPrecision, Iron은 행동 기준 DiscreteMetric을 실행한다.
+Ragas 한 지표의 여러 모델 요청은 직렬화해 전체 동시성 상한을 유지한다. 사례 API scores에 모델 Judge 점수를 섞지 않는다.
 자세한 저장·검증 계약은 [평가 스키마](evaluation-schema.md)를 따른다.
 
 online Judge는 `environment=dev`·`evaluation_mode=online`·`quality_contract=dimension-v1`이며 정상 종료한 Trace를 100% 자동 평가한다.
@@ -258,24 +263,20 @@ Dataset 평가는 프로필을 갱신하지 않고 실행 조건 불일치를 �
 MLflow에는 Dataset ID/해시·QA/scorer 프로필·사례별 출력·집계 JSON과 지표를 남긴다.
 MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공으로 표시하지 않는다.
 
-첫 scorer `evidence-v1`은 다음 두 지표만 계산한다.
-
-- `evidence_recall`: URL과 정규화한 원문 인용문이 검색된 청크에 함께 존재하는 비율.
-- `answerability_correct`: answered 여부가 기대 answerable과 일치하는지.
-
-agentic QA의 `evidence_recall`는 각 검색 호출의 top_k가 아니라 실행 전체의 누적 검색 결과를 본다.
-기대 근거가 없는 문항은 이 회수율의 채점 대상에서 제외한다. `answerability_correct`는 답변 내용이
-틀려도 answered 상태만 맞으면 통과할 수 있으므로 의미적 정확성과 혼동하지 않는다.
+scorer `ragas-v1`은 Ragas 기반의 모델별 품질 채점 계약과 결정적 상태 검사를 구분한다.
+`answerability_correct`는 answered 상태와 기대 answerable의 일치이며 답변 내용의 정확성이 아니다.
+자체 URL·인용문 일치 Recall은 제거했고, 누적·최종 문맥의 의미적 근거 회수는 Ragas가 평가한다.
 실행 실패는 0점 답변으로 섞지 않고 실패율과 유효 채점 건수를 별도로 집계한다.
-이 지표는 의미적 답변 정확성·충실도를 검증하지 않는다.
 Gold 22문항·Iron 8문항은 작성·검수 후 홈서버 MLflow에 등록했다.
 Gold·Iron 전수 기준 평가와 사람 판단과의 정합성 검증은 아직 수행하지 않았다.
 등록 CLI는 생성이나 평가를 호출하지 않는다.
 
 ### 차원별 판정과 고정 답안 검수
 
-Gold는 모델당 네 Judge, Iron은 모델당 한 Judge, online은 모델당 두 Judge를 사용한다.
-따라서 Gold는 문항당 최대 12회, Iron은 3회, dev 일반 대화는 6회 Judge 호출이 발생한다.
+Gold는 모델당 네 답변 지표와 네 문맥 지표, Iron은 모델당 한 행동 지표를 Ragas로 계산한다.
+하나의 Ragas 지표가 주장 분해·지지 판정 또는 문맥별 판정에 여러 LLM 요청을 사용하므로,
+세 모델 × 여덟 지표가 모델 요청 24회라는 뜻은 아니다. 특히 ContextPrecision은 문맥마다 판정한다.
+일반 대화의 online 자동 평가는 모델당 두 MLflow Judge를 유지하며 오프라인 Ragas 채점과 구분한다.
 기존 Gateway endpoint·키는 공유하며 문항별 적용 불가 차원은 호출 전 제외할 수 있다.
 이전 종합 Judge 정의는 과거 결과의 추적을 위해 보존하지만 새 프로필은 참조하지 않으며 이전 online 자동 평가는 중지한다.
 
@@ -379,7 +380,7 @@ worker 시간에는 프로필 갱신·이력 조회·QA 실행·QA 결과 저장
 소규모 세트의 기본 집계는 평균·중앙값·최댓값이며 p95는 산출하지 않는다.
 
 MLflow 지표 이름은 key다. 코드에서 새 이름을 기록해도 이전 Run의 key가 자동으로 변경되지 않는다.
-이후 실행에는 `evidence_recall`을 사용하고, 과거 `evidence_recall_at_k` 기록은 보존한다.
+새 평가에는 `ragas.*`를 기록하며 과거 자체 Recall metric은 자동 변경·backfill하지 않는다.
 
 ## 검증 한계
 

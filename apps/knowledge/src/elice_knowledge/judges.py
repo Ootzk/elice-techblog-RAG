@@ -1,6 +1,8 @@
 """Dimension-specific judges with isolated inputs and explicit inapplicability."""
 
+import math
 import os
+from numbers import Real
 from pathlib import Path
 
 RATERS = ("chatgpt", "claude", "gemini")
@@ -102,49 +104,6 @@ def inapplicable(record, case, dimension):
     return False
 
 
-def judgment_metrics(judgments, specs):
-    metrics = {}
-    for spec in specs:
-        name = spec["name"]
-        values = [row["judges"][name]["value"] for row in judgments]
-        scored = [value for value in values if value is not None]
-        metrics[name + "_scored_cases"] = len(scored)
-        metrics[name + "_not_applicable_cases"] = sum(
-            row["judges"][name]["status"] == "not_applicable" for row in judgments
-        )
-        metrics[name + "_error_cases"] = sum(
-            row["judges"][name]["status"] == "error" for row in judgments
-        )
-        if scored:
-            metrics[name] = sum(scored) / len(scored)
-    return metrics
-
-
-def isolated_scorer(judge, spec):
-    """Let MLflow parallelize dimensions while keeping each model input isolated."""
-    from mlflow.entities import Feedback
-    from mlflow.genai.scorers import scorer
-
-    dimension = spec["dimension"]
-
-    @scorer(name=spec["name"], timeout=0)
-    def routed(inputs, outputs, expectations):
-        record = {"inputs": inputs, "expectations": expectations}
-        case = {"result": outputs}
-        if inapplicable(record, case, dimension):
-            return Feedback(value="not_applicable", rationale="문항/응답에 적용되지 않는 평가 차원")
-        row = dimension_payload(record, case, dimension)
-        # Do not forward the shared row, gold reference, or unseen retrieval candidates.
-        # The pinned registered judge retains its own invocation timeout.
-        return judge.run(
-            inputs=row["inputs"],
-            outputs=row["outputs"],
-            expectations=row.get("expectations"),
-        )
-
-    return routed
-
-
 def evaluation_workers():
     """Use MLflow's native pools rather than multiplying them with another pool."""
     limits = {}
@@ -161,23 +120,29 @@ def evaluation_workers():
 
 def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=True):
     import mlflow
-    from mlflow.genai.scorers import get_scorer
+
+    from elice_knowledge.ragas_metrics import (
+        CONTEXT_METRICS,
+        PASS_THRESHOLD,
+        measurement_metrics,
+        payload,
+        scorer,
+    )
 
     limits = evaluation_workers()
-    experiment_id = configure(settings)
+    configure(settings)
     expected = {record["id"]: record for record in records}
     valid = {case["record_id"]: case for case in cases if not case["error"]}
-    # Validate every dimension before any paid evaluation or worker submission.
-    for spec in specs:
+    dimensions = list(specs)
+    if len({s["rater"] for s in specs}) != 1:
+        raise ValueError("one_rater_per_grading")
+    if {s["dimension"] for s in specs} == set(DIMENSIONS["gold"]):
+        dimensions += [{**specs[0], "name": d, "dimension": d} for d in CONTEXT_METRICS]
+    # Validate every dimension before submitting any paid work.
+    for spec in dimensions:
         for key, case in valid.items():
-            evaluation_row(expected[key], case, spec["dimension"])
-    scorers = [
-        isolated_scorer(
-            get_scorer(name=spec["name"], version=spec["version"], experiment_id=experiment_id),
-            spec,
-        )
-        for spec in specs
-    ]
+            payload(expected[key], case, spec["dimension"])
+    scorers = [scorer(settings, spec) for spec in dimensions]
     data = [
         dict(
             inputs=expected[key]["inputs"],
@@ -202,14 +167,30 @@ def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=
     for key in valid:
         row = by_id[key]
         judgments = {}
-        for spec in specs:
+        measurements = []
+        for spec in dimensions:
             raw = row.get(spec["name"] + "/value")
-            if type(raw).__name__ in {"bool", "bool_"}:
-                raw = "yes" if raw else "no"
-            status = {"yes": "pass", "no": "fail", "not_applicable": "not_applicable"}.get(
-                raw if isinstance(raw, str) else "", "error"
+            numeric = isinstance(raw, Real) and math.isfinite(raw) and 0 <= raw <= 1
+            status = (
+                "pass"
+                if numeric and raw >= PASS_THRESHOLD
+                else "fail"
+                if numeric
+                else "not_applicable"
+                if raw == "not_applicable"
+                else "error"
             )
             value = True if status == "pass" else False if status == "fail" else None
+            measurements.append(
+                dict(
+                    metric=spec["dimension"],
+                    score=float(raw) if numeric else None,
+                    status="scored" if numeric else status,
+                    rationale=row.get(spec["name"] + "/rationale") or "",
+                )
+            )
+            if spec["dimension"] in CONTEXT_METRICS:
+                continue
             judgments[spec["name"]] = dict(
                 value=value,
                 status=status,
@@ -219,15 +200,15 @@ def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=
                 rater=spec["rater"],
                 trace_id=row.get("trace_id"),
             )
-        rows.append(dict(record_id=key, judges=judgments))
-    metrics = judgment_metrics(rows, specs)
+        rows.append(dict(record_id=key, judges=judgments, measurements=measurements))
+    metrics = measurement_metrics([m for row in rows for m in row["measurements"]])
     tracking = mlflow.MlflowClient()
     tracking.log_dict(
         run_id, {"cases": rows, "specs": specs, "execution": limits}, "judge-results.json"
     )
     # Shared grading publication owns canonical quality.* metrics. SDK-native metrics are separate.
     if raise_on_error and any(
-        cell["status"] == "error" for row in rows for cell in row["judges"].values()
+        cell["status"] == "error" for row in rows for cell in row["measurements"]
     ):
         raise RuntimeError("judge_assessment_failed: see judge-results.json")
     return metrics, rows

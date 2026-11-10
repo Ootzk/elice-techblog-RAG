@@ -69,7 +69,7 @@ def evaluate_models(store, bundle, specs, *, repeat=1, raters=None):
                         for c in cells
                     ]
                 for key, labels in rows.items():
-                    grading_store.write_case(grading["id"], key, labels)
+                    grading_store.write_case(grading["id"], key, labels, by_id[key]["measurements"])
                 published = grading_store.publish(grading["id"])
                 results.append(
                     {
@@ -78,6 +78,7 @@ def evaluate_models(store, bundle, specs, *, repeat=1, raters=None):
                         "rater_id": grading["rater_id"],
                         "round": grading["round"],
                         "state": published["state"],
+                        "metrics": published["metrics"],
                     }
                 )
             except Exception:
@@ -98,7 +99,25 @@ def evaluate_models(store, bundle, specs, *, repeat=1, raters=None):
                             }
                             for dimension in DIMENSIONS[bundle["kind"]]
                         ]
-                        grading_store.write_case(grading["id"], key, labels)
+                        from elice_knowledge.ragas_metrics import CONTEXT_METRICS
+
+                        dimensions = list(DIMENSIONS[bundle["kind"]]) + (
+                            list(CONTEXT_METRICS) if bundle["kind"] == "gold" else []
+                        )
+                        grading_store.write_case(
+                            grading["id"],
+                            key,
+                            labels,
+                            [
+                                dict(
+                                    metric=d,
+                                    score=None,
+                                    status="error",
+                                    rationale="Ragas grading failed",
+                                )
+                                for d in dimensions
+                            ],
+                        )
                 try:
                     recovered = grading_store.publish(grading["id"])
                     remote = recovered["run_id"]

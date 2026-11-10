@@ -42,6 +42,39 @@ def fake_judgments(settings, run_id, records, cases, selected, **kwargs):
     return {}, [
         {
             "record_id": c["record_id"],
+            "measurements": [
+                dict(
+                    metric=d,
+                    score=None
+                    if (
+                        d in {"correctness", "completeness"}
+                        and inapplicable(expected[c["record_id"]], c, d)
+                    )
+                    or (
+                        d.endswith(("recall", "precision"))
+                        and not expected[c["record_id"]]["expectations"].get("answerable")
+                    )
+                    else 1.0,
+                    status="not_applicable"
+                    if (
+                        d in {"correctness", "completeness"}
+                        and inapplicable(expected[c["record_id"]], c, d)
+                    )
+                    or (
+                        d.endswith(("recall", "precision"))
+                        and not expected[c["record_id"]]["expectations"].get("answerable")
+                    )
+                    else "scored",
+                    rationale="fake",
+                )
+                for d in [
+                    *[s["dimension"] for s in selected],
+                    "retrieved_context_recall",
+                    "retrieved_context_precision",
+                    "generation_context_recall",
+                    "generation_context_precision",
+                ]
+            ],
             "judges": {
                 s["name"]: {
                     "dimension": s["dimension"],
@@ -108,7 +141,7 @@ def test_human_and_model_share_metrics_and_completed_manifest(review, monkeypatc
         key for run, key, _, _ in review.tracking.metrics if run == synced["grading_run_id"]
     }
     model_metrics = {key for run, key, _, _ in review.tracking.metrics if run == model["run_id"]}
-    assert human_metrics == model_metrics
+    assert human_metrics == {k for k in model_metrics if not k.startswith("ragas.")}
     assert "quality.correctness.pass_rate" in human_metrics
     assert "quality.correctness.not_applicable_cases" in human_metrics
 
@@ -295,3 +328,40 @@ def test_cli_logs_analysis_without_inventing_undefined_kappa(review, monkeypatch
     assert analysis.data.tags["source_run_id"] == RUN and analysis.info.status == "FINISHED"
     logged = [name for run, name, _, _ in review.tracking.metrics if run == analysis.info.run_id]
     assert logged and not any(name.endswith("cohen_kappa") for name in logged)
+
+
+def test_ragas_fractional_scores_and_context_errors_survive_publication(review, monkeypatch):
+    def grade(*args, **kwargs):
+        metrics, rows = fake_judgments(*args, **kwargs)
+        rows[0]["judges"][next(k for k in rows[0]["judges"] if "correctness" in k)]["status"] = (
+            "fail"
+        )
+        for m in rows[0]["measurements"]:
+            if m["metric"] == "correctness":
+                m["score"] = 0.5
+            if m["metric"] == "retrieved_context_recall":
+                m.update(score=None, status="error")
+        return metrics, rows
+
+    monkeypatch.setattr("elice_knowledge.judge_runs.evaluate_answers", grade)
+    result = evaluate_models(review.service, review.bundle, specs(review.bundle, ["chatgpt"]))[0]
+    assert result["state"] == "FAILED"
+    manifest = next(
+        data
+        for target, data, path in review.writes
+        if target == result["run_id"] and path == "grading-result.json"
+    )
+    assert manifest["measurement_contract"] == "ragas-v1"
+    validate_grading(review.bundle, manifest)
+    assert result["metrics"]["ragas.correctness.mean"] == 0.5  # Other case is N/A.
+    assert result["metrics"]["ragas.retrieved_context_recall.error_cases"] == 1
+    for change in ("out_of_range", "missing", "label"):
+        bad = deepcopy(manifest)
+        if change == "out_of_range":
+            bad["measurements"][0]["score"] = float("nan")
+        elif change == "missing":
+            bad["measurements"].pop()
+        else:
+            bad["labels"][0]["label"] = "pass" if bad["labels"][0]["label"] == "fail" else "fail"
+        with pytest.raises(ValueError):
+            validate_grading(review.bundle, bad)

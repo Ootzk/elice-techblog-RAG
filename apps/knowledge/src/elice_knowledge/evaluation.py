@@ -1,6 +1,5 @@
 """Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -13,12 +12,14 @@ from elice_knowledge.judge_runs import evaluate_models
 from elice_knowledge.judges import frozen_judges
 from elice_knowledge.performance import summarize as performance_summary
 from elice_knowledge.qa import QARequest
+from elice_knowledge.ragas_metrics import contract
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client as tracking_client
 
 SCORER = {
-    "name": "evidence-v1",
-    "evidence": "url-and-normalized-verbatim-quote",
+    "name": "ragas-v1",
+    "ragas": contract(),
+    "quality": "per-model-ragas-grading",
     "answerability": "answered-status-vs-expected",
     "version": 1,
 }
@@ -139,22 +140,6 @@ def score(result, expectations):
     values = {}
     if "answerable" in expectations:
         values["answerability_correct"] = float(answerable == expectations["answerable"])
-    evidence = expectations.get("evidence", [])
-
-    def url(value):
-        p = urlsplit(value)
-        return p.netloc.lower(), p.path.rstrip("/")
-
-    if evidence:
-        retrieved = result.get("retrieved_sources", [])
-        values["evidence_recall"] = sum(
-            any(
-                url(e["url"]) == url(s["url"])
-                and " ".join(e["quote"].split()) in " ".join(s["text"].split())
-                for s in retrieved
-            )
-            for e in evidence
-        ) / len(evidence)
     return values
 
 

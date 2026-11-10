@@ -314,7 +314,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
     result = client.get(f"/api/evaluations/{job_id}").json()
     assert result["status"] == "completed"
-    assert result["summary"]["evidence_recall"] == 1
+    assert "evidence_recall" not in result["summary"]
     assert (
         client.get(f"/api/evaluations/{job_id}/cases").json()["items"][0]["scores"][
             "answerability_correct"
@@ -323,18 +323,14 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
 
 
-def test_scorer_requires_url_and_actual_quote():
-    expectations = {
-        "answerable": True,
-        "evidence": [{"url": "https://elice.io/ko/a", "quote": "실제 근거"}],
+def test_answerability_is_a_deterministic_status_check_only():
+    assert score({"status": "answered"}, {"answerable": True}) == {"answerability_correct": 1}
+    assert score({"status": "insufficient_evidence"}, {"answerable": True}) == {
+        "answerability_correct": 0
     }
-    result = {
-        "status": "answered",
-        "retrieved_sources": [{"url": "https://elice.io/ko/a#h2", "text": "실제\n 근거"}],
+    assert score({"status": "insufficient_evidence"}, {"answerable": False}) == {
+        "answerability_correct": 1
     }
-    assert score(result, expectations)["evidence_recall"] == 1
-    result["retrieved_sources"][0]["text"] = "무관한 내용"
-    assert score(result, expectations)["evidence_recall"] == 0
 
 
 def test_global_worker_concurrency_and_profile_drift(service):

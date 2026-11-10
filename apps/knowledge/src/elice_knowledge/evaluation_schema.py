@@ -1,6 +1,8 @@
 """Shared grading manifest, validation and neutral metrics for models and people."""
 
+import math
 import re
+from numbers import Real
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import SCHEMA, answer_digest, validate_bundle
@@ -25,7 +27,10 @@ def model_profile(bundle, specs):
         or any(s["instructions"] != bundle["rubrics"][s["dimension"]] for s in specs)
     ):
         raise ValueError("rater_profile_mismatch")
+    from elice_knowledge.ragas_metrics import contract
+
     return {
+        "ragas": contract(),
         "type": "model",
         "scorers": sorted(specs, key=lambda s: s["dimension"]),
         "contract": "dimension-v1",
@@ -76,10 +81,56 @@ def validate_grading(bundle, result):
             raise ValueError("grading_applicability_mismatch")
     if result["complete"] and seen != expected:
         raise ValueError("grading_incomplete")
+    from elice_knowledge.ragas_metrics import CONTEXT_METRICS, PASS_THRESHOLD
+
+    allowed = set(DIMENSIONS[bundle["kind"]]) | (
+        set(CONTEXT_METRICS) if bundle["kind"] == "gold" else set()
+    )
+    measured = set()
+    for cell in result.get("measurements", []):
+        key = (cell.get("record_id"), cell.get("metric"))
+        value = cell.get("score")
+        if (
+            kind != "model"
+            or key[0] not in cases
+            or key[1] not in allowed
+            or key in measured
+            or cell.get("status") not in {"scored", "not_applicable", "error"}
+            or (
+                cell["status"] == "scored"
+                and (
+                    isinstance(value, bool)
+                    or not isinstance(value, Real)
+                    or not math.isfinite(value)
+                    or not 0 <= value <= 1
+                )
+            )
+            or (cell["status"] != "scored" and value is not None)
+        ):
+            raise ValueError("grading_measurement_mismatch")
+        measured.add(key)
+    if kind == "model":
+        if result.get("measurement_contract") != "ragas-v1":
+            raise ValueError("unsupported_grading_metrics")
+        if result["complete"] and measured != {
+            (key, metric) for key in cases for metric in allowed
+        }:
+            raise ValueError("grading_measurements_incomplete")
+        labels = {(r["record_id"], r["dimension"]): r["label"] for r in result["labels"]}
+        for cell in result["measurements"]:
+            key = (cell["record_id"], cell["metric"])
+            if key in labels:
+                expected_label = (
+                    ("pass" if cell["score"] >= PASS_THRESHOLD else "fail")
+                    if cell["status"] == "scored"
+                    else cell["status"]
+                )
+                if labels[key] != expected_label:
+                    raise ValueError("grading_score_label_mismatch")
     return result
 
 
-def grading_result(bundle, grading, labels):
+def grading_result(bundle, grading, labels, measurements=()):
     expected = sum(not c["error"] for c in bundle["cases"]) * len(DIMENSIONS[bundle["kind"]])
     result = {
         "schema": SCHEMA,
@@ -91,7 +142,10 @@ def grading_result(bundle, grading, labels):
         "round": grading["round"],
         "complete": len(labels) == expected,
         "labels": labels,
+        "measurements": list(measurements),
     }
+    if grading["rater_type"] == "model":
+        result["measurement_contract"] = "ragas-v1"
     return validate_grading(bundle, result)
 
 

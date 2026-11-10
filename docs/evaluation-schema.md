@@ -48,6 +48,9 @@ grading run에는 다음 태그를 함께 기록한다.
 
 평가자 ID는 논리적인 주체다. 실제 모델·MLflow scorer 이름/버전·평가 기준은 rater-profile.json에 고정한다.
 모델/평가 기준이 바뀌면 프로필 해시가 달라지며 동일 조건의 반복으로 취급하지 않는다.
+모델 프로필에는 Ragas 버전·구현 해시·모델 요청 조건·pass threshold를 추가한다. 등록된 MLflow scorer의
+모델 URI와 rubric을 고정하지만, 오프라인 품질 점수 계산은 기존 make_judge 대신 Ragas가 수행한다.
+일반 대화의 서버 측 online 자동 Judge와 오프라인 Eval Harness는 구분한다.
 사람 프로필은 원본에 고정한 rubric과 적용 계약으로 결정한다. 로그인 코드가 사람 신원이며 대리 선택하지 않는다.
 한 모델 run에는 그 모델의 모든 차원이 들어간다. 세 모델을 하나의 grading run에 넣지 않는다.
 
@@ -62,7 +65,9 @@ evaluation-bundle.json은 schema, source_run_id, Dataset ID·해시, QA 프로�
 이전 schema bundle이나 원본 run ID가 다른 bundle은 거부한다.
 
 Gold는 correctness·completeness·groundedness·relevance, Iron은 behavior를 사용한다.
-사람 검수 화면과 모델 채점은 같은 rubric·차원별 허용 입력·사전 N/A 조건을 사용한다.
+사람 검수는 동결 rubric을 사용하고 모델은 동일한 품질 차원을 Ragas 알고리즘으로 계산한다.
+차원별 허용 입력 범위와 사전 N/A 조건은 공유하지만, 주장 분해와 분수 점수는 사람 판정과 동일하지 않다.
+이진 threshold를 통한 비교의 정합성은 실제 사람 자료로 검증해야 한다.
 등록된 모델 Judge의 instructions가 원본 rubric과 맞지 않으면 다른 기준으로 조용히 채점하지 않는다.
 Gateway URI·등록 scorer 버전은 식별하지만 외부 모델 별칭 뒤의 가중치 변경이나 완전한 결정성까지 보장하지 않는다.
 
@@ -99,7 +104,13 @@ label은 pass/fail/not_applicable/error다. 최종 결과에 같은 문항·차�
 answer_digest·평가자·회차·프로필이 manifest와 다르거나 허용하지 않은 문항/차원이 있으면 거부한다.
 complete=true는 생성에 성공한 모든 문항의 모든 차원이 판정된 상태다.
 생성 실패 문항은 두 평가자 유형 모두 채점에서 제외하고 source_failed_cases에 따로 기록한다.
-모델 호출 실패는 error로 구분한다. 사람의 미제출 초안은 label이 아니며 grading artifact에 포함하지 않는다.
+모델 호출 실패는 error로 구분한다.
+모델 manifest는 `measurement_contract=ragas-v1`과 `measurements`를 포함한다. 각 측정은
+record_id·metric·score(0–1 또는 null)·status(scored/not_applicable/error)·rationale를 갖는다.
+Gold 문항당 네 품질 점수와 누적·최종 문맥의 Recall·Precision 네 점수, Iron은 behavior 한 점수를 저장한다.
+complete 모델 manifest는 생성 성공 문항의 모든 측정을 포함해야 하며 중복·범위 밖 수치·NaN을 거부한다.
+원점수 1.0만 pass로 변환한 네 품질 label이 측정과 일치하는지 검증한다. 사람 manifest의 measurements는 비어 있다.
+이 계약이 없는 이전 모델 manifest는 새 분석에서 받지 않는다. 사람의 미제출 초안은 label이 아니며 grading artifact에 포함하지 않는다.
 
 ## 공통 metric
 
@@ -112,6 +123,8 @@ complete=true는 생성에 성공한 모든 문항의 모든 차원이 판정된
 - quality.<차원>.pending_cases: 아직 판정되지 않은 수
 - source_failed_cases: 원본 생성 실패 문항 수
 
+모델 run에는 `ragas.<metric>.mean`·scored_cases·not_applicable_cases·error_cases를 함께 기록한다.
+이는 0–1 원점수 집계이며 사람과 공통인 이진 통과율과 구분한다. 문맥 지표에는 통과 임계값을 적용하지 않는다.
 MLflow SDK가 추가하는 native 지표와 위 공통 지표를 구분하며 비교·보고서는 위 공통 이름을 사용한다.
 N/A·오류·미제출을 실패나 0점으로 섞지 않는다. 부분 사람 검수는 pending_cases를 남기고 RUNNING을 유지한다.
 analysis의 κ는 같은 답변의 대응되는 정상 이진 판정만 사용하며, 정의되지 않으면 숫자를 만들지 않고 이유를 artifact에 남긴다.
@@ -122,15 +135,16 @@ analysis의 κ는 같은 답변의 대응되는 정상 이진 판정만 사용�
 그 모델의 차원별 scorer 실행 → 공통 labels·metric 저장 → FINISHED 또는 FAILED.
 최초 Dataset 평가도 이 경로로 모델별 자식 run을 만든다. Judge만 반복하는 CLI도 같은 경로를 사용한다.
 
-한 모델의 모든 차원을 한 번의 `mlflow.genai.evaluate()`에 전달한다. SDK가 질문과 차원을 병렬 실행하고
-결과를 모두 모은 뒤 공통 grading을 저장한다. 등록 scorer의 고정 버전을 호출하는 어댑터가
+한 모델의 모든 차원을 한 번의 `mlflow.genai.evaluate()`에 전달한다. SDK가 질문과 Ragas 지표를 병렬 실행하고
+결과를 모두 모은 뒤 공통 grading을 저장한다. 등록 scorer에서 고정한 모델 URI로 Ragas를 실행하는 어댑터가
 차원별 입력을 분리하며, 사전 N/A는 모델을 호출하지 않는다. 한 항목의 호출 오류는 해당 판정에만
 error로 남기고 다른 항목의 성공 결과는 보존한다. 오류가 있으면 grading은 FAILED다.
 모델 간·반복 회차 간 실행은 순차로 유지한다.
 
 동시성은 프로세스별 `MLFLOW_GENAI_EVAL_MAX_WORKERS`(질문, 기본 2, 범위 1–32)와
 `MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`(질문당 차원, 기본 4, 범위 1–16)로 제한한다.
-Gold 기본값은 최대 8개, Iron은 질문당 한 차원이므로 최대 2개 Judge 호출이다.
+Gold 기본값은 최대 8개, Iron은 질문당 한 차원이므로 최대 2개 동시 모델 요청이다.
+Ragas 한 지표는 여러 요청을 할 수 있으며 지표 내부 LLM 요청을 직렬화해 SDK 상한이 유지되게 한다.
 동시에 여러 worker 작업·CLI를 실행하면 호출 수는 합산되며, Gateway 전체의 전역 제한은 아니다.
 실행에 사용한 두 값을 `judge-results.json`의 execution에 기록한다.
 평가의 실행 단위인 scorer와 관측 단위인 trace는 다르다. SDK의 scorer tracing은 별도 옵션이며
@@ -143,7 +157,7 @@ MLflow 장애가 최종 제출을 잃게 하지 않으며, 같은 grading_id로 
 완료한 사람 판정은 불변이고 새 회차에서만 다시 평가한다.
 
 로컬 테이블은 evaluation_sources(고정 원본), grading_runs(공통 평가자·회차·원격 ID),
-grading_cases(질문별 제출 labels), grading_drafts(사람 초안)로 구분한다.
+grading_cases(질문별 제출 labels), grading_measurements(Ragas 원점수), grading_drafts(사람 초안)로 구분한다.
 기존 human_review_*와 혼합하지 않고 새 계약의 테이블·schema만 사용한다. 호환 마이그레이션·옛 metric backfill은 하지 않는다.
 
 ## 검수 UI와 분석
