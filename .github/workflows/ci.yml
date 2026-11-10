@@ -22,6 +22,7 @@ jobs:
       release_pr: ${{ steps.contract.outputs.release_pr }}
       web: ${{ steps.scope.outputs.web }}
       knowledge: ${{ steps.scope.outputs.knowledge }}
+      reporting: ${{ steps.scope.outputs.reporting }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,12 +109,35 @@ jobs:
           uv run --project apps/knowledge --no-sync ruff format --check .github/scripts .github/tests apps/knowledge tools/evaluation
           uv run --project apps/knowledge --no-sync pytest apps/knowledge/tests -q
 
+  reporting:
+    name: Reporting checks
+    needs: checks
+    if: needs.checks.outputs.reporting == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.2'
+      - name: Check report environment and execute demo notebooks
+        run: |
+          uv sync --project tools/reporting --locked
+          uv run --project tools/reporting --no-sync ruff check tools/reporting
+          uv run --project tools/reporting --no-sync ruff format --check tools/reporting
+          uv run --project tools/reporting --no-sync pytest tools/reporting/tests -q
+
   images:
     name: Build ${{ matrix.service }}
-    needs: [checks, web, knowledge]
+    needs: [checks, web, knowledge, reporting]
     if: >-
       needs.checks.result == 'success' && !cancelled() &&
       needs.web.result == 'success' && needs.knowledge.result == 'success' &&
+      needs.reporting.result == 'success' &&
       needs.checks.outputs.release_pr == 'true' && needs.checks.outputs.has_images == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -136,7 +160,7 @@ jobs:
 
   ready:
     name: Ready to merge
-    needs: [checks, web, knowledge, images]
+    needs: [checks, web, knowledge, reporting, images]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -147,6 +171,8 @@ jobs:
           WEB_RESULT: ${{ needs.web.result }}
           KNOWLEDGE_REQUIRED: ${{ needs.checks.outputs.knowledge }}
           KNOWLEDGE_RESULT: ${{ needs.knowledge.result }}
+          REPORTING_REQUIRED: ${{ needs.checks.outputs.reporting }}
+          REPORTING_RESULT: ${{ needs.reporting.result }}
           IMAGES_RESULT: ${{ needs.images.result }}
           RELEASE_PR: ${{ needs.checks.outputs.release_pr }}
           HAS_IMAGES: ${{ needs.checks.outputs.has_images }}
@@ -161,6 +187,11 @@ jobs:
             test "$KNOWLEDGE_RESULT" = success
           else
             test "$KNOWLEDGE_RESULT" = skipped
+          fi
+          if test "$REPORTING_REQUIRED" = true; then
+            test "$REPORTING_RESULT" = success
+          else
+            test "$REPORTING_RESULT" = skipped
           fi
           if test "$RELEASE_PR" = true && test "$HAS_IMAGES" = true; then
             test "$IMAGES_RESULT" = success

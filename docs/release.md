@@ -11,20 +11,23 @@
 | Web | `apps/web/package.json` | `apps/web/package-lock.json`의 최상위·루트 패키지 항목 | 정적 빌드가 Knowledge 이미지에 포함 |
 | worker | Knowledge와 동일 | Knowledge와 동일 | 같은 이미지를 다른 command로 실행 |
 | 평가 CLI | 별도 패키지 버전 없음 | Knowledge 실행 환경 사용 | 저장소의 `tools/evaluation`에서 실행 |
+| Notebook 보고서 | `tools/reporting/pyproject.toml` | `tools/reporting/uv.lock` | 로컬 Jupyter 환경, 이미지 발행 없음 |
 | PostgreSQL·Ollama·MLflow | 각 외부 제품 버전 | 해당 인프라 관리 범위 | 이 저장소의 제품 버전과 별도 관리 |
 
-자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge와 Web 및 lockfile의 자체 항목은 모두 `0.2.0`이다.
+자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge·Web·Reporting 및 lockfile의 자체 항목은 모두 `0.2.0`이다.
 v0.2.0은 Human Review 구축과 실험 인프라 고도화를 목표로 한다. Open WebUI 원본 커밋·버전은
 `apps/web/UPSTREAM.md`의 출처 정보이며, 자체 Web 패키지 버전과 구분한다.
 API OpenAPI 버전·연결 검증 MLflow 태그·MCP 버전은 설치된 Knowledge 패키지 메타데이터를 사용한다.
 
-다음 릴리스에서는 대상 `release/vX.Y.Z`에서 분기한 feature 브랜치에서 두 패키지를 맞춘다.
+다음 릴리스에서는 대상 `release/vX.Y.Z`에서 분기한 feature 브랜치에서 모든 자체 패키지를 맞춘다.
 예를 들어 다음 대상 버전이 `0.3.0`일 때 저장소 루트에서 실행한다.
 
 ```bash
 uv version --project apps/knowledge --no-sync 0.3.0
+uv version --project tools/reporting --no-sync 0.3.0
 npm version 0.3.0 --prefix apps/web --no-git-tag-version --allow-same-version --ignore-scripts
 uv sync --project apps/knowledge --locked
+uv sync --project tools/reporting --locked
 uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.3.0
 ```
 
@@ -46,7 +49,7 @@ uv lock --check --project apps/knowledge
 1. feature → release PR: 브랜치·버전·lock 자체 항목, CI·릴리스 계약 테스트, 공백 검사를 항상 실행한다.
    나머지는 merge-base부터 PR head까지 바뀐 경로에 따라 선택한다. 기본 검사는 Python 표준
    라이브러리만 사용하며 npm/uv 의존성을 설치하거나 DB를 기동하지 않는다.
-2. release → main PR: 제목은 `Release v0.2.0`. 변경 경로와 관계없이 Web·Knowledge 전체 검사와
+2. release → main PR: 제목은 `Release v0.2.0`. 변경 경로와 관계없이 Web·Knowledge·Reporting 전체 검사와
    `linux/amd64` 이미지 빌드를 실행한다.
    이미지가 있어야 하는 릴리스 PR은 이미지 빌드가 생략되어도 `Ready to merge`를 통과하지 못한다.
 3. 사용자가 release PR을 **merge commit**으로 병합한다. feature PR의 squash merge와 구분한다.
@@ -59,7 +62,8 @@ uv lock --check --project apps/knowledge
 | 문서(`*.md`, `docs/`), Corpus manifest, Gold·Iron 데이터, 조회 SQL, 에디터 설정 | 없음 |
 | `apps/web/` 코드·의존성·설정 | Web 포맷·타입 검사·정적 빌드 |
 | `apps/knowledge/`, `tools/evaluation/` 코드 | Python lint·format·lock 검사·전체 앱 테스트, 테스트 전용 PostgreSQL |
-| Compose·환경 예시·CI 등 공통 설정 또는 미분류 경로 | Web·Knowledge 모두 |
+| `tools/reporting/` 코드·의존성·Notebook | 독립 환경 lint·format·lock 검사, 데모 Notebook 실행·HTML export 테스트 |
+| Compose·환경 예시·CI 등 공통 설정 또는 미분류 경로 | Web·Knowledge·Reporting 모두 |
 
 여러 범위가 바뀌면 필요한 검사를 합친다. 문서 경로는 앱 디렉터리 내부에서도 기본 검사만 실행한다.
 삭제·이동도 변경 경로에 포함하며, 이동은 이전·새 경로를 모두 확인한다. 선택하지 않은 job은
