@@ -35,6 +35,15 @@ answers bundle에는 Dataset ID·내용 해시·문항 records·실제 생성 ca
 문항 ID는 중복되지 않고 records와 cases의 집합이 같아야 한다. bundle digest는 digest 필드 외의
 전체 내용을 해시한다. 채점 시 source_run_id·bundle digest·문항별 answer_digest를 검증한다.
 
+새 QA 프로필의 `experiment_conditions`는 `experiment-conditions-v1` 계약으로 고정한다.
+선택한 인덱스에 저장된 Corpus·청킹 정책·임베딩 프로필과 SQL 인덱스 정의, PostgreSQL/pgvector 버전,
+BM25 설정·사전, agent 도구 계약, 생성 API 설정과 실행 환경·주요 라이브러리 버전을 포함한다.
+모델·온도·문맥/검색/도구 예산·프롬프트는 같은 QA 프로필의 기존 필드에 보존한다.
+조건 전체가 QA 프로필 해시에 포함되며 answers run의 `experiment-conditions.json`과 bundle에도 남는다.
+주요 조건은 검색 가능한 MLflow params로 함께 기록한다. 인증정보는 저장하지 않는다.
+새 평가 접수에는 이 계약을 요구하며 누락 시 `evaluation_requires_experiment_conditions`로 거부한다.
+과거 answers의 조건을 현재 DB에서 추정하거나 소급 기록하지 않는다.
+
 공통 rubric은 `apps/knowledge/src/elice_knowledge/data/rubrics/`의 버전 있는 JSON이다.
 문항별 모범 답안·필수 요점·금지 주장·근거는 Dataset expectations에 둔다.
 공통 rubric을 문항마다 복제하지 않으며 answers에 새 rubric을 고정하지 않는다.

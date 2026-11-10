@@ -261,6 +261,11 @@ Dataset 평가는 프로필을 갱신하지 않고 실행 조건 불일치를 �
 
 대화·평가·ask CLI는 `execution.execute`를 공유하고 `qa_runs`에 입력·출력·지연을 저장한다.
 MLflow에는 Dataset ID/해시·QA/scorer 프로필·사례별 출력·집계 JSON과 지표를 남긴다.
+새 평가에는 `experiment-conditions-v1`을 포함한 QA 프로필이 필요하다. 기존 프로필에 조건이 없다면
+새 프로필을 생성한다. 과거 평가 결과는 수정하지 않는다.
+상세 청킹·임베딩·색인·검색/agent·실행 환경은 `experiment-conditions.json`에서 확인하며,
+`chunking.chunk_size`, `chunking.chunk_overlap`, `embedding.model`, `embedding.dimensions`,
+`retrieval.distance`, `retrieval.backend`는 MLflow params에서도 검색할 수 있다.
 MLflow 기록 실패 또는 사례 실패가 있으면 평가 전체를 성공으로 표시하지 않는다.
 
 scorer `rubric-v1`은 Ragas 기반의 모델별 품질 채점 계약과 결정적 상태 검사를 구분한다.
@@ -358,6 +363,9 @@ N/A·오류·미입력은 가중 kappa에서 제외하고 적용 가능 여부�
 analyze에 `--log`를 붙이면 분석·등급을 별도 MLflow run에 저장한다. 원본 QA Trace의 assessment는 수정하지 않는다.
 모든 비교는 동일한 source bundle과 답변 해시에 묶인다. 원본 기대 조건·QA 답변·기존 Judge 판정은 덮어쓰지 않는다.
 사람 라벨을 실제로 입력하기 전에는 Human Alignment가 검증된 것으로 보고하지 않는다.
+개발용 임의 점수는 grading run에 `review.provenance=synthetic`, analysis run에
+`analysis.provenance=synthetic-demo`로 표시한다. 보고서의 모의 검수 수치는 UI 동작 확인용이며
+사람 판단과의 정합성 근거로 사용하지 않는다.
 
 ### 자원·시간 지표
 

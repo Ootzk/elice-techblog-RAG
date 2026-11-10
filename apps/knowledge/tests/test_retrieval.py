@@ -212,3 +212,38 @@ def test_active_profile_freezes_resolved_prompt_content(retrieval, monkeypatch):
     experiment = store.active_profile(key, 3, {PLANNER: "7"})
     assert experiment != store.active_profile(key, 3)
     assert store.profile(experiment)["prompts"][PLANNER]["version"] == 7
+
+
+def test_experiment_conditions_freeze_selected_index_not_current_defaults(retrieval):
+    import json
+
+    from pydantic import SecretStr
+
+    from elice_knowledge.service_store import ServiceStore
+
+    repo, corpus, chunks, snapshot, policy, _ = retrieval
+    first = repo.index(policy.key, FakeEmbedder(), snapshot)["index_key"]
+    settings = corpus.settings.model_copy(
+        update={"generation_api_key": SecretStr("never-record-key")}
+    )
+    service = ServiceStore(settings)
+    original = service.active_profile(first)
+    conditions = service.profile(original)["experiment_conditions"]
+    assert conditions["schema"] == "experiment-conditions-v1"
+    assert conditions["chunking"]["policy"] == policy.payload
+    assert conditions["embedding"]["profile"]["embedding"]["digest"] == "stable"
+    assert conditions["embedding"]["profile"]["embedding"]["dimensions"] == 2
+    assert conditions["vector_index"]["key"] == first
+    assert conditions["vector_index"]["postgres_version"]
+    assert conditions["keyword_search"]["k1"] == 1.5
+    assert conditions["keyword_search"]["user_words"]
+    assert conditions["agent"]["observation_preview_chars"] == 400
+    assert "never-record-key" not in json.dumps(conditions)
+    newer_policy = replace(policy, chunk_size=96, chunk_overlap=16)
+    for version_id in chunks.snapshot_versions(snapshot)[1]:
+        chunks.prepare(version_id, newer_policy)
+    second = repo.index(newer_policy.key, FakeEmbedder("another-model"), snapshot)["index_key"]
+    latest = service.profile(service.active_profile(second))["experiment_conditions"]
+    assert latest["chunking"]["policy"]["chunk_size"] == 96
+    assert latest["embedding"]["profile"]["embedding"]["digest"] == "another-model"
+    assert service.profile(original)["experiment_conditions"] == conditions

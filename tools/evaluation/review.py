@@ -128,6 +128,7 @@ def main():
             raise SystemExit("Model grading failed; inspect the grading runs")
     else:
         results = []
+        synthetic_gradings = []
         if len(set(args.grading_run_id)) != len(args.grading_run_id):
             parser.error("Duplicate grading run IDs")
         for run_id in args.grading_run_id:
@@ -137,6 +138,8 @@ def main():
                 for key, value in tags("grading").items()
             ):
                 raise ValueError("unsupported_grading_run_schema")
+            if run.data.tags.get("review.provenance") == "synthetic":
+                synthetic_gradings.append(run_id)
             results.append(
                 read_artifact(tracking, run_id, "grading-result.json", args.output_dir)
             )
@@ -152,6 +155,7 @@ def main():
         entries = [row for result in results for row in result["ratings"]]
         report = analyze(bundle, entries, results[0]["rubric"])
         report["grading_run_ids"] = args.grading_run_id
+        report["synthetic_grading_run_ids"] = synthetic_gradings
         report["schema"] = SCHEMA
         write_json(args.output_dir / "agreement.json", report)
         if args.log:
@@ -164,6 +168,9 @@ def main():
                         "mlflow.parentRunId": args.source_run_id,
                         "source_run_id": args.source_run_id,
                         "source_bundle_digest": bundle["digest"],
+                        "analysis.provenance": "synthetic-demo"
+                        if synthetic_gradings
+                        else "observed",
                     },
                 ),
             ).info.run_id

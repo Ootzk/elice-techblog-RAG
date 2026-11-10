@@ -8,6 +8,8 @@ from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import SCHEMA, create_bundle
 from elice_knowledge.evaluation_schema import tags
 from elice_knowledge.execution import execute
+from elice_knowledge.experiment_conditions import SCHEMA as CONDITIONS_SCHEMA
+from elice_knowledge.experiment_conditions import mlflow_parameters
 from elice_knowledge.judge_runs import evaluate_models
 from elice_knowledge.judges import frozen_judges
 from elice_knowledge.performance import summarize as performance_summary
@@ -87,6 +89,8 @@ def enqueue_evaluation(store, request):
     # Before/After comparisons must never silently mix in bundled fallback prompts.
     if any(p.get("source") != "registry" for p in (profile.get("prompts") or {None: {}}).values()):
         raise ServiceError("evaluation_requires_registry_prompts", 409)
+    if profile.get("experiment_conditions", {}).get("schema") != CONDITIONS_SCHEMA:
+        raise ServiceError("evaluation_requires_experiment_conditions", 409)
     if request.scorer_profile_key != SCORER_KEY:
         raise ServiceError("unknown_scorer_profile", 422)
     snapshot = dataset_snapshot(store.settings, request.dataset_id)
@@ -175,6 +179,10 @@ def run_evaluation(store, job):
         }.items():
             tracking.log_param(run_id, key, value)
         profile = store.profile(evaluation["profile_key"])
+        conditions = profile["experiment_conditions"]
+        tracking.log_dict(run_id, conditions, "experiment-conditions.json")
+        for name, value in mlflow_parameters(conditions).items():
+            tracking.log_param(run_id, name, value)
         judge_specs = job["payload"].get("judges", [])
         tracking.log_dict(run_id, judge_specs, "judge-versions.json")
         tracking.set_tag(run_id, "dataset_kind", job["payload"].get("dataset_kind", "gold"))

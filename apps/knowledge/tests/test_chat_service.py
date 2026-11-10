@@ -52,6 +52,7 @@ def service(store, monkeypatch):
     config.update(
         code_identity=code_identity(),
         provider_identity=provider_identity(settings),
+        experiment_conditions={"schema": "experiment-conditions-v1"},
         index_key="b" * 64,
         top_k=5,
         prompts=registry_prompts(),
@@ -278,7 +279,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
 
     monkeypatch.setattr("elice_knowledge.execution.run_qa", answer)
 
-    links, params = [], {}
+    links, params, artifacts = [], {}, {}
 
     class Tracking:
         def get_experiment_by_name(self, *a):
@@ -292,6 +293,9 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
 
         def log_param(self, run_id, key, value):
             params[key] = value
+
+        def log_dict(self, run_id, value, name):
+            artifacts[name] = value
 
         def __getattr__(self, name):
             return lambda *a, **kw: None
@@ -307,6 +311,14 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     records[0]["inputs"]["question"] = "changed after snapshot"
     assert process_one(service)
     assert calls[0]["question"] == "Q" and "GOLD" not in str(calls)
+    assert (
+        artifacts["experiment-conditions.json"] == service.profile(PROFILE)["experiment_conditions"]
+    )
+    assert (
+        artifacts["evaluation-bundle.json"]["qa_profile"]["experiment_conditions"]
+        == artifacts["experiment-conditions.json"]
+    )
+    assert "experiment_conditions_digest" in params
     assert sorted(uri for _, uri in links) == sorted(f"prompts:/{n}/1" for n in PROMPT_NAMES)
     assert params[f"prompt.{PROMPT_NAMES[0]}.digest"] == bundled(PROMPT_NAMES[0]).digest
     client = TestClient(
@@ -601,8 +613,13 @@ def test_revoked_admin_does_not_return_when_bootstrap_is_repeated(service):
     assert owner["role"] == "admin"
 
 
-def test_evaluation_rejects_profiles_resolved_from_bundled_prompts(service):
-    config = {"prompts": {n: bundled(n, "registry_unavailable").model_dump() for n in PROMPT_NAMES}}
+@pytest.mark.parametrize("missing", ["prompts", "experiment_conditions"])
+def test_evaluation_rejects_incomplete_experiment_profiles(service, missing):
+    config = (
+        {"prompts": {n: bundled(n, "registry_unavailable").model_dump() for n in PROMPT_NAMES}}
+        if missing == "prompts"
+        else {"experiment_conditions": {}}
+    )
     with service.connection() as conn:
         base = conn.execute("SELECT config FROM qa_profiles WHERE key=%s", (PROFILE,)).fetchone()
         conn.execute(
@@ -617,7 +634,11 @@ def test_evaluation_rejects_profiles_resolved_from_bundled_prompts(service):
     )
     with pytest.raises(ServiceError) as error:
         enqueue_evaluation(service, request)
-    assert error.value.code == "evaluation_requires_registry_prompts"
+    assert error.value.code == (
+        "evaluation_requires_registry_prompts"
+        if missing == "prompts"
+        else "evaluation_requires_experiment_conditions"
+    )
     assert error.value.status == 409
 
 
