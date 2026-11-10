@@ -420,3 +420,29 @@ PostgreSQL 통합 테스트는 전용 테스트 DB가 설정된 환경에서 별
 기존 Corpus 27개·스냅샷 1개·청킹 결과 54개·벡터 인덱스 1개를 유지했다.
 런타임 npm 의존성 보안 검사는 별도로 확인하며, 개발 도구에 low severity advisory 4개가 남아 있다. `npm audit --omit=dev`는 0개다.
 정적 배포 이미지에는 Node/npm 개발 도구를 포함하지 않는다.
+
+## Analysis A/B 비교
+
+완료한 analysis 한 쌍을 읽어 대응 문항의 품질·QA 자원·정합성을 비교한다. 같은 Dataset·rubric·평가자 ID 집단을
+요구하며 한 평가자의 여러 회차를 독립 표본으로 넣지 않는다. 분석 정책·버전이 바뀌었다면 먼저 analyze를 다시
+실행한다. 이 과정과 comparison 모두 생성·Judge를 호출하지 않는다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/compare.py \
+  --baseline-analysis-run-id '<analysis-A-id>' \
+  --candidate-analysis-run-id '<analysis-B-id>' \
+  --purpose system --hypothesis '검색 도구 예산 증가가 근거 확보와 답변 품질을 높이는가' \
+  --output-dir artifacts/evaluation/compare-A-B
+# --log를 추가하면 baseline experiment에 독립 comparison run을 기록한다.
+```
+
+기본은 로컬 comparison-result.json·comparison-inputs.json을 생성하며 기존 파일은 덮어쓰지 않는다.
+로컬 미리보기 후 --log로 다시 실행할 때에도 새 출력 디렉터리를 지정한다.
+--log 사용 시 원본은 수정하지 않고 새 run에 기록한다. 성공하면 comparison-run.json에 run ID를 저장한다.
+저장 실패는 해당 run을 FAILED로 표시하며 로컬 결과는 보존한다.
+
+--purpose system은 서로 다른 answers와 동일한 평가자 프로필을 요구한다. --purpose judge는 같은 answers와
+동일한 사람 판정을 요구하며 모델 프로필 변경을 허용한다. 다른 모델 계열로 평가자 ID 자체를 바꾸는 매핑은 지원하지 않는다.
+--seed(기본 42)·--bootstrap-resamples(기본 2000, 0이면 구간 생략)·--confidence-level(기본 0.95)을 설정할 수 있다.
+구간은 대응 평균 차이의 문항 재표집 결과이며 반복 시행 변동이나 κ·α의 신뢰구간이 아니다.
+자세한 호환 검사·관측 교집합·결측 처리와 metric 의미는 [comparison 계약](evaluation-schema.md#조건-간-comparison)을 따른다.

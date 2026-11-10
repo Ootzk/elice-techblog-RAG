@@ -5,7 +5,7 @@
 이전 형식은 변환하거나 혼합하지 않는다. schema 태그나 artifact의 schema가 맞지 않는 실행은 목록·분석에서 제외한다.
 기존 원격 실행·로컬 데이터는 자동 삭제하지 않는다.
 
-## 세 가지 run
+## 네 가지 run
 
 ```text
 answers A1: 한 번 생성한 데이터셋 전체의 질문·답변·근거
@@ -17,6 +17,7 @@ answers A1: 한 번 생성한 데이터셋 전체의 질문·답변·근거
 └─ grading: human:<코드 ID> / 2회차
 
 analysis: 같은 A1에 연결된 grading run들을 비교한 통계
+comparison: 조건 A/B의 analysis와 연결된 answers·grading을 비교한 결과
 ```
 
 **grading run 1개 = 한 평가자가 한 답변 생성 run 전체를 한 번 채점한 단위**다.
@@ -27,13 +28,14 @@ analysis: 같은 A1에 연결된 grading run들을 비교한 통계
 | answers | Dataset·QA 설정을 고정하고 RAG 답변 생성 | evaluation-bundle.json, evaluation-results.json | 결정적 답변 가능 여부 지표, 생성 자원·시간 |
 | grading | 한 사람 또는 한 모델의 한 번 채점 | grading-result.json, rater-profile.json | 공통 차원별 통과율·채점/N/A/오류/미채점 건수, 모델의 Ragas 원점수 |
 | analysis | 지정한 grading run들의 반복·평가자 간 비교 | agreement.json, 비교한 run 목록 | 차원별 일치율·κ 등 유효한 수치 |
+| comparison | 조건 A/B의 품질·자원·정합성 비교 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·신뢰구간·문항별 변화·동일 대상의 계수 차이 |
 
 grading의 `mlflow.parentRunId`는 answers run ID다. analysis는 동일한 원본 답변을 비교하며 입력 run ID들을 보존한다.
 원본 답변 run에 모델·사람 점수를 덧붙이거나 새 채점으로 이전 metric을 덮어쓰지 않는다.
 
 ## 식별과 MLflow 태그
 
-모든 run은 `evaluation.schema=evaluation-v1`, `evaluation.kind=answers|grading|analysis`를 갖는다.
+모든 run은 `evaluation.schema=evaluation-v1`, `evaluation.kind=answers|grading|analysis|comparison`을 갖는다.
 grading run에는 다음 태그를 함께 기록한다.
 
 | 태그 | 의미 |
@@ -189,5 +191,45 @@ N/A 적용 여부의 일치도는 쌍별 지표로 별도 기록하며 N/A를 pa
 MLflow에는 유한한 값만 `agreement.<차원>.<쌍 식별자>.*`와
 `agreement.panel.<차원>.<집단>.<구성 식별자>.*`로 기록하고 미정 계수를 0으로 채우지 않는다.
 집단 계수는 보조 기술통계이며 사람–모델 κ를 대체하지 않는다.
+
+## 조건 간 comparison
+
+`comparison-v1`은 analysis A/B 한 쌍과 연결된 원본·채점 입력을 비교한다. `evaluation.kind=comparison`인
+독립 run으로 만들며 단일 parent를 지정하지 않는다. baseline_analysis_run_id·candidate_analysis_run_id와
+comparison_digest 태그로 양쪽 계보를 연결하고 baseline과 같은 experiment에 기록한다.
+원본 answers·grading·analysis를 수정하거나 생성·Judge를 재호출하지 않는다.
+
+입력 analysis는 FINISHED와 evaluation-v1 태그를 요구한다. 원본 종류·종료 상태·source 해시,
+grading의 완결성과 답변 binding을 검사한다. grading-inputs로 analysis를 재계산해 agreement.json과 일치하는지
+확인하므로 분석 정책·라이브러리 버전이 달라졌다면 먼저 analyze를 다시 실행해야 한다.
+한 평가자당 한 grading만 허용하며 여러 답변 생성/채점 반복 묶음은 첫 버전 범위에 포함하지 않는다.
+
+| purpose | 고정 조건 | 변경 허용 |
+| --- | --- | --- |
+| system | Dataset 해시·공통 문항 내용·rubric·평가자 집단과 프로필 | 서로 다른 answers run의 QA 설정·생성 결과 |
+| judge | 동일한 answers bundle·rubric·평가자 ID 집단·사람 프로필과 판정 | 같은 모델 평가자 ID의 채점 프로필·회차 |
+
+공통 문항 ID를 대응시키고 baseline_only·candidate_only를 기록한다. 같은 ID의 질문·이력·expectations가 다르면
+거부한다. 서버 간 재등록으로 ID·Dataset 해시가 달라진 자료를 자동 의미 매칭하지 않는다.
+QA 설정과 평가자 프로필의 차이·입력 해시를 저장한다. grading run의 프로필 원문을 조회할 수 있으면 해시를 검증하고
+상세 변경도 보존한다. 파일 grading만 있는 경우 프로필은 해시로만 식별할 수 있다.
+설정 변경이 하나의 인과 요인인지 자동으로 보장하지 않는다.
+
+평균은 양쪽에 유효한 값이 있는 같은 문항에서 계산하며, 차이는 candidate−baseline이다.
+N/A·오류·생성 실패·미측정을 0으로 바꾸지 않고 제외 문항과 이유를 보존한다. 생성 실패율은 공통 문항 전체에서
+별도로 비교한다. system 품질 점수의 변화는 개선/악화, judge 점수와 캐시 입력 토큰 수의 변화는 단순 상승/하락으로
+표시한다. Judge의 점수 상승을 답변 개선으로 해석하지 않는다. 자원 지표는 QA 생성의 시간·토큰·호출 수이며
+Judge 호출 자원 사용량은 아니다.
+
+평균 차이의 구간은 SciPy paired percentile bootstrap을 사용한다. 기본 seed=42·2,000회·95%이며
+문항 ID가 재표집 단위다. 유효 문항 두 개 미만이면 구간을 만들지 않는다. 일정한 차이의 구간은 양 끝값이 같을 수 있다.
+작은 공개 Gold의 문항 재표집 민감도를 보여주며 실제 사용자 모집단의 보장이나 답변/Judge 반복 변동을 포함하지 않는다.
+κ·α의 신뢰구간·유의성 검정·자동 승자 선정은 제공하지 않는다.
+
+일치도는 양쪽의 동일한 문항×평가자 이진 판정 교집합에서 다시 계산한다. analysis에 표시된 서로 다른 표본의 κ를
+그대로 빼지 않는다. support에 원래 N/A·오류·누락 상태와 포함 여부를 저장하고 패널의 건수는 교집합 mask 적용 후의
+표본을 뜻한다. 계산 불가 계수의 delta는 null이며 양쪽 사유를 보존한다.
+comparison-result.json에는 요약·문항별 변화·대응 일치도·계산 조건을, comparison-inputs.json에는 재현할 입력을 담는다.
+유한한 숫자만 comparison.* metric으로 기록한다.
 
 이 문서는 구현 계약이며 실제 유료 모델 평가나 사람 정합성 실험의 완료를 의미하지 않는다.
