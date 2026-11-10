@@ -1,6 +1,5 @@
 """Recorded experiment metadata, metric definitions and offline item selection."""
 
-import json
 from html import escape
 from urllib.parse import urlsplit
 
@@ -9,13 +8,20 @@ from markupsafe import Markup
 
 from .analysis_visuals import (
     DIMENSIONS,
+    PLOT_STYLE,
     grading_cells,
     grading_heatmap,
     grading_legend,
     matrix_size,
     rater_legend,
 )
-from .presentation import text_block
+from .presentation import (
+    content_card,
+    metric_badge,
+    metric_label,
+    model_name,
+    text_block,
+)
 
 
 def _table(rows):
@@ -56,42 +62,57 @@ def evaluation_conditions(data, subjects):
             if c.get("result") and c["result"].get("generation_model")
         )
     )
-    answers = data.links.get("answers", {"run_id": bundle["source_run_id"]})
     dataset = [
-        ("데이터셋 유형", bundle["kind"]),
-        ("데이터셋 ID", bundle["dataset_id"]),
-        ("데이터셋 내용 해시", bundle["dataset_digest"]),
-        ("문항 수 / 생성 실패", f"{len(bundle['records'])} / {data.report['qa_failed_cases']}"),
-        ("원본 answers", _run_reference(answers)),
+        ("데이터셋", "🥇 Gold" if bundle["kind"] == "gold" else "🦾 Iron"),
+        ("평가 문항", f"{len(bundle['records'])}문항"),
+        ("답변 생성 실패", f"{data.report['qa_failed_cases']}문항"),
+        ("판정 기준", data.report["rubric"]["id"]),
+        ("원본 답변", _run_reference(data.links.get("answers", {}), "답변 실행 기록")),
     ]
-    settings = [
-        (key, json.dumps(value, ensure_ascii=False))
-        for key, value in profile.items()
-        if not isinstance(value, (dict, list))
-    ]
-    for name, prompt in profile.get("prompts", {}).items():
-        if isinstance(prompt, dict):
-            settings.append(
-                (
-                    f"프롬프트 · {name}",
-                    json.dumps(
-                        {
-                            key: prompt[key]
-                            for key in ("name", "version", "digest", "source")
-                            if key in prompt
-                        },
-                        ensure_ascii=False,
-                    ),
+    fields = (
+        ("top_k", "검색당 결과 수", "개"),
+        ("qa_agent_max_tool_calls", "최대 검색 도구 호출", "회"),
+        ("qa_max_context_tokens", "참고 자료 예산", "토큰"),
+        ("qa_history_pairs", "대화 이력", "쌍"),
+        ("qa_history_tokens", "대화 이력 예산", "토큰"),
+        ("generation_max_output_tokens", "답변 출력 한도", "토큰"),
+        ("generation_temperature", "생성 온도", ""),
+    )
+    settings = [("답변 모델", ", ".join(model_name(m) for m in models) or "미기록")]
+    for key, title, unit in fields:
+        if key in profile:
+            value = profile[key]
+            display = (
+                "공급자 기본값"
+                if value is None
+                else (
+                    f"{value:,} {unit}".strip() if isinstance(value, (int, float)) else str(value)
                 )
             )
+            settings.append((title, display))
+    for name, prompt in profile.get("prompts", {}).items():
+        if isinstance(prompt, dict):
+            title = "검색 계획 프롬프트" if "planner" in name else "답변 프롬프트"
+            settings.append((title, f"{prompt.get('name', name)} · v{prompt.get('version', '?')}"))
     return pn.Column(
         _table(dataset),
-        pn.pane.Markdown("### 답변 생성·검색 설정"),
-        _table([("기록된 응답 모델", ", ".join(models) or "미기록"), *settings]),
+        pn.pane.Markdown("### 답변·검색 설정"),
+        _table(settings),
         pn.pane.Markdown("### 평가 주체"),
         rater_legend(subjects),
         sizing_mode="stretch_width",
     )
+
+
+def _criterion_text(text):
+    for technical, label in (
+        ("required_points", "필수 요점"),
+        ("generation_sources", "답변 작성에 제공된 자료"),
+        ("생성 문맥", "답변 작성에 제공된 자료"),
+        ("optional", "선택"),
+    ):
+        text = text.replace(technical, label)
+    return text
 
 
 def metric_guide(data):
@@ -106,18 +127,21 @@ def metric_guide(data):
     )
     rows = "".join(
         "<tr><td>"
-        + escape(d["title"])
+        + metric_badge(name)
         + "</td><td>"
-        + escape(d["description"])
+        + escape(_criterion_text(d["description"]))
         + "</td>"
-        + "".join("<td>" + escape(d["levels"][str(score)]) + "</td>" for score in rubric["scale"])
+        + "".join(
+            "<td>" + escape(_criterion_text(d["levels"][str(score)])) + "</td>"
+            for score in rubric["scale"]
+        )
         + "<td>"
-        + escape(d["not_applicable"])
+        + escape(_criterion_text(d["not_applicable"]))
         + "</td></tr>"
-        for d in rubric["dimensions"].values()
+        for name, d in rubric["dimensions"].items()
     )
     return pn.Column(
-        pn.pane.Markdown("### Grading · 공통 rubric 등급"),
+        pn.pane.Markdown("### 답변별 채점 기준"),
         pn.pane.Markdown(
             "- **등급:** 사람과 모델 모두 아래 기준으로 직접 채점합니다. "
             "비율 점수를 등급으로 변환하지 않습니다.\n"
@@ -127,7 +151,7 @@ def metric_guide(data):
             "등급이나 사람 판정과 혼합하지 않습니다.\n"
             "- **모델 등급 채점:** [Ragas "
             "DiscreteMetric](https://docs.ragas.io/en/latest/references/metrics/)을 사용합니다.\n"
-            f"- **rubric:** `{rubric['id']}` · `{data.report['rubric_digest']}`"
+            f"- **판정 기준 버전:** `{rubric['id']}`"
         ),
         pn.pane.HTML(
             '<table style="width:100%;font:13px/1.6 system-ui"><thead>'
@@ -136,11 +160,11 @@ def metric_guide(data):
             + rows
             + "</tbody></table>",
             stylesheets=[
-                "th,td{text-align:left;vertical-align:top;padding:10px;b "
-                "rder-bottom:1px solid #e4e9ef;}"
+                "th,td{text-align:left;vertical-align:top;padding:10px; "
+                "border-bottom:1px solid #e4e9ef;}"
             ],
         ),
-        pn.pane.Markdown("### Analysis · 평가자 간 일치도"),
+        pn.pane.Markdown("### 평가자 간 일치도"),
         _table(
             [
                 (
@@ -212,11 +236,11 @@ def item_browser(data, subjects, case_ids):
         result = case.get("result") or {}
         reasons = rationale_browser(data, subjects, record_id)
         controls = {control.label: control for control in reasons.select(pn.widgets.Select)}
-        matrix = pn.pane.HoloViews(grading_heatmap(data, subjects, record_id))
+        matrix = pn.pane.HoloViews(grading_heatmap(data, subjects, record_id), styles=PLOT_STYLE)
         matrix.jscallback(
             args={
                 "rater": controls["평가자 · 회차"],
-                "dimension": controls["Judge 항목"],
+                "dimension": controls["평가 항목"],
             },
             **{
                 "event:tap": grading_selection_code(
@@ -227,8 +251,8 @@ def item_browser(data, subjects, case_ids):
         options[f"{i + 1}. {question[:100]}{'…' if len(question) > 100 else ''}"] = str(i)
         items.append(
             pn.Column(
-                text_block("질문", question),
-                text_block("답변", result.get("answer")),
+                content_card("💬 질문", question, accent="#2563eb"),
+                content_card("✦ 답변", result.get("answer"), markdown=True, accent="#7c3aed"),
                 *([text_block("생성 오류", case["error"])] if case.get("error") else []),
                 *(
                     [grounding_scope(result, records[record_id].get("expectations", {}))]
@@ -264,12 +288,12 @@ def grounding_scope(result, expectations=None):
     abstained = result.get("status") == "insufficient_evidence"
     if sources is None:
         text = (
-            "**생성에 전달된 문맥 자료: 미기록**\n\n"
-            "생성 문맥이 저장되지 않은 상태입니다. 근거가 0개인 경우와 구분해야 하며, "
+            "**답변 작성에 제공된 자료: 미기록**\n\n"
+            "참고 자료가 저장되지 않은 상태입니다. 근거가 0개인 경우와 구분해야 하며, "
             "이 기록만으로 근거 충실도를 판단할 수 없습니다."
         )
     else:
-        text = f"**생성에 전달된 문맥 자료: {len(sources)}개**"
+        text = f"**답변 작성에 제공된 자료: {len(sources)}개**"
         if unanswerable:
             text += "\n\n**데이터셋 기준: 질문에 답할 근거가 부족한 문항**"
         if abstained:
@@ -278,7 +302,7 @@ def grounding_scope(result, expectations=None):
             text += (
                 "\n\n자료가 전달됐더라도 질문에 답할 근거를 확보했다는 뜻은 아닙니다. "
                 if sources
-                else "\n\n생성에 전달된 문맥 자료가 없습니다. "
+                else "\n\n답변 작성에 제공된 자료가 없습니다. "
             )
             text += (
                 "답변 근거가 부족하다는 사실만으로 N/A나 0점을 결정하지 않습니다. "
@@ -292,79 +316,85 @@ def grounding_scope(result, expectations=None):
 
 
 def context_browser(result):
-    """Display frozen generation context and distinguish unused retrieval snapshots."""
+    """Separate cited references, uncited supplied references and search-only candidates."""
     generated = result.get("generation_sources")
     retrieved = result.get("retrieved_sources", [])
-    heading = pn.pane.Markdown("### 문맥 자료")
+    heading = pn.pane.Markdown("### 📚 참고 자료")
     note = pn.pane.Markdown(
-        "**생성 문맥**은 최종 답변 생성에 전달된 본문이며 근거 충실도 검사의 대상입니다. "
-        "**검색 전용**은 검색됐지만 같은 본문이 생성 문맥에 포함되지 않은 자료입니다. "
-        "인용 번호는 답변의 출처 번호이며, 인용되지 않은 생성 문맥도 검사에 사용됩니다."
+        "**인용 자료**는 답변의 출처 번호와 연결됩니다. **미인용 참고 자료**도 답변 작성에 "
+        "제공됐으므로 근거 충실도 검증에 사용할 수 있습니다. "
+        "**검색 후보**는 검색됐지만 답변 작성에는 제공되지 않은 자료입니다."
     )
 
     def identity(source):
         return (source.get("chunk_id", source.get("url")), source.get("text"))
 
-    selected = {identity(s) for s in generated or []}
-    entries = [("생성 문맥", i, source) for i, source in enumerate(generated or [], 1)]
+    selected = {identity(source) for source in generated or []}
+    entries = []
+    for source in generated or []:
+        citations = [
+            str(c["source_id"])
+            for c in result.get("citations", [])
+            if source.get("chunk_id") and c.get("chunk_id") == source["chunk_id"]
+        ]
+        entries.append(("인용 자료" if citations else "미인용 참고 자료", source, citations))
+    entries.sort(key=lambda entry: not entry[2])
     entries.extend(
-        ("검색 전용", i, source)
-        for i, source in enumerate(retrieved, 1)
-        if identity(source) not in selected
+        ("검색 후보", source, []) for source in retrieved if identity(source) not in selected
     )
     missing = (
-        "생성 문맥이 기록되지 않았습니다."
+        "답변 작성에 제공된 자료가 기록되지 않았습니다."
         if generated is None
-        else "이 답변에 전달된 생성 문맥은 없습니다."
+        else "답변 작성에 제공된 자료는 없습니다."
         if not generated
         else ""
     )
     if not entries:
         return pn.Column(heading, note, pn.pane.Markdown(missing), sizing_mode="stretch_width")
     views, options = [], {}
-    for index, (scope, number, source) in enumerate(entries):
-        citations = [
-            str(c["source_id"])
-            for c in result.get("citations", [])
-            if scope == "생성 문맥"
-            and source.get("chunk_id")
-            and c.get("chunk_id") == source["chunk_id"]
-        ]
-        citation = " · 인용 [" + ", ".join(citations) + "]" if citations else ""
+    for index, (scope, source, citations) in enumerate(entries):
         title = source.get("title") or "제목 미기록"
-        options[f"{scope} {number}{citation} · {title}"] = str(index)
+        badge = "인용 [" + ", ".join(citations) + "]" if citations else scope
+        options[
+            f"{'🔗' if citations else '📄' if scope != '검색 후보' else '🔎'} {badge} · {title}"
+        ] = str(index)
+        color = "#7c3aed" if citations else "#64748b" if scope != "검색 후보" else "#b45309"
         url = source.get("url", "")
-        reference = (
-            f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer">'
-            f"{escape(url)} ↗</a>"
+        link = (
+            f'<a href="{escape(url, quote=True)}" target="_blank" rel="noopener noreferrer" '
+            'style="color:#2563eb;text-decoration:none">원문 열기 ↗</a>'
             if urlsplit(url).scheme in {"http", "https"}
-            else escape(url)
+            else "원문 링크 없음"
         )
-        view = pn.pane.HTML(
-            f'<h4 style="margin:0 0 8px">{escape(scope)} {number}{escape(citation)} · '
-            f"{escape(title)}</h4>"
-            f'<div style="overflow-wrap:anywhere">{reference}</div>'
-            f'<p style="color:#64748b">{escape(source.get("heading_path") or "섹션 미기록")}</p>'
-            '<div style="white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7">'
-            + escape(source.get("text") or "본문 미기록")
-            + "</div>",
+        header = pn.pane.HTML(
+            f'<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'
+            f'<span style="color:{color};font:650 12px system-ui">{escape(badge)}</span>'
+            f'<strong>{escape(title)}</strong><span style="margin-left:auto">{link}</span></div>'
+            f'<p style="color:#64748b;font:12px system-ui">'
+            f"{escape(source.get('heading_path') or '섹션 미기록')}</p>",
+            sizing_mode="stretch_width",
+        )
+        view = pn.Column(
+            header,
+            content_card(
+                "📄 저장된 본문", source.get("text") or "본문 미기록", markdown=True, accent=color
+            ),
             visible=index == 0,
             sizing_mode="stretch_width",
         )
         views.append(view)
     selector = pn.widgets.Select(
-        label="문맥 선택", options=options, value="0", sizing_mode="stretch_width"
+        label="참고 자료 선택", options=options, value="0", sizing_mode="stretch_width"
     )
     selector.jscallback(
-        args={f"item_{i}": view for i, view in enumerate(views)},
-        value=item_switch_code(len(views)),
+        args={f"item_{i}": view for i, view in enumerate(views)}, value=item_switch_code(len(views))
     )
     return pn.Column(
         heading,
         note,
         *([pn.pane.Markdown(missing)] if missing else []),
         selector,
-        pn.Column(*views, height=320, scroll=True, sizing_mode="stretch_width"),
+        pn.Column(*views, height=420, scroll=True, sizing_mode="stretch_width"),
         sizing_mode="stretch_width",
     )
 
@@ -416,7 +446,9 @@ def rationale_row(subject, row):
         '<tr><td><img width="36" height="36" '
         f'src="{escape(subject["icon"], quote=True)}" '
         f'alt="{escape(subject["label"], quote=True)}" '
-        f'title="{escape(subject["label"], quote=True)}"></td><td>'
+        f'title="{escape(subject["label"], quote=True)}">'
+        '<div style="font:10px system-ui;color:#64748b">'
+        f"{escape(subject['short_name'])}</div></td><td>"
         + rationale_markup(row["rationale"])
         + '</td><td><span style="display:inline-block;padding:2px 7px;border-radius:5px;'
         f'background:{row["fill"]};color:{row["ink"]}">'
@@ -427,16 +459,15 @@ def rationale_row(subject, row):
 
 def rationale_browser(data, subjects, record_id):
     """Group reasons by dimension and filter the frozen table rows entirely offline."""
-    rubric = data.report["rubric"]
     dimensions = DIMENSIONS if data.inputs["bundle"]["kind"] == "gold" else ("behavior",)
     cells = grading_cells(data, subjects, record_id, dimensions)
     raters = {"전체 평가자": "all"}
     raters.update({s["label"]: str(i) for i, s in enumerate(subjects)})
     initial = next((i for i, s in enumerate(subjects) if s["rater"].startswith("model:")), 0)
     rater = pn.widgets.Select(label="평가자 · 회차", options=raters, value=str(initial))
-    titles = {d: f"{rubric['dimensions'][d]['title']} · {d}" for d in dimensions}
+    titles = {d: metric_label(d) for d in dimensions}
     dimension = pn.widgets.Select(
-        label="Judge 항목",
+        label="평가 항목",
         options={"전체 항목": "all", **{titles[d]: str(i) for i, d in enumerate(dimensions)}},
         value="0",
     )
@@ -454,7 +485,7 @@ def rationale_browser(data, subjects, record_id):
             sizing_mode="stretch_width",
         )
         group = pn.Column(
-            pn.pane.HTML(f'<h4 style="margin:12px 0 8px">{escape(titles[name])}</h4>'),
+            pn.pane.HTML(f'<h4 style="margin:12px 0 8px">{metric_badge(name)}</h4>'),
             table,
             sizing_mode="stretch_width",
             visible=j == 0,

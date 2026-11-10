@@ -11,6 +11,7 @@ from elice_reporting.analysis_visuals import (
     DIMENSIONS,
     KAPPA_MISSING,
     KAPPA_PALETTE,
+    MATRIX_TITLE_HEIGHT,
     STATES,
     analysis_subjects,
     grading_cells,
@@ -39,8 +40,9 @@ def test_legend_keeps_rounds_profiles_and_colored_people_distinct():
     assert subjects[0]["icon"] != subjects[3]["icon"]
     assert len({s["key"] for s in subjects}) == len(subjects)
     legend = rater_legend(subjects).object
-    assert "human:&lt;another&gt;" in legend
+    assert "검수자 2" in legend and "human:" not in legend
     assert "<table" in legend and "<th>회차</th>" in legend
+    assert "모델 유형" not in legend and "프로필" not in legend
     for subject in subjects:
         svg = base64.b64decode(subject["icon"].split(",", 1)[1]).decode()
         assert f">{subject['round']}</text>" in svg
@@ -128,7 +130,10 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
     data = demo("analysis")
     subjects = analysis_subjects(data)
     item = hv.render(grading_heatmap(data, subjects, "0"))
-    assert (item.width, item.height) == (matrix_size(subjects),) * 2
+    assert (item.width, item.height) == (
+        matrix_size(subjects),
+        matrix_size(subjects) + MATRIX_TITLE_HEIGHT,
+    )
     assert item.tools and all(isinstance(tool, HoverTool) for tool in item.tools)
     assert item.toolbar.active_drag is None and item.toolbar.active_scroll is None
     assert {label for tool in item.tools for label, _ in tool.tooltips} == {
@@ -143,8 +148,12 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
     assert grid.ncols == 2 and len(grid.objects) == 4
     assert legend_pane.object.opts.get().kwargs["height"] == matrix_group_size(subjects)[1]
     for column in grid.objects:
-        figure = hv.render(column.objects[1].object)
-        assert (figure.width, figure.height) == (matrix_size(subjects),) * 2
+        figure = hv.render(column.objects[0].object)
+        assert (figure.width, figure.height) == (
+            matrix_size(subjects),
+            matrix_size(subjects) + MATRIX_TITLE_HEIGHT,
+        )
+        assert figure.title.text and "correctness" not in figure.title.text
         assert all(isinstance(tool, HoverTool) for tool in figure.tools)
         assert {label for tool in figure.tools for label, _ in tool.tooltips} == {
             "선형 가중 Cohen κ",
@@ -206,7 +215,7 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
         )
     subjects = analysis_subjects(data)
     rounds = [s for s in subjects if s["rater"] == original["rater_id"]]
-    assert len(rounds) == 2 and rounds[0]["type_code"] == rounds[1]["type_code"]
+    assert len(rounds) == 2 and rounds[0]["short_name"] == rounds[1]["short_name"]
     assert rounds[0]["icon"] != rounds[1]["icon"]
     legend = rater_legend(subjects).object
     assert "https://mlflow.test/grade-one" in legend
@@ -225,7 +234,7 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
     assert not revised.select(pn.widgets.Select)
 
 
-def test_luna_and_terra_share_provider_but_keep_model_type_and_round_distinct():
+def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_codes():
     data = demo("analysis")
     original = deepcopy(data.inputs["gradings"][1])
     data.inputs["gradings"] = []
@@ -237,11 +246,13 @@ def test_luna_and_terra_share_provider_but_keep_model_type_and_round_distinct():
         data.inputs["gradings"].append(grading)
         data.inputs["profiles"][model] = {"scorers": [{"model": model}]}
     luna, terra, luna_repeat = analysis_subjects(data)
-    assert luna["type_code"] != terra["type_code"]
-    assert luna["type_code"] == luna_repeat["type_code"]
+    assert luna["short_name"] == "Luna" and terra["short_name"] == "Terra"
+    assert not luna["setting"] and not terra["setting"]
+    assert luna["short_name"] == luna_repeat["short_name"]
     assert len({s["icon"] for s in [luna, terra, luna_repeat]}) == 3
     assert "ChatGPT 6 Luna" in luna["label"] and "ChatGPT 6 Terra" in terra["label"]
     for subject in [luna, terra, luna_repeat]:
         svg = base64.b64decode(subject["icon"].split(",", 1)[1]).decode()
-        assert f">{subject['type_code']}</text>" in svg
+        assert "type_code" not in subject
+        assert subject["profile"] not in subject["label"]
         assert f">{subject['round']}</text>" in svg

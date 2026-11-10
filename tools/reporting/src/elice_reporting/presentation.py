@@ -43,8 +43,8 @@ def case_view(bundle, record_id, *, title, collapsed=False):
             text_block(f"근거 {i}", f"{metadata}\n{content}" if metadata else content)
         )
     return pn.Card(
-        text_block("질문", record["inputs"]["question"]),
-        text_block("답변", result.get("answer")),
+        content_card("💬 질문", record["inputs"]["question"], accent="#2563eb"),
+        content_card("✦ 답변", result.get("answer"), markdown=True, accent="#7c3aed"),
         *([text_block("생성 오류", case["error"])] if case.get("error") else []),
         pn.Accordion(
             ("답변 생성에 전달한 근거", pn.Column(*source_views)),
@@ -52,8 +52,100 @@ def case_view(bundle, record_id, *, title, collapsed=False):
             sizing_mode="stretch_width",
         )
         if evidence
-        else pn.pane.Markdown("생성 문맥이 기록되어 있지 않습니다."),
+        else pn.pane.Markdown("답변 작성에 제공된 자료가 기록되어 있지 않습니다."),
         title=title,
         collapsed=collapsed,
+        sizing_mode="stretch_width",
+    )
+
+
+METRICS = {
+    "correctness": ("정확성", "🎯", "#2563eb"),
+    "completeness": ("완전성", "🧩", "#0f766e"),
+    "groundedness": ("근거 충실도", "🔗", "#7c3aed"),
+    "relevance": ("질문 적합성", "💬", "#b45309"),
+    "behavior": ("행동 준수", "🛡️", "#475569"),
+}
+
+
+def metric_label(dimension):
+    title, icon, _ = METRICS[dimension]
+    return f"{icon} {title}"
+
+
+def metric_badge(dimension):
+    title, icon, color = METRICS[dimension]
+    return f'<span style="color:{color};font-weight:650;white-space:nowrap">{icon} {title}</span>'
+
+
+def model_name(identity):
+    return {
+        "gpt-6-luna": "ChatGPT 6 Luna",
+        "gpt-6-terra": "ChatGPT 6 Terra",
+        "gpt-6.1-terra": "ChatGPT 6.1 Terra",
+        "claude-haiku-5-5": "Claude Haiku 5.5",
+        "gemini-3.5-flash-lite": "Gemini 3.5 Flash Lite",
+    }.get(identity, identity)
+
+
+PROSE_STYLE = """
+.report-prose { color:#253449; font:14px/1.85 system-ui,sans-serif; overflow-wrap:anywhere; }
+.report-prose :first-child { margin-top:0; }
+.report-prose :last-child { margin-bottom:0; }
+.report-prose h1,.report-prose h2,.report-prose h3 { font-size:17px; line-height:1.5;
+    margin:20px 0 8px; }
+.report-prose h4 { font-size:15px; }
+.report-prose p { margin:8px 0; }
+.report-prose a { color:#2563eb; text-underline-offset:3px; }
+.report-prose code { background:#edf2f7; border-radius:4px; padding:2px 5px; font-size:12px; }
+.report-prose pre { background:#f1f5f9; padding:14px; border-radius:10px; overflow:auto; }
+.report-prose pre code { padding:0; background:none; }
+.report-prose table { border-collapse:collapse; font-size:13px; width:100%; }
+.report-prose th,.report-prose td { padding:8px 12px; border:1px solid #e2e8f0; text-align:left; }
+.report-prose th { background:#f1f5f9; }
+.report-prose blockquote { border-left:3px solid #a5b4fc; margin:12px 0; padding-left:14px;
+    color:#64748b; }
+.report-prose li { margin:4px 0; }
+"""
+
+
+def markdown_markup(value):
+    """Render stored Markdown with raw HTML and remote images disabled."""
+    from markdown_it import MarkdownIt
+
+    parser = MarkdownIt("commonmark", {"html": False, "breaks": True}).enable("table")
+    parser.disable("image")
+    return '<div class="report-prose">' + parser.render(str(value or "기록 없음")) + "</div>"
+
+
+def content_card(title, value, *, markdown=False, accent="#64748b"):
+    body = (
+        markdown_markup(value)
+        if markdown
+        else (
+            '<div class="report-prose" style="white-space:pre-wrap">'
+            + escape(str(value if value is not None else "기록 없음"))
+            + "</div>"
+        )
+    )
+    return pn.Column(
+        pn.pane.HTML(
+            f'<div style="font:650 12px system-ui;color:{accent};margin-bottom:12px">'
+            + escape(title)
+            + "</div>"
+            + body,
+            stylesheets=[PROSE_STYLE],
+            sizing_mode="stretch_width",
+            margin=0,
+        ),
+        styles={
+            "background": "#ffffff",
+            "border": "1px solid #e2e8f0",
+            "border-left": f"3px solid {accent}",
+            "border-radius": "14px",
+            "padding": "18px 22px",
+            "box-shadow": "0 3px 14px #17255405",
+        },
+        margin=(6, 0),
         sizing_mode="stretch_width",
     )

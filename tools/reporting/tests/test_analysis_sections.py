@@ -29,8 +29,11 @@ def test_selector_preloads_cases_and_shows_question_answer_without_detail_card()
     assert isinstance(browser.objects[0], pn.widgets.Select)
     first, second = browser.objects[2:]
     assert first.visible and not second.visible
-    assert "질문" in first.objects[0].object
-    assert data.inputs["bundle"]["cases"][0]["result"]["answer"] in first.objects[1].object
+    assert "질문" in first.objects[0].select(pn.pane.HTML)[0].object
+    assert (
+        data.inputs["bundle"]["cases"][0]["result"]["answer"]
+        in first.objects[1].select(pn.pane.HTML)[0].object
+    )
     assert not first.select(pn.Accordion)
     root = browser.get_root()
     from bokeh.models import Select
@@ -61,12 +64,14 @@ def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_defi
     data = demo("analysis")
     conditions = evaluation_conditions(data, analysis_subjects(data))
     text = "\n".join(pane.object for pane in conditions.select(pn.pane.HTML))
-    assert "데이터셋 ID" in text and "데이터셋 내용 해시" in text
-    assert "qa_agent_max_tool_calls" in text
-    assert "1회차" in text and "실제 모델 ID 미기록" in text
+    assert "평가 문항" in text and "최대 검색 도구 호출" in text
+    assert data.inputs["bundle"]["dataset_digest"] not in text
+    assert "데이터셋 ID" not in text and "프로필" not in text
+    assert "최대 검색 도구 호출" in text
+    assert "1회차" in text and "정확한 모델명 미기록" in text
     assert not conditions.select(pn.Accordion)
-    assert "원본 answers" in text and "원본 gradings" not in text
-    assert "원본 grading" in text
+    assert "원본 답변" in text and "원본 gradings" not in text
+    assert "채점 기록" in text or "연결 없음" in text
     definitions = metric_guide(data)
     definition_text = "\n".join(p.object for p in definitions.select(pn.pane.HTML))
     assert "생성" in definition_text
@@ -76,7 +81,7 @@ def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_defi
         for p in definitions.objects
         if isinstance(p, pn.pane.Markdown) and p.object.startswith("### ")
     ]
-    assert headings == ["### Grading · 공통 rubric 등급", "### Analysis · 평가자 간 일치도"]
+    assert headings == ["### 답변별 채점 기준", "### 평가자 간 일치도"]
     assert definitions.objects[1].object.startswith("- **등급:**")
     assert "- **판정:**" in definitions.objects[1].object
     assert "- **N/A·오류·미기록:**" in definitions.objects[1].object
@@ -156,8 +161,8 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
         tracking_uri="https://user:secret@mlflow.example/team?token=private",
     )
     legend = rater_legend(analysis_subjects(loaded)).object
-    assert "claude-haiku-5-5" in legend
-    assert "Claude Haiku 5.5" in legend and "실행 trace" in legend
+    assert analysis_subjects(loaded)[2]["actual_models"] == ["claude-haiku-5-5"]
+    assert "Claude Haiku 5.5" in legend and "실행 기록" in legend
     links = loaded.links
     assert (
         links["answers"]["url"]
@@ -268,14 +273,16 @@ def test_context_browser_preserves_exact_selected_text_and_distinguishes_search_
     view = context_browser(result)
     selectors = view.select(pn.widgets.Select)
     assert len(selectors) == 1 and len(selectors[0].options) == 2
-    assert any("생성 문맥 1 · 인용 [3]" in k for k in selectors[0].options)
-    assert any("검색 전용" in k for k in selectors[0].options)
+    assert any("인용 [3]" in k for k in selectors[0].options)
+    assert any("검색 후보" in k for k in selectors[0].options)
     panes = view.select(pn.pane.HTML)
     selected = next(p for p in panes if "selected snapshot" in p.object)
     unused = next(p for p in panes if "unused body" in p.object)
-    assert selected.visible and not unused.visible
+    viewport = next(obj for obj in view.objects if isinstance(obj, pn.Column))
+    assert viewport.objects[0].visible and not viewport.objects[1].visible
     assert "&lt;script&gt;selected snapshot&lt;/script&gt;" in selected.object
-    assert 'href="https://example.test/a"' in selected.object and "Section A" in selected.object
+    header = viewport.objects[0].objects[0].object
+    assert 'href="https://example.test/a"' in header and "Section A" in header
     assert 'href="javascript:' not in unused.object
     assert not view.select(pn.Accordion)
 
@@ -286,7 +293,7 @@ def test_context_empty_and_missing_are_not_conflated():
     missing = context_browser({})
     empty = context_browser({"generation_sources": []})
     assert any("기록되지 않았습니다" in p.object for p in missing.select(pn.pane.Markdown))
-    assert any("전달된 생성 문맥은 없습니다" in p.object for p in empty.select(pn.pane.Markdown))
+    assert any("제공된 자료는 없습니다" in p.object for p in empty.select(pn.pane.Markdown))
     changed = context_browser(
         dict(
             generation_sources=[dict(chunk_id="one", text="exact shortened context")],
@@ -300,14 +307,14 @@ def test_grounding_guidance_distinguishes_no_context_from_missing_context():
     from elice_reporting.analysis_sections import grounding_scope
 
     empty = grounding_scope({"generation_sources": []}).object
-    assert "문맥 자료: 0개" in empty
+    assert "제공된 자료: 0개" in empty
     assert "사실 주장 없이 답변을 유보" in empty and "N/A" in empty
     assert "근거 없이 구체적인 사실" in empty and "0점" in empty
     assert "질문 적합성" in empty
     missing = grounding_scope({}).object
-    assert "미기록" in missing and "문맥 자료: 0개" not in missing
+    assert "미기록" in missing and "제공된 자료: 0개" not in missing
     present = grounding_scope({"generation_sources": [{"text": "context"}]}).object
-    assert "문맥 자료: 1개" in present and "N/A" not in present
+    assert "제공된 자료: 1개" in present and "N/A" not in present
 
 
 def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context():
@@ -319,7 +326,7 @@ def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context(
     }
     before = deepcopy(result)
     text = grounding_scope(result, {"answerable": False}).object
-    assert "문맥 자료: 14개" in text and "문맥 자료: 0개" not in text
+    assert "제공된 자료: 14개" in text and "제공된 자료: 0개" not in text
     assert "데이터셋 기준" in text and "질문에 답할 근거가 부족한 문항" in text
     assert "자료가 전달됐더라도" in text
     assert "근거 충실도 N/A" in text and "근거 충실도 0점" in text
@@ -386,7 +393,52 @@ def test_matrix_tap_callbacks_bind_each_case_to_its_own_dropdown_models():
         assert all(isinstance(tool, HoverTool) for tool in plot.tools)
         assert plot.toolbar.active_drag is None and plot.toolbar.active_scroll is None
         assert callback.args["rater"].title == "평가자 · 회차"
-        assert callback.args["dimension"].title == "Judge 항목"
+        assert callback.args["dimension"].title == "평가 항목"
         # The dropdown change callbacks still drive the same offline reason tables.
         assert callback.args["rater"].js_property_callbacks["change:value"]
         assert callback.args["dimension"].js_property_callbacks["change:value"]
+
+
+def test_markdown_cards_render_structure_and_keep_untrusted_content_inert():
+    from elice_reporting.presentation import content_card
+
+    markdown = (
+        "## 설명\n\n**강조**와 `code`\n\n"
+        "| 항목 | 값 |\n| --- | --- |\n| A | 1 |\n\n"
+        "```python\nprint('hello')\n```\n\n"
+        "<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n"
+        "![remote](https://example.test/tracker.png)"
+    )
+    card = content_card("답변", markdown, markdown=True)
+    html = card.select(pn.pane.HTML)[0].object
+    assert all(tag in html for tag in ("<h2>", "<strong>", "<table>", "<pre><code"))
+    assert "<script>" not in html and "&lt;script&gt;" in html
+    assert 'href="javascript:' not in html and "<img " not in html
+    assert card.styles["border-radius"] == "14px"
+
+
+def test_reference_list_keeps_uncited_passages_and_duplicate_titles_selectable():
+    from elice_reporting.analysis_sections import context_browser
+
+    source = {
+        "title": "Same article",
+        "text": "**stored** passage",
+        "url": "https://example.test/a",
+    }
+    result = {
+        "generation_sources": [{**source, "chunk_id": "uncited"}, {**source, "chunk_id": "cited"}],
+        "retrieved_sources": [
+            {**source, "chunk_id": "uncited"},
+            {**source, "chunk_id": "cited"},
+            {**source, "chunk_id": "search-only"},
+        ],
+        "citations": [{"chunk_id": "cited", "source_id": 8}],
+    }
+    view = context_browser(result)
+    options = list(view.select(pn.widgets.Select)[0].options)
+    assert len(options) == 3
+    assert "인용 [8]" in options[0]
+    assert "미인용 참고 자료" in options[1]
+    assert "검색 후보" in options[2]
+    assert "생성 문맥" not in "".join(options)
+    assert sum("<strong>stored</strong>" in p.object for p in view.select(pn.pane.HTML)) == 3
