@@ -15,6 +15,7 @@ from .analysis_visuals import (
     matrix_size,
     rater_legend,
 )
+from .conditions import condition_sections
 from .presentation import (
     content_card,
     metric_badge,
@@ -94,14 +95,27 @@ def evaluation_conditions(data, subjects):
         if isinstance(prompt, dict):
             title = "검색 계획 프롬프트" if "planner" in name else "답변 프롬프트"
             settings.append((title, f"{prompt.get('name', name)} · v{prompt.get('version', '?')}"))
-    return pn.Column(
-        _table(dataset),
-        pn.pane.Markdown("### 답변·검색 설정"),
-        _table(settings),
-        pn.pane.Markdown("### 평가 주체"),
-        rater_legend(subjects),
+    categories = [("데이터셋", _table(dataset)), ("답변·검색 설정", _table(settings))]
+    sections = condition_sections(profile.get("experiment_conditions"))
+    categories.extend((title, _table(rows)) for title, rows in sections)
+    if not sections:
+        categories.append(("상세 실험 조건", _table([("기록 상태", "미기록")])))
+    categories.append(("평가 주체", rater_legend(subjects)))
+    views = [
+        pn.Column(content, visible=index == 0, sizing_mode="stretch_width")
+        for index, (_, content) in enumerate(categories)
+    ]
+    selector = pn.widgets.Select(
+        label="평가 조건 범주",
+        options={title: str(index) for index, (title, _) in enumerate(categories)},
+        value="0",
         sizing_mode="stretch_width",
     )
+    selector.jscallback(
+        args={f"item_{index}": view for index, view in enumerate(views)},
+        value=item_switch_code(len(views)),
+    )
+    return pn.Column(selector, *views, sizing_mode="stretch_width")
 
 
 def _criterion_text(text):
@@ -173,17 +187,6 @@ def metric_guide(data):
                     "전체 등급 순서는 고정합니다. "
                     "일반 κ·제곱 가중 κ는 원본 analysis에 보조 저장합니다.",
                 ),
-                (
-                    "Fleiss κ · 명목형 보조",
-                    "세 명 이상이 정확히 같은 등급을 부여했는지 측정합니다. "
-                    "순서형 주 지표가 아니며 한 주체의 여러 회차는 패널에 중복 투입하지 않습니다.",
-                ),
-                (
-                    "Krippendorff α · 순서형",
-                    "여러 주체의 순서형 등급 일치도를 비교하며 "
-                    "문항마다 최소 두 개의 유효 등급이 있으면 사용합니다. "
-                    "미기록·N/A는 점수로 채우지 않습니다.",
-                ),
             ]
         ),
         sizing_mode="stretch_width",
@@ -197,24 +200,24 @@ def item_switch_code(count):
     )
 
 
-def grading_selection_code(columns, dimensions):
-    """Map fixed plot coordinates to the existing offline reason filters."""
+def grading_selection_code(raters, dimensions):
+    """Map transposed grading cells and headers to the offline reason filters."""
     return f"""
 const x = cb_obj.x, y = cb_obj.y;
 if (!Number.isFinite(x) || !Number.isFinite(y)) return;
 const column = Math.round(x), row = Math.round(y);
-const inColumn = column >= 0 && column < {columns} && Math.abs(x-column) <= 0.46;
-const inRow = row >= 0 && row < {dimensions} && Math.abs(y-row) <= 0.46;
-const header = Math.abs(y-({dimensions}-0.08)) <= 0.42;
+const inColumn = column >= 0 && column < {dimensions} && Math.abs(x-column) <= 0.46;
+const inRow = row >= 0 && row < {raters} && Math.abs(y-row) <= 0.46;
+const header = Math.abs(y-({raters}-0.08)) <= 0.42;
 let selectedRater, selectedDimension;
 if (x < -0.5 && header) {{
     selectedRater = 'all'; selectedDimension = 'all';
 }} else if (inColumn && header) {{
-    selectedRater = String(column); selectedDimension = 'all';
+    selectedRater = 'all'; selectedDimension = String(column);
 }} else if (x < -0.5 && inRow) {{
-    selectedRater = 'all'; selectedDimension = String({dimensions}-1-row);
+    selectedRater = String({raters}-1-row); selectedDimension = 'all';
 }} else if (inColumn && inRow) {{
-    selectedRater = String(column); selectedDimension = String({dimensions}-1-row);
+    selectedRater = String({raters}-1-row); selectedDimension = String(column);
 }} else {{
     return;
 }}
@@ -260,11 +263,16 @@ def item_browser(data, subjects, case_ids):
                     else []
                 ),
                 pn.pane.Markdown(
-                    "매트릭스 클릭: **셀** → 평가자·항목 / **위 아이콘** → 평가자·전체 / "
-                    "**왼쪽 항목명** → 전체·항목 / **좌상단** → 전체·전체",
+                    "매트릭스 클릭: **셀** → 평가자·항목 / **왼쪽 평가자** → 평가자·전체 / "
+                    "**위 평가 항목** → 전체·항목 / **좌상단** → 전체·전체",
                     styles={"font-size": "12px", "color": "#526071"},
                 ),
-                pn.Row(matrix, reasons, sizing_mode="stretch_width"),
+                pn.Row(
+                    matrix,
+                    reasons,
+                    sizing_mode="stretch_width",
+                    styles={"overflow-x": "auto"},
+                ),
                 context_browser(result),
                 visible=i == 0,
                 sizing_mode="stretch_width",
@@ -475,7 +483,10 @@ def rationale_browser(data, subjects, record_id):
     rows, groups = [], []
     for j, name in enumerate(dimensions):
         entries = [
-            rationale_row(subject, cells[(cells.x == i) & (cells.dimension == name)].iloc[0])
+            rationale_row(
+                subject,
+                cells[(cells.y == len(subjects) - 1 - i) & (cells.dimension == name)].iloc[0],
+            )
             for i, subject in enumerate(subjects)
         ]
         rows.append(entries)

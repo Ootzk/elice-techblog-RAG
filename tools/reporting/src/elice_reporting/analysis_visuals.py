@@ -18,6 +18,9 @@ KAPPA_PALETTE = tuple(interp_palette(RdBu11[::-1], 256))
 KAPPA_LIMITS = (-1, 1)
 KAPPA_MISSING = "#e2e8f0"
 MATRIX_MIN_SIZE = 360
+MATRIX_LABEL_SPACE = 160
+MATRIX_CELL_SIZE = 46
+GRADING_MATRIX_WIDTH = 520
 MATRIX_MARGIN = 8
 MATRIX_TITLE_HEIGHT = 32
 PLOT_STYLE = {
@@ -91,24 +94,29 @@ def _icon(rater, color, badge, model_names=()):
 
 
 def analysis_subjects(data):
-    """One visual identity per rater, round and profile; preserve manifest order."""
+    """One visual identity per rater, profile and round in a stable display order."""
     subjects = []
     seen = set()
-    human_colors = {}
     palette = ("#49748c", "#9270a3", "#498e8a", "#bb7c62", "#a49456", "#6c8c60")
     candidates = list(data.inputs["gradings"])
     candidates += [s for row in data.report["comparisons"] for s in (row["left"], row["right"])]
+    human_ids = sorted(
+        {
+            subject_key(candidate)[0]
+            for candidate in candidates
+            if subject_key(candidate)[0].startswith("human:")
+        }
+    )
+    human_colors = {
+        rater: palette[index] if index < len(palette) else f"hsl({index * 137.5 % 360},65%,45%)"
+        for index, rater in enumerate(human_ids)
+    }
     for candidate in candidates:
         key = subject_key(candidate)
         if key in seen:
             continue
         seen.add(key)
         rater, round_, profile = key
-        if rater.startswith("human:") and rater not in human_colors:
-            index = len(human_colors)
-            human_colors[rater] = (
-                palette[index] if index < len(palette) else f"hsl({index * 137.5 % 360},65%,45%)"
-            )
         color = human_colors.get(rater, "#64748b")
         saved_profile = data.inputs.get("profiles", {}).get(profile, {})
         models = list(
@@ -129,7 +137,8 @@ def analysis_subjects(data):
         )
         actual = observed or [m for m in models if not m.startswith("gateway:/")]
         if rater.startswith("human:"):
-            display = f"검수자 {list(human_colors).index(rater) + 1}"
+            number = human_ids.index(rater) + 1
+            display = f"모의 검수 {number}" if link.get("synthetic") else f"검수자 {number}"
             short = display
         else:
             family = rater.removeprefix("model:")
@@ -184,9 +193,21 @@ def analysis_subjects(data):
                 if actual
                 else "미기록",
                 grading_link=link,
+                synthetic=bool(link.get("synthetic")),
                 label=f"{display} · {round_}회차",
             )
         )
+    family_order = {"chatgpt": 0, "claude": 1, "gemini": 2}
+    subjects.sort(
+        key=lambda subject: (
+            0 if subject["rater"].startswith("human:") else 1,
+            family_order.get(subject["rater"].removeprefix("model:"), 3),
+            subject["display_name"].casefold(),
+            subject["rater"],
+            subject["profile"],
+            int(subject["round"]),
+        )
+    )
     # A second grading configuration can have the same model and round number.
     # Disambiguate it with a readable setting number, never a profile hash.
     profiles = {}
@@ -227,7 +248,9 @@ def rater_legend(subjects):
             else "연결 없음"
         )
         source = (
-            "직접 검수"
+            "개발용 임의 점수 · 실제 사람 정합성 해석에서 제외"
+            if subject.get("synthetic")
+            else "직접 검수"
             if subject["rater"].startswith("human:")
             else (
                 "실행 기록에서 확인"
@@ -279,7 +302,7 @@ def kappa_color(value):
 
 
 def matrix_size(subjects):
-    return max(MATRIX_MIN_SIZE, int((len(subjects) + 1.5) * 36))
+    return max(MATRIX_MIN_SIZE, MATRIX_LABEL_SPACE + len(subjects) * MATRIX_CELL_SIZE)
 
 
 def matrix_group_size(subjects):
@@ -395,11 +418,11 @@ def kappa_cells(data, subjects, dimension):
 def grading_cells(data, subjects, record_id, dimensions=DIMENSIONS):
     cells = []
     gradings = {subject_key(g): g for g in data.inputs["gradings"]}
-    for x, subject in enumerate(subjects):
+    for row_index, subject in enumerate(subjects):
         grading = gradings.get(subject["key"], {})
         ratings = {(r["record_id"], r["dimension"]): r for r in grading.get("ratings", [])}
         rubric = grading.get("rubric", data.report["rubric"])
-        for y, dimension in enumerate(dimensions):
+        for column_index, dimension in enumerate(dimensions):
             rating = ratings.get((record_id, dimension), {})
             status, score = rating.get("status", "missing"), rating.get("score")
             state = str(score) if status == "scored" else status
@@ -413,8 +436,8 @@ def grading_cells(data, subjects, record_id, dimensions=DIMENSIONS):
             )
             cells.append(
                 dict(
-                    x=x,
-                    y=len(dimensions) - 1 - y,
+                    x=column_index,
+                    y=len(subjects) - 1 - row_index,
                     fill=fill,
                     ink="#fff" if status == "scored" else "#192b3e",
                     display=symbol,
@@ -436,9 +459,8 @@ def _grid(
     cells, subjects, *, column_subjects=None, dimensions=None, tooltips, title="", color="#334155"
 ):
     """HoloViews creates fresh Bokeh models for notebook display and HTML export."""
-    nrows = len(subjects) if column_subjects is not None else len(dimensions)
-    ncols = len(subjects)
-    column_icons = column_subjects if column_subjects is not None else subjects
+    nrows = len(subjects)
+    ncols = len(subjects) if column_subjects is not None else len(dimensions)
     frame = cells.assign(x0=cells.x - 0.43, y0=cells.y - 0.43, x1=cells.x + 0.43, y1=cells.y + 0.43)
 
     def decorate(plot, element):
@@ -474,67 +496,62 @@ def _grid(
             if isinstance(tool, HoverTool):
                 tool.tooltips = tooltips
                 tool.renderers = [plot.handles["glyph_renderer"]]
-        if column_subjects is not None:
-            figure.image_url(
-                url=[s["icon"] for s in subjects],
-                x=[-0.92] * nrows,
-                y=list(reversed(range(nrows))),
-                w=28,
-                h=28,
-                w_units="screen",
-                h_units="screen",
-                anchor="center",
-            )
-        else:
-            figure.text(
-                x=[-0.65] * nrows,
-                y=list(reversed(range(nrows))),
-                text=[metric_label(d) for d in dimensions],
-                text_font_size="12px",
-                text_baseline="middle",
-                text_align="right",
-                text_color=[METRICS[d][2] for d in dimensions],
-            )
         figure.image_url(
-            url=[s["icon"] for s in column_icons],
-            x=list(range(ncols)),
-            y=[nrows - 0.08] * ncols,
+            url=[s["icon"] for s in subjects],
+            x=[-0.92] * nrows,
+            y=list(reversed(range(nrows))),
             w=28,
             h=28,
             w_units="screen",
             h_units="screen",
             anchor="center",
         )
-
         figure.text(
-            x=list(range(ncols)),
-            y=[nrows - 0.40] * ncols,
-            text=[s["short_name"] for s in column_icons],
+            x=[-0.92] * nrows,
+            y=[y - 0.28 for y in reversed(range(nrows))],
+            text=[s["short_name"] for s in subjects],
             text_align="center",
-            text_font_size="10px",
+            text_font_size="9px",
             text_baseline="middle",
-            text_color=[s["color"] for s in column_icons],
+            text_color=[s["color"] for s in subjects],
             text_font_style="bold",
         )
         if column_subjects is not None:
+            figure.image_url(
+                url=[s["icon"] for s in column_subjects],
+                x=list(range(ncols)),
+                y=[nrows - 0.08] * ncols,
+                w=28,
+                h=28,
+                w_units="screen",
+                h_units="screen",
+                anchor="center",
+            )
             figure.text(
-                x=[-0.92] * nrows,
-                y=[y - 0.28 for y in reversed(range(nrows))],
-                text=[s["short_name"] for s in subjects],
+                x=list(range(ncols)),
+                y=[nrows - 0.40] * ncols,
+                text=[s["short_name"] for s in column_subjects],
                 text_align="center",
-                text_font_size="9px",
+                text_font_size="10px",
                 text_baseline="middle",
-                text_color=[s["color"] for s in subjects],
+                text_color=[s["color"] for s in column_subjects],
+                text_font_style="bold",
+            )
+        else:
+            figure.text(
+                x=list(range(ncols)),
+                y=[nrows - 0.25] * ncols,
+                text=[metric_label(d) for d in dimensions],
+                text_align="center",
+                text_font_size="12px",
+                text_baseline="middle",
+                text_color=[METRICS[d][2] for d in dimensions],
                 text_font_style="bold",
             )
 
-    width = height = matrix_size(subjects)
-    # Keep row labels readable without scaling their left gutter with the entire canvas.
-    left = (
-        -1.5
-        if column_subjects is not None
-        else -(0.65 * width + 105 * (ncols - 0.25)) / (width - 105)
-    )
+    width = matrix_size(subjects) if column_subjects is not None else GRADING_MATRIX_WIDTH
+    height = matrix_size(subjects)
+    left = -1.5 if column_subjects is not None else -1.35
     bounds = dict(
         xlim=(left, ncols - 0.25),
         ylim=(-0.65, nrows + 0.65),
@@ -572,7 +589,7 @@ def kappa_heatmaps(data, subjects):
     if not subjects:
         return pn.pane.Markdown("기록된 평가 주체가 없습니다.")
     dimensions = DIMENSIONS if data.inputs["bundle"]["kind"] == "gold" else ("behavior",)
-    maps = []
+    heatmaps = []
     for dimension in dimensions:
         cells = kappa_cells(data, subjects, dimension)
         heatmap = _grid(
@@ -588,26 +605,64 @@ def kappa_heatmaps(data, subjects):
                 ("사유", "@reason"),
             ],
         )
-        size = matrix_size(subjects)
-        maps.append(
-            pn.Column(
-                pn.pane.HoloViews(heatmap, margin=0),
-                styles=PLOT_STYLE,
-                width=size,
-                height=size + MATRIX_TITLE_HEIGHT,
-                margin=MATRIX_MARGIN,
-            )
+        heatmaps.append(heatmap)
+
+    size = matrix_size(subjects)
+
+    def matrix(heatmap):
+        return pn.Column(
+            pn.pane.HoloViews(heatmap, margin=0),
+            styles=PLOT_STYLE,
+            width=size,
+            height=size + MATRIX_TITLE_HEIGHT,
+            margin=MATRIX_MARGIN,
         )
-    width, height = matrix_group_size(subjects)
-    return pn.Column(
+
+    group_width, group_height = matrix_group_size(subjects)
+    views = [
         pn.Row(
-            pn.GridBox(*maps, ncols=2, width=width, height=height, margin=0),
-            pn.pane.HoloViews(kappa_colorbar(height), margin=0),
+            pn.GridBox(
+                *(matrix(heatmap) for heatmap in heatmaps),
+                ncols=2,
+                width=group_width,
+                height=group_height,
+                margin=0,
+            ),
+            pn.pane.HoloViews(kappa_colorbar(group_height), margin=0),
             margin=0,
-        ),
+        )
+    ]
+    views.extend(
+        pn.Row(
+            matrix(heatmap),
+            pn.pane.HoloViews(
+                kappa_colorbar(size + MATRIX_TITLE_HEIGHT + 2 * MATRIX_MARGIN), margin=0
+            ),
+            margin=0,
+            visible=False,
+        )
+        for heatmap in heatmaps
+    )
+    selector = pn.widgets.Select(
+        label="Cohen κ 평가 항목",
+        options={"전체 항목": "0"}
+        | {metric_label(dimension): str(index + 1) for index, dimension in enumerate(dimensions)},
+        value="0",
+    )
+    selector.jscallback(
+        args={f"view_{index}": view for index, view in enumerate(views)},
+        value="const views=["
+        + ",".join(f"view_{index}" for index in range(len(views)))
+        + "];views.forEach((view,index)=>{view.visible=index===Number(cb_obj.value);});",
+    )
+    return pn.Column(
+        selector,
+        *views,
         pn.pane.Markdown(
             "— : 계산 불가·미기록 (마우스를 올려 사유 확인) · 대각선과 하삼각은 생략", margin=(4, 8)
         ),
+        sizing_mode="stretch_width",
+        styles={"overflow-x": "auto"},
     )
 
 

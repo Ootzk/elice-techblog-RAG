@@ -172,6 +172,7 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
                     "rater": grade.data.tags.get("rater_id"),
                     "round": grade.data.tags.get("round"),
                     "profile_digest": key,
+                    "synthetic": grade.data.tags.get("review.provenance") == "synthetic",
                 }
             )
             if profile.get("type") == "model":

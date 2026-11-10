@@ -88,9 +88,59 @@ def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_defi
     assert "- **진단 지표:**" in definitions.objects[1].object
     assert isinstance(definitions.objects[2], pn.pane.HTML)
     assert not definitions.select(pn.Accordion)
-    assert "Fleiss" not in text and "우연 일치" in definition_text
-    grid = kappa_heatmaps(data, analysis_subjects(data)).objects[0].objects[0]
-    assert isinstance(grid, pn.GridBox) and grid.ncols == 2
+    assert "Fleiss" not in definition_text and "Krippendorff" not in definition_text
+    assert "우연 일치" in definition_text
+    view = kappa_heatmaps(data, analysis_subjects(data))
+    assert isinstance(view.objects[0], pn.widgets.Select)
+    assert isinstance(view.objects[1].objects[0], pn.GridBox)
+
+
+def test_condition_category_dropdown_switches_offline_views():
+    data = demo("analysis")
+    view = evaluation_conditions(data, analysis_subjects(data))
+    selector = view.objects[0]
+    assert isinstance(selector, pn.widgets.Select)
+    assert list(selector.options) == [
+        "데이터셋",
+        "답변·검색 설정",
+        "상세 실험 조건",
+        "평가 주체",
+    ]
+    assert [item.visible for item in view.objects[1:]] == [True, False, False, False]
+    from bokeh.models import Select
+
+    root = view.get_root()
+    control = next(s for s in root.select({"type": Select}) if s.title == "평가 조건 범주")
+    assert control.js_property_callbacks["change:value"]
+    node = shutil.which("node")
+    if node:
+        script = (
+            "const item_0={visible:true},item_1={visible:false},"
+            "item_2={visible:false},item_3={visible:false},cb_obj={value:'3'};"
+            + item_switch_code(4)
+            + "console.log(JSON.stringify([item_0.visible,item_1.visible,"
+            "item_2.visible,item_3.visible]));"
+        )
+        result = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+        assert json.loads(result.stdout) == [False, False, False, True]
+
+
+def test_synthetic_review_is_labeled_in_report_legend():
+    data = demo("analysis")
+    human = next(s for s in analysis_subjects(data) if s["rater"].startswith("human:"))
+    data.links.setdefault("gradings", []).append(
+        {
+            "rater": human["rater"],
+            "round": human["round"],
+            "profile_digest": human["profile"],
+            "synthetic": True,
+        }
+    )
+    subjects = analysis_subjects(data)
+    assert any(s["display_name"].startswith("모의 검수") for s in subjects)
+    legend = rater_legend(subjects).object
+    assert "개발용 임의 점수" in legend
+    assert "실제 사람 정합성 해석에서 제외" in legend
 
 
 def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_path, monkeypatch):
@@ -336,37 +386,35 @@ def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context(
     assert "근거 충실도 N/A" in grounding_scope(result).object
 
 
-@pytest.mark.parametrize("columns,dimensions", [(3, 4), (5, 1)])
-def test_matrix_taps_choose_cell_column_row_or_everything_offline(columns, dimensions):
+@pytest.mark.parametrize("raters,dimensions", [(3, 4), (5, 1)])
+def test_matrix_taps_choose_cell_column_row_or_everything_offline(raters, dimensions):
     from elice_reporting.analysis_sections import grading_selection_code
 
     node = shutil.which("node")
     if not node:
         pytest.skip("Node is required for offline tap validation")
     taps, expected = [], []
-    for column in range(columns):
+    for rater_index in range(raters):
         for dimension in range(dimensions):
-            taps.append([column, dimensions - 1 - dimension])
-            expected.append([str(column), str(dimension)])
+            taps.append([dimension, raters - 1 - rater_index])
+            expected.append([str(rater_index), str(dimension)])
     taps.extend(
         [
-            [columns - 1, dimensions - 0.08],
+            [dimensions - 1, raters - 0.08],
             [-0.8, 0],
-            [-0.8, dimensions - 0.08],
-            [columns + 1, 0],
+            [-0.8, raters - 0.08],
+            [dimensions + 1, 0],
             [0, -0.65],
-            [0, dimensions - 0.52],
+            [0, raters - 0.52],
         ]
     )
-    expected.extend(
-        [[str(columns - 1), "all"], ["all", str(dimensions - 1)]] + [["all", "all"]] * 4
-    )
+    expected.extend([["all", str(dimensions - 1)], [str(raters - 1), "all"]] + [["all", "all"]] * 4)
     script = (
         "const rater={value:'initial'},dimension={value:'initial'};"
         + "const taps="
         + json.dumps(taps)
         + ";function tap(x,y){const cb_obj={x,y};function update(){"
-        + grading_selection_code(columns, dimensions)
+        + grading_selection_code(raters, dimensions)
         + "}update();return [rater.value,dimension.value];}"
         + "console.log(JSON.stringify([...taps.map(([x,y])=>tap(x,y)),tap(NaN,0)]));"
     )
@@ -442,3 +490,49 @@ def test_reference_list_keeps_uncited_passages_and_duplicate_titles_selectable()
     assert "검색 후보" in options[2]
     assert "생성 문맥" not in "".join(options)
     assert sum("<strong>stored</strong>" in p.object for p in view.select(pn.pane.HTML)) == 3
+
+
+def test_experiment_conditions_display_only_recorded_recipe_and_never_guess_missing_values():
+    from elice_reporting.conditions import condition_sections
+
+    assert condition_sections(None) == []
+    with pytest.raises(ValueError, match="Unsupported"):
+        condition_sections({"schema": "unknown"})
+    recorded = {
+        "schema": "experiment-conditions-v1",
+        "chunking": {
+            "policy": {
+                "profile": "h2",
+                "overflow": "sentence",
+                "chunk_size": 1024,
+                "chunk_overlap": 96,
+                "tokenizer": "recorded-tokenizer",
+            }
+        },
+        "embedding": {
+            "profile": {
+                "embedding": {"model": "recorded-model", "dimensions": 768},
+                "distance": "cosine",
+            }
+        },
+        "vector_index": {"backend": "pgvector", "sql_indexes": [{"indexdef": "USING hnsw"}]},
+    }
+    sections = condition_sections(recorded)
+    text = str(sections)
+    assert "1,024 토큰" in text and "96 토큰" in text and "768" in text
+    assert "recorded-model" in text and "HNSW" in text
+    assert "512" not in text and "bge-m3" not in text
+    assert dict(sections[0][1])["표 / 코드"] == "미기록 / 미기록"
+    data = demo("analysis")
+    data.inputs["bundle"]["qa_profile"]["experiment_conditions"] = recorded
+    view = evaluation_conditions(data, analysis_subjects(data))
+    assert list(view.objects[0].options) == [
+        "데이터셋",
+        "답변·검색 설정",
+        "Corpus·청킹",
+        "임베딩·검색 인덱스",
+        "키워드 검색·Agent",
+        "생성·실행 환경",
+        "평가 주체",
+    ]
+    assert any("recorded-model" in p.object for p in view.select(pn.pane.HTML))

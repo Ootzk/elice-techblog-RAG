@@ -9,6 +9,7 @@ from bokeh.models import ColorBar, HoverTool, ImageURL
 from elice_reporting import demo
 from elice_reporting.analysis_visuals import (
     DIMENSIONS,
+    GRADING_MATRIX_WIDTH,
     KAPPA_MISSING,
     KAPPA_PALETTE,
     MATRIX_TITLE_HEIGHT,
@@ -22,6 +23,7 @@ from elice_reporting.analysis_visuals import (
     kappa_heatmaps,
     matrix_group_size,
     matrix_size,
+    metric_label,
     rater_legend,
     subject_key,
 )
@@ -36,8 +38,10 @@ def test_legend_keeps_rounds_profiles_and_colored_people_distinct():
     data.inputs["gradings"].extend([repeated, other])
     subjects = analysis_subjects(data)
     assert len(subjects) == 5
-    assert subjects[0]["color"] == subjects[3]["color"] != subjects[4]["color"]
-    assert subjects[0]["icon"] != subjects[3]["icon"]
+    alice = [subject for subject in subjects if subject["rater"] == "human:alice"]
+    another = next(subject for subject in subjects if subject["rater"] == "human:<another>")
+    assert alice[0]["color"] == alice[1]["color"] != another["color"]
+    assert alice[0]["icon"] != alice[1]["icon"]
     assert len({s["key"] for s in subjects}) == len(subjects)
     legend = rater_legend(subjects).object
     assert "검수자 2" in legend and "human:" not in legend
@@ -70,7 +74,7 @@ def test_kappa_matrix_uses_saved_pairs_and_never_invents_diagonal_or_zero():
     assert pd.isna(missing["value"]) and missing["reason"] == "constant labels"
 
 
-def test_item_heatmap_has_four_rows_and_preserves_all_label_states():
+def test_item_heatmap_has_four_columns_and_preserves_all_label_states():
     data = demo("analysis")
     subjects = analysis_subjects(data)
     human = data.inputs["gradings"][0]
@@ -82,10 +86,14 @@ def test_item_heatmap_has_four_rows_and_preserves_all_label_states():
         row.update(status=status, score=score)
     cells = grading_cells(data, subjects, "0")
     assert len(cells) == len(subjects) * 4
-    assert tuple(cells[cells.x == 0]["dimension"]) == DIMENSIONS
-    assert set(cells.x) == set(range(len(subjects)))
-    assert set(cells.y) == {0, 1, 2, 3}
-    assert set(cells[cells.x == 0]["status"]) == {"scored", "not_applicable", "error"}
+    assert tuple(cells[cells.y == len(subjects) - 1]["dimension"]) == DIMENSIONS
+    assert set(cells.x) == {0, 1, 2, 3}
+    assert set(cells.y) == set(range(len(subjects)))
+    assert set(cells[cells.y == len(subjects) - 1]["status"]) == {
+        "scored",
+        "not_applicable",
+        "error",
+    }
     assert set(grading_cells(data, subjects, "missing-id")["status"]) == {"missing"}
     assert len({color for color, _ in STATES.values()}) == 6
 
@@ -125,13 +133,13 @@ def test_kappa_scale_and_cells_share_exact_diverging_colormap():
     assert set(cells[cells.value == 1]["fill"]) == {KAPPA_PALETTE[-1]}
 
 
-def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
+def test_heatmaps_are_fixed_hover_only_and_item_keeps_four_columns():
     hv.extension("bokeh")
     data = demo("analysis")
     subjects = analysis_subjects(data)
     item = hv.render(grading_heatmap(data, subjects, "0"))
     assert (item.width, item.height) == (
-        matrix_size(subjects),
+        GRADING_MATRIX_WIDTH,
         matrix_size(subjects) + MATRIX_TITLE_HEIGHT,
     )
     assert item.tools and all(isinstance(tool, HoverTool) for tool in item.tools)
@@ -144,8 +152,16 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
         "항목",
     }
     panel = kappa_heatmaps(data, subjects)
-    grid, legend_pane = panel.objects[0].objects
-    assert grid.ncols == 2 and len(grid.objects) == 4
+    selector = panel.objects[0]
+    assert isinstance(selector, pn.widgets.Select)
+    assert list(selector.options) == [
+        "전체 항목",
+        *(metric_label(dimension) for dimension in DIMENSIONS),
+    ]
+    assert [view.visible for view in panel.objects[1:-1]] == [True, False, False, False, False]
+    grid, legend_pane = panel.objects[1].objects
+    assert grid.ncols == 2
+    assert len(grid.objects) == 4
     assert legend_pane.object.opts.get().kwargs["height"] == matrix_group_size(subjects)[1]
     for column in grid.objects:
         figure = hv.render(column.objects[0].object)
@@ -161,6 +177,14 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
             "제외",
             "사유",
         }
+    from bokeh.models import Select
+
+    root = panel.get_root()
+    bokeh_selector = next(
+        model for model in root.select({"type": Select}) if model.title == "Cohen κ 평가 항목"
+    )
+    callback = bokeh_selector.js_property_callbacks["change:value"][0]
+    assert "view.visible=index===Number(cb_obj.value)" in callback.code
 
 
 def test_ordinal_scores_are_shared_by_humans_and_models_independent_of_diagnostics():
@@ -231,7 +255,7 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
         if pair["right"]["rater"] == original["rater_id"] and pair["right"]["round"] == "2":
             pair["right"]["profile_digest"] = "changed-protocol"
     revised = agreement_browser(data, analysis_subjects(data))
-    assert not revised.select(pn.widgets.Select)
+    assert [widget.label for widget in revised.select(pn.widgets.Select)] == ["Cohen κ 평가 항목"]
 
 
 def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_codes():
@@ -245,7 +269,7 @@ def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_code
         grading.update(rater_id="model:chatgpt", round=round_, rater_profile_digest=model)
         data.inputs["gradings"].append(grading)
         data.inputs["profiles"][model] = {"scorers": [{"model": model}]}
-    luna, terra, luna_repeat = analysis_subjects(data)
+    luna, luna_repeat, terra = analysis_subjects(data)
     assert luna["short_name"] == "Luna" and terra["short_name"] == "Terra"
     assert not luna["setting"] and not terra["setting"]
     assert luna["short_name"] == luna_repeat["short_name"]
@@ -256,3 +280,38 @@ def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_code
         assert "type_code" not in subject
         assert subject["profile"] not in subject["label"]
         assert f">{subject['round']}</text>" in svg
+
+
+def test_large_repeated_panel_has_stable_model_round_order_and_readable_size():
+    hv.extension("bokeh")
+    data = demo("analysis")
+    human, chatgpt, claude = data.inputs["gradings"]
+    gemini = deepcopy(claude)
+    gemini.update(rater_id="model:gemini", rater_profile_digest="gemini-profile")
+    data.inputs.setdefault("profiles", {})["gemini-profile"] = {
+        "scorers": [{"model": "gemini-3.5-flash-lite"}]
+    }
+    model_rounds = []
+    for template in (chatgpt, claude, gemini):
+        for round_ in (3, 1, 2):
+            grading = deepcopy(template)
+            grading["round"] = round_
+            model_rounds.append(grading)
+    data.report["comparisons"] = []
+    data.inputs["gradings"] = list(reversed(model_rounds)) + [human]
+    subjects = analysis_subjects(data)
+    assert [(s["rater"], int(s["round"])) for s in subjects] == [
+        ("human:alice", 1),
+        *(
+            (rater, round_)
+            for rater in ("model:chatgpt", "model:claude", "model:gemini")
+            for round_ in (1, 2, 3)
+        ),
+    ]
+    assert matrix_size(subjects) == 620
+    assert matrix_size(subjects) > matrix_size(subjects[:3])
+    item = hv.render(grading_heatmap(data, subjects, "0"))
+    assert (item.width, item.height) == (GRADING_MATRIX_WIDTH, 620 + MATRIX_TITLE_HEIGHT)
+    assert kappa_heatmaps(data, subjects).styles["overflow-x"] == "auto"
+    data.inputs["gradings"].reverse()
+    assert [s["key"] for s in analysis_subjects(data)] == [s["key"] for s in subjects]
