@@ -6,11 +6,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from elice_knowledge.agreement import analyze, review_packet
-from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import tags, validate_grading
 from elice_knowledge.judge_runs import evaluate_models
 from elice_knowledge.judges import RATERS, configure, frozen_judges
+from elice_knowledge.reliability import report_metrics
 from elice_knowledge.service_store import ServiceStore
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import client
@@ -32,7 +32,12 @@ def main():
     parser.add_argument("action", choices=("export", "judge", "analyze"))
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--grading-run-id", action="append", default=[])
+    parser.add_argument(
+        "--grading-run-id",
+        action="append",
+        default=[],
+        help="Select grading runs; use one round per subject for panel coefficients",
+    )
     parser.add_argument("--model-rater", action="append", choices=RATERS)
     parser.add_argument("--grading-file", action="append", type=Path, default=[])
     parser.add_argument("--repeat", type=int, default=1)
@@ -40,7 +45,7 @@ def main():
     parser.add_argument(
         "--log",
         action="store_true",
-        help="Log agreement and human assessments to MLflow",
+        help="Log the analysis report and reliability metrics to MLflow",
     )
     args = parser.parse_args()
     if not 1 <= args.repeat <= 100:
@@ -149,18 +154,8 @@ def main():
             try:
                 tracking.log_dict(run_id, report, "agreement.json")
                 tracking.log_dict(run_id, {"results": results}, "grading-inputs.json")
-                for comparison in report["comparisons"]:
-                    key = digest([comparison["left"], comparison["right"]])[:12]
-                    prefix = f"agreement.{comparison['dimension']}.{key}."
-                    for metric in (
-                        "agreement",
-                        "cohen_kappa",
-                        "binary_pairs",
-                        "excluded_pairs",
-                    ):
-                        value = comparison[metric]
-                        if value is not None:
-                            tracking.log_metric(run_id, prefix + metric, value)
+                for name, value in report_metrics(report).items():
+                    tracking.log_metric(run_id, name, value)
                 tracking.set_terminated(run_id, "FINISHED")
                 print(json.dumps({"analysis_run_id": run_id}))
             except Exception:

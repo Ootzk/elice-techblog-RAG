@@ -1,4 +1,4 @@
-"""Pairwise binary agreement on the same frozen answers, by quality dimension."""
+"""Pairwise and panel reliability on the same frozen answers, by quality dimension."""
 
 from collections import defaultdict
 from itertools import combinations
@@ -6,6 +6,7 @@ from itertools import combinations
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import answer_digest, validate_bundle
 from elice_knowledge.judges import DIMENSIONS, evaluation_row
+from elice_knowledge.reliability import cohen, multirater, protocol, purpose
 
 LABELS = {"pass", "fail", "not_applicable", "error"}
 
@@ -46,7 +47,7 @@ def review_packet(bundle, rater):
 
 
 def pairwise(left, right):
-    paired = [(left[key], right[key]) for key in left.keys() & right.keys()]
+    paired = [(left[key], right[key]) for key in sorted(left.keys() & right.keys())]
     applicable = [(a, b) for a, b in paired if a in {"pass", "fail"} and b in {"pass", "fail"}]
     count = len(applicable)
     confusion = {
@@ -55,33 +56,19 @@ def pairwise(left, right):
         for b in ("pass", "fail")
     }
     observed = sum(a == b for a, b in applicable) / count if count else None
-    expected = (
-        sum(
-            (sum(a == label for a, _ in applicable) / count)
-            * (sum(b == label for _, b in applicable) / count)
-            for label in ("pass", "fail")
-        )
-        if count
-        else None
-    )
-    kappa = (observed - expected) / (1 - expected) if count >= 2 and expected < 1 else None
+    kappa, undefined_reason = cohen([a for a, _ in applicable], [b for _, b in applicable])
     scored_statuses = [
         (a, b) for a, b in paired if a in LABELS - {"error"} and b in LABELS - {"error"}
     ]
     return dict(
         paired_items=len(paired),
+        unpaired_items=len(left.keys() ^ right.keys()),
         binary_pairs=count,
         excluded_pairs=len(paired) - count,
         agreement=observed,
         cohen_kappa=kappa,
         confusion=confusion,
-        kappa_undefined_reason=(
-            "insufficient_pairs"
-            if count < 2
-            else "constant_identical_labels"
-            if expected == 1
-            else None
-        ),
+        kappa_undefined_reason=undefined_reason,
         applicability_pairs=len(scored_statuses),
         applicability_agreement=(
             sum((a == "not_applicable") == (b == "not_applicable") for a, b in scored_statuses)
@@ -105,6 +92,10 @@ def analyze(bundle, entries):
             or entry["answer_digest"] != answer_digest(records[case_id], cases[case_id])
         ):
             raise ValueError("review_answer_binding_mismatch")
+        if not isinstance(entry["rater"], str) or not entry["rater"].startswith(
+            ("human:", "model:")
+        ):
+            raise ValueError("invalid_review_rater")
         label = entry["label"]
         if label is not None and label not in LABELS:
             raise ValueError("invalid_review_label")
@@ -119,23 +110,32 @@ def analyze(bundle, entries):
             raise ValueError("duplicate_review_label")
         seen.add(identity)
         groups[identity[:4]][case_id] = label
-    comparisons = []
+    comparisons, panels = [], []
     for dimension in DIMENSIONS[bundle["kind"]]:
         selected = [(key, labels) for key, labels in groups.items() if key[0] == dimension]
+        selected.sort(key=lambda row: row[0])
+        panels.extend(
+            {"dimension": dimension, **row} for row in multirater(selected, sorted(cases))
+        )
         for (a, left), (b, right) in combinations(selected, 2):
+            comparison = (
+                ("repeat_consistency" if a[2] == b[2] else "judge_revision")
+                if a[1] == b[1]
+                else "inter_rater"
+            )
             comparisons.append(
                 dict(
                     dimension=dimension,
                     left=dict(rater=a[1], round=a[3], profile_digest=a[2]),
                     right=dict(rater=b[1], round=b[3], profile_digest=b[2]),
-                    comparison=("repeat_consistency" if a[2] == b[2] else "judge_revision")
-                    if a[1] == b[1]
-                    else "inter_rater",
+                    comparison=comparison,
+                    purpose=purpose(a[1], b[1], comparison),
                     left_protocol=a[2],
                     right_protocol=b[2],
                     **pairwise(left, right),
                 )
             )
+    comparisons.sort(key=lambda row: row["purpose"] != "human_alignment")
     return dict(
         source_run_id=bundle["source_run_id"],
         source_digest=bundle["digest"],
@@ -147,4 +147,6 @@ def analyze(bundle, entries):
             e["rater"].startswith("human:") and e["label"] in LABELS - {"error"} for e in entries
         ),
         comparisons=comparisons,
+        panels=panels,
+        analysis_protocol=protocol(),
     )

@@ -24,8 +24,8 @@ analysis: 같은 A1에 연결된 grading run들을 비교한 통계
 
 | run 종류 | 책임 | 주요 artifact | Metric |
 | --- | --- | --- | --- |
-| answers | Dataset·QA 설정을 고정하고 RAG 답변 생성 | evaluation-bundle.json, evaluation-results.json | 결정적 검색·유보 지표, 생성 자원·시간 |
-| grading | 한 사람 또는 한 모델의 한 번 채점 | grading-result.json, rater-profile.json | 같은 이름의 차원별 통과율·채점/N/A/오류/미채점 건수 |
+| answers | Dataset·QA 설정을 고정하고 RAG 답변 생성 | evaluation-bundle.json, evaluation-results.json | 결정적 답변 가능 여부 지표, 생성 자원·시간 |
+| grading | 한 사람 또는 한 모델의 한 번 채점 | grading-result.json, rater-profile.json | 공통 차원별 통과율·채점/N/A/오류/미채점 건수, 모델의 Ragas 원점수 |
 | analysis | 지정한 grading run들의 반복·평가자 간 비교 | agreement.json, 비교한 run 목록 | 차원별 일치율·κ 등 유효한 수치 |
 
 grading의 `mlflow.parentRunId`는 answers run ID다. analysis는 동일한 원본 답변을 비교하며 입력 run ID들을 보존한다.
@@ -167,5 +167,27 @@ UI는 answers run만 평가 실행으로 조회한다. 본인의 사람 grading 
 같은 원본의 grading run들을 선택해 analysis를 수행한다. 한 사람/모델의 같은 프로필 반복은 repeat_consistency,
 같은 주체의 다른 프로필은 judge_revision, 다른 주체끼리는 inter_rater로 구분한다.
 분석은 원본 답변/프로필/입력 run 목록을 확인하고, schema가 다른 예전 결과는 받지 않는다.
+
+analysis의 `comparisons`는 사람–모델을 `purpose=human_alignment`로 우선 표시한다.
+다른 목적은 human_reliability·model_agreement·repeat_consistency·judge_revision으로 구분한다.
+Cohen’s κ는 Ragas DiscreteMetric을 통해 scikit-learn으로 계산한다.
+
+`panels`는 차원별 전체 선택 집단(all), 혼합 집단 안에 각 유형이 세 주체 이상인 경우
+humans_only·models_only를 포함한다. 집단마다 members에 rater·profile_digest·round를 기록한다.
+한 주체의 여러 프로필/회차를 별개의 독립 평가자로 세지 않는다. 중복 주체가 있는 집단은
+multiple_gradings_per_subject 사유와 주체 목록을 남기고 계수는 null이다. 유효한 다른 하위 집단의 계산은 계속한다.
+
+패널은 최소 세 주체를 요구하며 α에도 실제 기여하는 주체가 최소 세 명이어야 한다. `fleiss_kappa`는 statsmodels의 Fleiss 방식이며 모든 선택 주체가
+pass/fail을 준 문항만 사용한다. `krippendorff_alpha`는 krippendorff의 nominal 방식으로 두 주체 이상이
+pass/fail을 준 문항을 사용한다. 최소 유효 문항 두 개는 Harness의 표본 정책이다.
+complete_binary_cases·pairable_cases·각 방법의 제외 문항 수·N/A/오류/누락 판정 수를 함께 기록한다.
+rater_coverage와 alpha_effective_subjects로 선택만 됐고 실제 유효 판정은 없는 주체를 구분한다.
+계수는 음수도 허용하며, 상수 판정·표본 부족·비정상 수치는 null과 개별 사유로 남긴다.
+N/A 적용 여부의 일치도는 쌍별 지표로 별도 기록하며 N/A를 pass나 fail 범주에 넣지 않는다.
+
+`analysis_protocol`은 방법·명목 척도·표본/제외 정책·라이브러리 버전을 고정한다.
+MLflow에는 유한한 값만 `agreement.<차원>.<쌍 식별자>.*`와
+`agreement.panel.<차원>.<집단>.<구성 식별자>.*`로 기록하고 미정 계수를 0으로 채우지 않는다.
+집단 계수는 보조 기술통계이며 사람–모델 κ를 대체하지 않는다.
 
 이 문서는 구현 계약이며 실제 유료 모델 평가나 사람 정합성 실험의 완료를 의미하지 않는다.

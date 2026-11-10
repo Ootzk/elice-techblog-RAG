@@ -331,6 +331,27 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/revi
 
 `agreement.json`은 차원별 모델–모델·모델–사람 일치율, Cohen’s kappa, 유효 쌍 수·혼동행렬을 제공한다.
 같은 평가자·프로필의 반복은 repeat_consistency, 같은 주체의 다른 프로필은 judge_revision으로 구분한다.
+
+사람–모델 비교는 purpose=human_alignment로 우선 표시한다. Cohen’s κ는 Ragas가 제공하는
+scikit-learn 기반 구현을 사용한다. 종합 Fleiss’ κ·Krippendorff’s α는 각각 statsmodels·krippendorff로 계산한다.
+종합 비교를 하려면 한 평가자당 한 회차만 골라 최소 세 평가자의 run을 전달한다.
+CLI는 완료한 grading만 받으며, 이때 α의 결측은 주로 N/A·채점 오류에서 발생한다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
+  --source-run-id '<answers-run-id>' \
+  --grading-run-id '<human-round-run-id>' \
+  --grading-run-id '<chatgpt-round-run-id>' \
+  --grading-run-id '<claude-round-run-id>' \
+  --grading-run-id '<gemini-round-run-id>' \
+  --output-dir artifacts/evaluation/panel-agreement --log
+```
+
+`panels`에 전체 집단과 조건을 충족하는 사람/모델 하위 집단의 계수·구성·유효/제외 건수를 남긴다.
+Fleiss는 모두 이진 판정한 문항만, α는 두 명 이상이 이진 판정한 문항을 사용한다. N/A·오류·미제출은
+각각 집계한다. 여러 회차를 넣어도 쌍별 반복 분석은 가능하지만, 중복 주체가 있는 종합 계수는
+multiple_gradings_per_subject로 계산하지 않는다. 미정 계수는 JSON에 null·사유를 남기고 MLflow metric에는 쓰지 않는다.
+패키지 버전과 분석 정책은 `analysis_protocol`에 기록한다. 분석 명령은 생성·Judge를 호출하지 않는다.
 --log는 별도 analysis run에 입력 grading manifest·비교 결과와 유효한 일치율·κ metric을 기록한다.
 N/A·오류·미입력은 이진 kappa에서 제외하고 적용 가능 여부의 일치율·제외 건수를 따로 표시한다.
 유효 쌍이 2개 미만이거나 양쪽이 동일한 상수 라벨이면 kappa는 null로 남긴다.
