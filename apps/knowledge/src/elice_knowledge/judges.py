@@ -189,7 +189,9 @@ def evaluate_answers(
                 "scored" if numeric else "not_applicable" if raw == "not_applicable" else "error"
             )
             score = (float(raw) if diagnostic else int(raw)) if numeric else None
-            reason = row.get(spec["name"] + "/rationale") or ""
+            reason = row.get(spec["name"] + "/rationale")
+            if not isinstance(reason, str):
+                reason = ""
             if diagnostic:
                 measurements.append(
                     dict(metric=spec["dimension"], score=score, status=status, rationale=reason)

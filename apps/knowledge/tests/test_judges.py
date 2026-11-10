@@ -128,6 +128,34 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     assert artifacts[0][2] == "judge-results.json"
 
 
+def test_missing_judge_rationale_from_dataframe_is_serializable(monkeypatch):
+    records, cases = examples()
+    monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
+    monkeypatch.setattr("mlflow.start_run", lambda **kw: nullcontext())
+    monkeypatch.setattr(
+        "mlflow.genai.evaluate",
+        lambda **kwargs: SimpleNamespace(
+            tables={
+                "eval_results": pd.DataFrame(
+                    [
+                        {
+                            "tags": item["tags"],
+                            **{spec["name"] + "/value": 2 for spec in model_specs()},
+                            **{spec["name"] + "/rationale": float("nan") for spec in model_specs()},
+                        }
+                        for item in kwargs["data"]
+                    ]
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr("mlflow.MlflowClient", lambda: SimpleNamespace(log_dict=lambda *a: None))
+    _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
+    assert all(
+        cell["rationale"] == "" for row in rows for cell in row["judges"].values()
+    )
+
+
 @pytest.mark.parametrize(("record_workers", "scorer_workers"), [(1, 4), (2, 2)])
 def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
     monkeypatch, tmp_path, record_workers, scorer_workers
