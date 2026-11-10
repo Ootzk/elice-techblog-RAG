@@ -327,3 +327,66 @@ def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context(
     assert result == before
     # Runtime abstention also needs guidance, independently of the reference answerability.
     assert "근거 충실도 N/A" in grounding_scope(result).object
+
+
+@pytest.mark.parametrize("columns,dimensions", [(3, 4), (5, 1)])
+def test_matrix_taps_choose_cell_column_row_or_everything_offline(columns, dimensions):
+    from elice_reporting.analysis_sections import grading_selection_code
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required for offline tap validation")
+    taps, expected = [], []
+    for column in range(columns):
+        for dimension in range(dimensions):
+            taps.append([column, dimensions - 1 - dimension])
+            expected.append([str(column), str(dimension)])
+    taps.extend(
+        [
+            [columns - 1, dimensions - 0.08],
+            [-0.8, 0],
+            [-0.8, dimensions - 0.08],
+            [columns + 1, 0],
+            [0, -0.65],
+            [0, dimensions - 0.52],
+        ]
+    )
+    expected.extend(
+        [[str(columns - 1), "all"], ["all", str(dimensions - 1)]] + [["all", "all"]] * 4
+    )
+    script = (
+        "const rater={value:'initial'},dimension={value:'initial'};"
+        + "const taps="
+        + json.dumps(taps)
+        + ";function tap(x,y){const cb_obj={x,y};function update(){"
+        + grading_selection_code(columns, dimensions)
+        + "}update();return [rater.value,dimension.value];}"
+        + "console.log(JSON.stringify([...taps.map(([x,y])=>tap(x,y)),tap(NaN,0)]));"
+    )
+    output = subprocess.run([node, "-e", script], capture_output=True, text=True, check=True)
+    assert json.loads(output.stdout) == expected + [["all", "all"]]
+
+
+def test_matrix_tap_callbacks_bind_each_case_to_its_own_dropdown_models():
+    import holoviews as hv
+    from bokeh.models import HoverTool
+    from bokeh.plotting import figure
+
+    pn.extension()
+    hv.extension("bokeh")
+    data = demo("analysis")
+    view = item_browser(data, analysis_subjects(data), ["0", "1"])
+    root = view.get_root()
+    plots = list(root.select({"type": figure}))
+    assert len(plots) == 2
+    callbacks = [plot.js_event_callbacks["tap"][0] for plot in plots]
+    assert len({c.args["rater"].id for c in callbacks}) == 2
+    assert len({c.args["dimension"].id for c in callbacks}) == 2
+    for plot, callback in zip(plots, callbacks, strict=True):
+        assert all(isinstance(tool, HoverTool) for tool in plot.tools)
+        assert plot.toolbar.active_drag is None and plot.toolbar.active_scroll is None
+        assert callback.args["rater"].title == "평가자 · 회차"
+        assert callback.args["dimension"].title == "Judge 항목"
+        # The dropdown change callbacks still drive the same offline reason tables.
+        assert callback.args["rater"].js_property_callbacks["change:value"]
+        assert callback.args["dimension"].js_property_callbacks["change:value"]

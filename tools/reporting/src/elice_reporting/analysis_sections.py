@@ -173,6 +173,32 @@ def item_switch_code(count):
     )
 
 
+def grading_selection_code(columns, dimensions):
+    """Map fixed plot coordinates to the existing offline reason filters."""
+    return f"""
+const x = cb_obj.x, y = cb_obj.y;
+if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+const column = Math.round(x), row = Math.round(y);
+const inColumn = column >= 0 && column < {columns} && Math.abs(x-column) <= 0.46;
+const inRow = row >= 0 && row < {dimensions} && Math.abs(y-row) <= 0.46;
+const header = Math.abs(y-({dimensions}-0.08)) <= 0.42;
+let selectedRater, selectedDimension;
+if (x < -0.5 && header) {{
+    selectedRater = 'all'; selectedDimension = 'all';
+}} else if (inColumn && header) {{
+    selectedRater = String(column); selectedDimension = 'all';
+}} else if (x < -0.5 && inRow) {{
+    selectedRater = 'all'; selectedDimension = String({dimensions}-1-row);
+}} else if (inColumn && inRow) {{
+    selectedRater = String(column); selectedDimension = String({dimensions}-1-row);
+}} else {{
+    return;
+}}
+rater.value = selectedRater;
+dimension.value = selectedDimension;
+"""
+
+
 def item_browser(data, subjects, case_ids):
     if not case_ids:
         return pn.pane.Markdown("저장된 문항이 없습니다.")
@@ -184,6 +210,20 @@ def item_browser(data, subjects, case_ids):
         question = records[record_id]["inputs"]["question"]
         case = cases[record_id]
         result = case.get("result") or {}
+        reasons = rationale_browser(data, subjects, record_id)
+        controls = {control.label: control for control in reasons.select(pn.widgets.Select)}
+        matrix = pn.pane.HoloViews(grading_heatmap(data, subjects, record_id))
+        matrix.jscallback(
+            args={
+                "rater": controls["평가자 · 회차"],
+                "dimension": controls["Judge 항목"],
+            },
+            **{
+                "event:tap": grading_selection_code(
+                    len(subjects), len(data.report["rubric"]["dimensions"])
+                )
+            },
+        )
         options[f"{i + 1}. {question[:100]}{'…' if len(question) > 100 else ''}"] = str(i)
         items.append(
             pn.Column(
@@ -195,11 +235,12 @@ def item_browser(data, subjects, case_ids):
                     if bundle["kind"] == "gold"
                     else []
                 ),
-                pn.Row(
-                    pn.pane.HoloViews(grading_heatmap(data, subjects, record_id)),
-                    rationale_browser(data, subjects, record_id),
-                    sizing_mode="stretch_width",
+                pn.pane.Markdown(
+                    "매트릭스 클릭: **셀** → 평가자·항목 / **위 아이콘** → 평가자·전체 / "
+                    "**왼쪽 항목명** → 전체·항목 / **좌상단** → 전체·전체",
+                    styles={"font-size": "12px", "color": "#526071"},
                 ),
+                pn.Row(matrix, reasons, sizing_mode="stretch_width"),
                 context_browser(result),
                 visible=i == 0,
                 sizing_mode="stretch_width",
