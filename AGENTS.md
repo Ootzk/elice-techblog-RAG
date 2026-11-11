@@ -62,14 +62,14 @@
 - Gold는 정확성·완전성·근거 충실도·응답 적절성, Iron은 행동 준수를 평가한다.
   제출은 질문 단위로 원자적·불변이며 답변·rubric 해시를 보존한다. 미제출 입력은 계정·회차별로 자동 저장한다.
   같은 고정 답변의 새 검수 회차를 시작해 사람의 반복 일관성을 측정하며, 이전 판정은 새 회차에 채워 넣지 않는다.
-- 오프라인 품질 점수는 Ragas로 계산한다. 누적/최종 문맥 지표와 답변 지표를 분리하고 원점수·적용 범위·평가자 프로필을 기록한다. 사람 비교용 이진 판정은 원점수 1.0만 pass로 변환하며 원점수와 혼동하지 않는다.
-- 평가자 신뢰도는 Ragas의 Cohen κ와 표준 라이브러리의 Fleiss κ·Krippendorff α를 사용한다. 사람–모델을 주요 비교로 두고 종합 집단에는 한 주체의 여러 회차를 중복 투입하지 않는다. 적용·제외 조건과 계산 불가 사유를 기록한다.
-- 평가 저장 계약은 `docs/evaluation-schema.md`의 `evaluation-v1`을 따른다. answers·grading·analysis·comparison run을 구분한다.
+- 오프라인 품질 채점은 Ragas DiscreteMetric으로 공통 rubric 등급을 직접 받는다. Gold는 0·1·2, Iron은 0·1이며 사람도 같은 anchor를 사용한다. 비율 진단은 선택적으로 분리하고 임계값 변환하지 않는다.
+- 평가자 신뢰도는 선형 가중 Cohen κ를 주 지표로, 일반/제곱 가중 κ·명목형 Fleiss κ·순서형 Krippendorff α를 보조 사용한다. 종합 집단에는 한 주체의 여러 회차를 중복 투입하지 않는다.
+- 평가 저장 계약은 `docs/evaluation-schema.md`를 따른다. answers는 `evaluation-v1`, grading·agreement·comparison은 `evaluation-v2`·`rubric-v1`이다. rubric 원문·해시는 grading 프로필에 고정한다.
   grading run 하나는 한 평가자가 고정 답변 전체를 한 번 채점한 단위이며 모델별·사람별·회차별로 분리한다.
-  사람·모델은 공통 grading 레지스트리·manifest·quality metric을 쓰고 answers run에 parent/source로 연결한다.
+  사람·모델은 공통 grading 레지스트리·manifest·rubric metric을 쓰고 answers run에 parent/source로 연결한다.
   사람 판정은 DB에 먼저 저장한 뒤 본인 grading run에 동기화한다. 원본에 점수를 덧붙이지 않는다.
   이전 schema의 평가·검수 결과는 조회·분석에서 제외하고 변환·backfill·호환 마이그레이션을 추가하지 않는다.
-- comparison은 analysis A/B 한 쌍을 비교한다. system은 평가자/기준을, judge는 답변/사람 판정을 고정하며 원본 수정·모델 재호출을 하지 않는다. 관측 교집합·제외 사유·계산 조건을 기록한다.
+- comparison은 agreement A/B 한 쌍을 비교한다. system은 평가자/기준을, judge는 답변/사람 판정을 고정하며 원본 수정·모델 재호출을 하지 않는다. 관측 교집합·제외 사유·계산 조건을 기록한다.
 - 후속 실험 인프라는 조건 A/B/C, 답변 반복 A1/A2, 고정 답변의 Judge 반복 J1/J2를 구분해 묶고,
   시행 간 일치도·변동과 사람 정합성을 분석한다. 현재 반복 CLI와 향후 실험 관리 UI의 구현 상태를 구분한다.
 - 완료 기준은 Gold·Iron 실행 결과를 웹에서 블라인드 검수하고 세 Judge와의 정합성 및

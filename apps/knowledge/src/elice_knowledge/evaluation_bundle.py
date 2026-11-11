@@ -8,8 +8,6 @@ SCHEMA = "evaluation-v1"
 
 
 def create_bundle(run_id, evaluation, profile, cases):
-    from elice_knowledge.judges import DIMENSIONS, instructions
-
     kind = "iron" if evaluation["records"][0]["expectations"].get("expected_behavior") else "gold"
     bundle = {
         "schema": SCHEMA,
@@ -18,7 +16,6 @@ def create_bundle(run_id, evaluation, profile, cases):
         "dataset_digest": evaluation["dataset_digest"],
         "qa_profile": profile,
         "kind": kind,
-        "rubrics": {dimension: instructions(dimension) for dimension in DIMENSIONS[kind]},
         "records": evaluation["records"],
         "cases": cases,
     }
@@ -28,8 +25,6 @@ def create_bundle(run_id, evaluation, profile, cases):
 
 
 def validate_bundle(bundle):
-    from elice_knowledge.judges import DIMENSIONS
-
     if bundle.get("schema") != SCHEMA:
         raise ValueError("unsupported_evaluation_schema")
     if bundle["digest"] != digest({key: value for key, value in bundle.items() if key != "digest"}):
@@ -42,11 +37,7 @@ def validate_bundle(bundle):
         or set(cases) != records
     ):
         raise ValueError("evaluation_bundle_record_mismatch")
-    if (
-        bundle.get("kind") not in {"gold", "iron"}
-        or set(bundle.get("rubrics", {})) != set(DIMENSIONS[bundle["kind"]])
-        or not all(isinstance(text, str) and text.strip() for text in bundle["rubrics"].values())
-    ):
+    if bundle.get("kind") not in {"gold", "iron"}:
         raise ValueError("evaluation_bundle_rubric_mismatch")
     return bundle
 

@@ -7,11 +7,18 @@
 	import Evidence from '#lib/components/review/Evidence.svelte';
 	import ServiceNav from '#lib/components/common/ServiceNav.svelte';
 
-	type Label = '' | 'pass' | 'fail' | 'not_applicable';
-	type Score = { label: Label; rationale: string };
+	type RatingStatus = 'pending' | 'scored' | 'not_applicable';
+	type Score = { score: number | null; status: RatingStatus; rationale: string };
 	type Entry = {
 		dimension: string;
-		rubric: string;
+		rubric: {
+			title: string;
+			description: string;
+			levels: Record<string, string>;
+			not_applicable: string;
+		};
+		scale: number[];
+		scale_labels: Record<string, string>;
 		forced_na: boolean;
 		inputs: { question: string; history: { role: string; content: string }[] };
 		outputs: NonNullable<Turn['result']> & {
@@ -28,11 +35,14 @@
 		dimensions: Entry[];
 		saved: {
 			synced: boolean;
-			labels: { dimension: string; label: Label; rationale: string }[];
+			ratings: ({ dimension: string } & Score)[];
 		} | null;
 		draft: { scores: Record<string, Score>; revision: number; updated_at: string } | null;
 	};
 	type Round = {
+		grading_id: string;
+		rubric_digest: string;
+		rubric_id: string;
 		grading_run_id: string | null;
 		grading_state: string;
 		run_id: string;
@@ -68,6 +78,7 @@
 		listError = '';
 	let run = '',
 		number = 0,
+		gradingId = '',
 		current: ReviewCase | null = null,
 		active = '';
 	let origin: Candidate | null = null,
@@ -90,18 +101,6 @@
 		relevance: '응답 적절성',
 		behavior: '행동 준수'
 	};
-	const descriptions: Record<string, string> = {
-		correctness:
-			'모범 답안·검증된 근거와 모순되거나 핵심 사실을 지어내지 않았는지 봅니다. 누락은 완전성에서 평가하세요.',
-		completeness:
-			'필수 항목을 빠짐없이 정확하게 전달했는지 봅니다. 선택적인 세부 사항은 요구하지 않습니다.',
-		groundedness:
-			'최종 생성에 실제 제공된 근거로 사실 주장이 뒷받침되는지 봅니다. 모범 답안이나 외부 지식은 사용하지 않습니다.',
-		relevance:
-			'실제 요청에 적절히 대응했는지 봅니다. 적절한 추가 질문·근거 부족 안내·거절도 포함됩니다.',
-		behavior:
-			'문항의 기대 행동·필수 항목·실패 조건을 봅니다. 무조건적인 거절을 정답으로 취급하지 않습니다.'
-	};
 	const refNames: Record<string, string> = {
 		answerable: '답변 가능 여부',
 		answer: '모범 답안',
@@ -118,11 +117,7 @@
 		RUNNING: '실행 중',
 		SCHEDULED: '실행 대기'
 	};
-	const labels: Record<string, string> = {
-		pass: '충족',
-		fail: '미충족',
-		not_applicable: '해당 없음'
-	};
+
 	function date(value?: number | string) {
 		return value
 			? new Date(value).toLocaleString('ko-KR', {
@@ -149,10 +144,14 @@
 		return own(id, records).filter((r) => r.total > 0 && r.completed === r.total).length;
 	}
 	function filled(key: string, values: Record<string, Score>) {
-		return !!values[key]?.label && !!values[key]?.rationale.trim();
+		return (
+			(values[key]?.status === 'not_applicable' ||
+				(values[key]?.status === 'scored' && values[key]?.score !== null)) &&
+			!!values[key]?.rationale.trim()
+		);
 	}
 	function path() {
-		return `/reviews/${run}/rounds/${number}`;
+		return `/reviews/${run}/gradings/${gradingId}`;
 	}
 	function evaluations(available: Candidate[], records: Round[]) {
 		const items = [...available];
@@ -166,7 +165,7 @@
 				});
 		return items;
 	}
-	$: selected = rounds.find((r) => r.run_id === run && r.round === number);
+	$: selected = rounds.find((r) => r.grading_id === gradingId);
 	$: runRounds = rounds.filter((r) => r.run_id === run);
 	$: available = evaluations(candidates, rounds);
 	$: visible = available.filter((c) =>
@@ -276,13 +275,14 @@
 		draftError = '';
 		scores = Object.fromEntries(
 			data.dimensions.map((e) => {
-				const saved = data.saved?.labels.find((s) => s.dimension === e.dimension);
+				const saved = data.saved?.ratings.find((s) => s.dimension === e.dimension);
 				return [
 					e.dimension,
 					saved
-						? { label: saved.label, rationale: saved.rationale }
+						? { score: saved.score, status: saved.status, rationale: saved.rationale }
 						: (data.draft?.scores[e.dimension] ?? {
-								label: e.forced_na ? 'not_applicable' : '',
+								score: null,
+								status: e.forced_na ? 'not_applicable' : 'pending',
 								rationale: e.forced_na ? '문항/응답에 적용되지 않는 평가 차원' : ''
 							})
 				];
@@ -302,6 +302,7 @@
 		gradingOrigin = null;
 		run = r.run_id;
 		number = r.round;
+		gradingId = r.grading_id;
 		current = null;
 		draftSnapshot = '{}';
 		scores = {};
@@ -313,7 +314,9 @@
 	async function loadGradingOrigin() {
 		if (session?.identity.role !== 'admin') return;
 		try {
-			gradingOrigin = await api<Candidate | null>(`/admin/reviews/${run}/rounds/${number}/origin`);
+			gradingOrigin = await api<Candidate | null>(
+				`/admin/reviews/${run}/gradings/${gradingId}/origin`
+			);
 		} catch {
 			gradingOrigin = null;
 		}
@@ -338,11 +341,15 @@
 		}
 	}
 	async function startRound() {
-		const started = await api<{ run_id: string; round: number }>('/reviews', 'POST', {
-			run_id: run
-		});
+		const started = await api<{ run_id: string; round: number; grading_id: string }>(
+			'/reviews',
+			'POST',
+			{
+				run_id: run
+			}
+		);
 		await refresh();
-		await openRound(rounds.find((r) => r.run_id === run && r.round === started.round)!);
+		await openRound(rounds.find((r) => r.grading_id === started.grading_id)!);
 	}
 	async function saveNext() {
 		if (!current) return;
@@ -357,7 +364,7 @@
 			...current,
 			saved: {
 				synced: false,
-				labels: Object.entries(scores).map(([dimension, s]) => ({ dimension, ...s }))
+				ratings: Object.entries(scores).map(([dimension, s]) => ({ dimension, ...s }))
 			}
 		};
 		await refresh();
@@ -579,11 +586,11 @@
 									aria-label="내 검수 회차"
 								>
 									{#each runRounds as r}<button
-											class="round-button {number === r.round ? 'selected' : ''}"
+											class="round-button {gradingId === r.grading_id ? 'selected' : ''}"
 											disabled={busy}
-											aria-pressed={number === r.round}
+											aria-pressed={gradingId === r.grading_id}
 											on:click={() => perform(() => openRound(r))}
-											><strong>{r.round}회차</strong><span
+											><strong>{r.round}회차 · {r.rubric_id}</strong><span
 												>{r.completed === r.total
 													? '검수 완료'
 													: `${r.completed}/${r.total}개 제출`}</span
@@ -719,19 +726,25 @@
 												on:click={() => (active = d.dimension)}
 												>{names[d.dimension]}<span class="text-[11px]"
 													>{filled(d.dimension, scores)
-														? labels[scores[d.dimension].label]
+														? scores[d.dimension].status === 'not_applicable'
+															? '해당 없음'
+															: `${scores[d.dimension].score}점`
 														: '미작성'}</span
 												></button
 											>{/each}
 									</div>
 									{#if entry}<div class="mt-5">
 											<h3 class="font-semibold">{names[active]}</h3>
-											<p class="mt-2 text-sm leading-7 text-gray-600">{descriptions[active]}</p>
-											<details class="mt-3 text-xs text-gray-500">
-												<summary class="cursor-pointer">평가 기준 원문</summary>
-												<pre
-													class="mt-3 whitespace-pre-wrap rounded-lg bg-gray-50 p-4 leading-6">{entry.rubric}</pre>
-											</details>
+											<p class="mt-2 text-sm leading-7 text-gray-600">{entry.rubric.description}</p>
+											<div class="mt-3 space-y-2 rounded-lg bg-gray-50 p-4 text-sm">
+												{#each entry.scale as value}
+													<p>
+														<strong>{value} · {entry.scale_labels[String(value)]}</strong> — {entry
+															.rubric.levels[String(value)]}
+													</p>
+												{/each}
+												<p class="text-xs text-gray-500">N/A: {entry.rubric.not_applicable}</p>
+											</div>
 											{#if active === 'groundedness'}<div class="mt-5">
 													<Evidence
 														sources={entry.outputs.generation_sources ?? []}
@@ -763,17 +776,43 @@
 												<fieldset disabled={busy || !!current.saved || entry.forced_na}>
 													<legend class="mb-3 text-sm font-medium">판정</legend>
 													<div class="flex flex-wrap gap-2">
-														{#each [['pass', '충족'], ['fail', '미충족'], ...(active === 'behavior' ? [] : [['not_applicable', '해당 없음']])] as [value, label]}<label
-																class="score-option {scores[active].label === value
+														{#each entry.scale as value}
+															<label
+																class="score-option {scores[active].status === 'scored' &&
+																scores[active].score === value
 																	? 'chosen'
 																	: ''}"
-																><input
+															>
+																<input
 																	type="radio"
 																	name={active}
-																	{value}
-																	bind:group={scores[active].label}
-																/>{label}</label
-															>{/each}
+																	checked={scores[active].status === 'scored' &&
+																		scores[active].score === value}
+																	on:change={() => {
+																		scores[active].score = value;
+																		scores[active].status = 'scored';
+																	}}
+																/>
+																{value} · {entry.scale_labels[String(value)]}
+															</label>
+														{/each}
+														{#if !['behavior', 'relevance'].includes(active)}
+															<label
+																class="score-option {scores[active].status === 'not_applicable'
+																	? 'chosen'
+																	: ''}"
+															>
+																<input
+																	type="radio"
+																	name={active}
+																	checked={scores[active].status === 'not_applicable'}
+																	on:change={() => {
+																		scores[active].score = null;
+																		scores[active].status = 'not_applicable';
+																	}}
+																/>해당 없음
+															</label>
+														{/if}
 													</div>
 												</fieldset>
 												{#if entry.forced_na}<p class="mt-3 text-xs leading-6 text-gray-500">

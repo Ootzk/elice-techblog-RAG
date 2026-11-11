@@ -11,6 +11,7 @@ from elice_knowledge.judges import (
     configure,
     instructions,
     judge_name,
+    offline_instructions,
 )
 from elice_knowledge.settings import Settings
 from mlflow.genai.judges import make_judge
@@ -31,9 +32,17 @@ def main():
             for rater in RATERS:
                 name = judge_name(kind, dimension, rater)
                 model = f"gateway:/elice-techblog-rag-judge-{rater}"
-                text = instructions(dimension)
+                text = (
+                    instructions(dimension)
+                    if kind == "online"
+                    else offline_instructions(kind, dimension)
+                )
                 value_type = (
-                    bool if kind == "iron" else Literal["yes", "no", "not_applicable"]
+                    Literal["0", "1", "2", "not_applicable"]
+                    if kind == "online"
+                    else Literal["0", "1", "not_applicable"]
+                    if kind == "iron"
+                    else Literal["0", "1", "2", "not_applicable"]
                 )
                 judge = existing.get(name)
                 if judge is None or judge.instructions != text or judge.model != model:

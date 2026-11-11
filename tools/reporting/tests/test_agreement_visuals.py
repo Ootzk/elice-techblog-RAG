@@ -7,12 +7,14 @@ import panel as pn
 from bokeh.models import ColorBar, HoverTool, ImageURL
 
 from elice_reporting import demo
-from elice_reporting.analysis_visuals import (
+from elice_reporting.agreement_visuals import (
     DIMENSIONS,
+    GRADING_MATRIX_WIDTH,
     KAPPA_MISSING,
     KAPPA_PALETTE,
+    MATRIX_TITLE_HEIGHT,
     STATES,
-    analysis_subjects,
+    agreement_subjects,
     grading_cells,
     grading_heatmap,
     kappa_cells,
@@ -21,26 +23,30 @@ from elice_reporting.analysis_visuals import (
     kappa_heatmaps,
     matrix_group_size,
     matrix_size,
+    metric_label,
     rater_legend,
     subject_key,
 )
 
 
 def test_legend_keeps_rounds_profiles_and_colored_people_distinct():
-    data = demo("analysis")
+    data = demo("agreement")
     repeated = deepcopy(data.inputs["gradings"][0])
     repeated["round"] = 2
     other = deepcopy(repeated)
     other["rater_id"] = "human:<another>"
     data.inputs["gradings"].extend([repeated, other])
-    subjects = analysis_subjects(data)
+    subjects = agreement_subjects(data)
     assert len(subjects) == 5
-    assert subjects[0]["color"] == subjects[3]["color"] != subjects[4]["color"]
-    assert subjects[0]["icon"] != subjects[3]["icon"]
+    alice = [subject for subject in subjects if subject["rater"] == "human:alice"]
+    another = next(subject for subject in subjects if subject["rater"] == "human:<another>")
+    assert alice[0]["color"] == alice[1]["color"] != another["color"]
+    assert alice[0]["icon"] != alice[1]["icon"]
     assert len({s["key"] for s in subjects}) == len(subjects)
     legend = rater_legend(subjects).object
-    assert "human:&lt;another&gt;" in legend
+    assert "검수자 2" in legend and "human:" not in legend
     assert "<table" in legend and "<th>회차</th>" in legend
+    assert "모델 유형" not in legend and "프로필" not in legend
     for subject in subjects:
         svg = base64.b64decode(subject["icon"].split(",", 1)[1]).decode()
         assert f">{subject['round']}</text>" in svg
@@ -50,8 +56,8 @@ def test_legend_keeps_rounds_profiles_and_colored_people_distinct():
 
 
 def test_kappa_matrix_uses_saved_pairs_and_never_invents_diagonal_or_zero():
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     row = next(r for r in data.report["comparisons"] if r["dimension"] == "correctness")
     cells = kappa_cells(data, subjects, "correctness")
     assert len(cells) == len(subjects) * (len(subjects) - 1) // 2
@@ -68,35 +74,35 @@ def test_kappa_matrix_uses_saved_pairs_and_never_invents_diagonal_or_zero():
     assert pd.isna(missing["value"]) and missing["reason"] == "constant labels"
 
 
-def test_item_heatmap_has_four_rows_and_preserves_all_label_states():
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+def test_item_heatmap_has_four_columns_and_preserves_all_label_states():
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     human = data.inputs["gradings"][0]
-    for row, state in zip(
-        human["labels"][:4], ("pass", "fail", "not_applicable", "error"), strict=True
+    for row, (status, score) in zip(
+        human["ratings"][:4],
+        [("scored", 2), ("scored", 0), ("not_applicable", None), ("error", None)],
+        strict=True,
     ):
-        row["label"] = state
+        row.update(status=status, score=score)
     cells = grading_cells(data, subjects, "0")
     assert len(cells) == len(subjects) * 4
-    assert tuple(cells[cells.x == 0]["dimension"]) == DIMENSIONS
-    assert set(cells.x) == set(range(len(subjects)))
-    assert set(cells.y) == {0, 1, 2, 3}
-    assert set(cells[cells.x == 0]["label"]) == {
-        "pass",
-        "fail",
+    assert tuple(cells[cells.y == len(subjects) - 1]["dimension"]) == DIMENSIONS
+    assert set(cells.x) == {0, 1, 2, 3}
+    assert set(cells.y) == set(range(len(subjects)))
+    assert set(cells[cells.y == len(subjects) - 1]["status"]) == {
+        "scored",
         "not_applicable",
         "error",
     }
-    assert all(pd.isna(v) for v in cells[cells.x == 0]["score"])
-    assert set(grading_cells(data, subjects, "missing-id")["label"]) == {"missing"}
-    assert len({color for color, _ in STATES.values()}) == 5
+    assert set(grading_cells(data, subjects, "missing-id")["status"]) == {"missing"}
+    assert len({color for color, _ in STATES.values()}) == 6
 
 
 def test_bokeh_heatmap_has_embedded_icons_and_real_hover_fields():
     pn.extension()
     hv.extension("bokeh")
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     figure = hv.render(grading_heatmap(data, subjects, "0"))
     source = figure.renderers[0].data_source.data
     assert {"label", "score", "rater", "dimension", "rationale"} <= source.keys()
@@ -120,19 +126,22 @@ def test_kappa_scale_and_cells_share_exact_diverging_colormap():
     assert tuple(bar.color_mapper.palette) == KAPPA_PALETTE
     assert (bar.color_mapper.low, bar.color_mapper.high) == (-1, 1)
     assert bar.orientation == "vertical"
-    data = demo("analysis")
+    data = demo("agreement")
     for row in data.report["comparisons"]:
         row["cohen_kappa"] = 1
-    cells = kappa_cells(data, analysis_subjects(data), "correctness")
+    cells = kappa_cells(data, agreement_subjects(data), "correctness")
     assert set(cells[cells.value == 1]["fill"]) == {KAPPA_PALETTE[-1]}
 
 
-def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
+def test_heatmaps_are_fixed_hover_only_and_item_keeps_four_columns():
     hv.extension("bokeh")
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     item = hv.render(grading_heatmap(data, subjects, "0"))
-    assert (item.width, item.height) == (matrix_size(subjects),) * 2
+    assert (item.width, item.height) == (
+        GRADING_MATRIX_WIDTH,
+        matrix_size(subjects) + MATRIX_TITLE_HEIGHT,
+    )
     assert item.tools and all(isinstance(tool, HoverTool) for tool in item.tools)
     assert item.toolbar.active_drag is None and item.toolbar.active_scroll is None
     assert {label for tool in item.tools for label, _ in tool.tooltips} == {
@@ -143,38 +152,54 @@ def test_heatmaps_are_fixed_hover_only_and_item_uses_one_matrix_size():
         "항목",
     }
     panel = kappa_heatmaps(data, subjects)
-    grid, legend_pane = panel.objects[0].objects
-    assert grid.ncols == 2 and len(grid.objects) == 4
+    selector = panel.objects[0]
+    assert isinstance(selector, pn.widgets.Select)
+    assert list(selector.options) == [
+        "전체 항목",
+        *(metric_label(dimension) for dimension in DIMENSIONS),
+    ]
+    assert [view.visible for view in panel.objects[1:-1]] == [True, False, False, False, False]
+    grid, legend_pane = panel.objects[1].objects
+    assert grid.ncols == 2
+    assert len(grid.objects) == 4
     assert legend_pane.object.opts.get().kwargs["height"] == matrix_group_size(subjects)[1]
     for column in grid.objects:
-        figure = hv.render(column.objects[1].object)
-        assert (figure.width, figure.height) == (matrix_size(subjects),) * 2
+        figure = hv.render(column.objects[0].object)
+        assert (figure.width, figure.height) == (
+            matrix_size(subjects),
+            matrix_size(subjects) + MATRIX_TITLE_HEIGHT,
+        )
+        assert figure.title.text and "correctness" not in figure.title.text
         assert all(isinstance(tool, HoverTool) for tool in figure.tools)
         assert {label for tool in figure.tools for label, _ in tool.tooltips} == {
-            "Cohen κ",
+            "선형 가중 Cohen κ",
             "유효",
             "제외",
             "사유",
         }
+    from bokeh.models import Select
+
+    root = panel.get_root()
+    bokeh_selector = next(
+        model for model in root.select({"type": Select}) if model.title == "Cohen κ 평가 항목"
+    )
+    callback = bokeh_selector.js_property_callbacks["change:value"][0]
+    assert "view.visible=index===Number(cb_obj.value)" in callback.code
 
 
-def test_missing_score_is_explicit_and_human_ratings_need_no_numeric_score():
-    data = demo("analysis")
+def test_ordinal_scores_are_shared_by_humans_and_models_independent_of_diagnostics():
+    data = demo("agreement")
     model = data.inputs["gradings"][1]
     model["measurements"] = []
-    subjects = analysis_subjects(data)
-    cells = grading_cells(data, subjects, "0")
-    values = cells[cells.rater == model["rater_id"]]
-    assert values["score"].isna().all()
-    assert set(values["score_display"]) == {"유효 점수 미기록"}
-    human = cells[cells.rater.str.startswith("human:")]
-    assert set(human["score_display"]) == {"수치 점수 없음 · 사람 판정"}
+    cells = grading_cells(data, agreement_subjects(data), "0")
+    assert all(v in {0, 1, 2} for v in cells["score"])
+    assert all("수치 점수 없음" not in v for v in cells["score_display"])
 
 
 def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
-    from elice_reporting.analysis_visuals import agreement_browser
+    from elice_reporting.agreement_visuals import agreement_browser
 
-    data = demo("analysis")
+    data = demo("agreement")
     original = data.inputs["gradings"][1]
     repeated = deepcopy(original)
     repeated["round"] = 2
@@ -208,13 +233,13 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
                 cohen_kappa=0.25,
                 kappa_undefined_reason=None,
                 agreement=0.75,
-                binary_pairs=4,
+                valid_pairs=4,
                 excluded_pairs=0,
             )
         )
-    subjects = analysis_subjects(data)
+    subjects = agreement_subjects(data)
     rounds = [s for s in subjects if s["rater"] == original["rater_id"]]
-    assert len(rounds) == 2 and rounds[0]["type_code"] == rounds[1]["type_code"]
+    assert len(rounds) == 2 and rounds[0]["short_name"] == rounds[1]["short_name"]
     assert rounds[0]["icon"] != rounds[1]["icon"]
     legend = rater_legend(subjects).object
     assert "https://mlflow.test/grade-one" in legend
@@ -229,12 +254,12 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
     for pair in data.report["comparisons"]:
         if pair["right"]["rater"] == original["rater_id"] and pair["right"]["round"] == "2":
             pair["right"]["profile_digest"] = "changed-protocol"
-    revised = agreement_browser(data, analysis_subjects(data))
-    assert not revised.select(pn.widgets.Select)
+    revised = agreement_browser(data, agreement_subjects(data))
+    assert [widget.label for widget in revised.select(pn.widgets.Select)] == ["Cohen κ 평가 항목"]
 
 
-def test_luna_and_terra_share_provider_but_keep_model_type_and_round_distinct():
-    data = demo("analysis")
+def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_codes():
+    data = demo("agreement")
     original = deepcopy(data.inputs["gradings"][1])
     data.inputs["gradings"] = []
     data.inputs["profiles"] = {}
@@ -244,12 +269,69 @@ def test_luna_and_terra_share_provider_but_keep_model_type_and_round_distinct():
         grading.update(rater_id="model:chatgpt", round=round_, rater_profile_digest=model)
         data.inputs["gradings"].append(grading)
         data.inputs["profiles"][model] = {"scorers": [{"model": model}]}
-    luna, terra, luna_repeat = analysis_subjects(data)
-    assert luna["type_code"] != terra["type_code"]
-    assert luna["type_code"] == luna_repeat["type_code"]
+    luna, luna_repeat, terra = agreement_subjects(data)
+    assert luna["short_name"] == "Luna" and terra["short_name"] == "Terra"
+    assert not luna["setting"] and not terra["setting"]
+    assert luna["short_name"] == luna_repeat["short_name"]
     assert len({s["icon"] for s in [luna, terra, luna_repeat]}) == 3
     assert "ChatGPT 6 Luna" in luna["label"] and "ChatGPT 6 Terra" in terra["label"]
     for subject in [luna, terra, luna_repeat]:
         svg = base64.b64decode(subject["icon"].split(",", 1)[1]).decode()
-        assert f">{subject['type_code']}</text>" in svg
+        assert "type_code" not in subject
+        assert subject["profile"] not in subject["label"]
         assert f">{subject['round']}</text>" in svg
+
+
+def test_large_repeated_panel_has_stable_model_round_order_and_readable_size():
+    hv.extension("bokeh")
+    data = demo("agreement")
+    human, chatgpt, claude = data.inputs["gradings"]
+    gemini = deepcopy(claude)
+    gemini.update(rater_id="model:gemini", rater_profile_digest="gemini-profile")
+    data.inputs.setdefault("profiles", {})["gemini-profile"] = {
+        "scorers": [{"model": "gemini-3.5-flash-lite"}]
+    }
+    model_rounds = []
+    for template in (chatgpt, claude, gemini):
+        for round_ in (3, 1, 2):
+            grading = deepcopy(template)
+            grading["round"] = round_
+            model_rounds.append(grading)
+    data.report["comparisons"] = []
+    data.inputs["gradings"] = list(reversed(model_rounds)) + [human]
+    subjects = agreement_subjects(data)
+    assert [(s["rater"], int(s["round"])) for s in subjects] == [
+        ("human:alice", 1),
+        *(
+            (rater, round_)
+            for rater in ("model:chatgpt", "model:claude", "model:gemini")
+            for round_ in (1, 2, 3)
+        ),
+    ]
+    assert matrix_size(subjects) == 620
+    assert matrix_size(subjects) > matrix_size(subjects[:3])
+    item = hv.render(grading_heatmap(data, subjects, "0"))
+    assert (item.width, item.height) == (GRADING_MATRIX_WIDTH, 620 + MATRIX_TITLE_HEIGHT)
+    assert kappa_heatmaps(data, subjects).styles["overflow-x"] == "auto"
+    data.inputs["gradings"].reverse()
+    assert [s["key"] for s in agreement_subjects(data)] == [s["key"] for s in subjects]
+
+
+def test_saved_response_model_takes_priority_and_missing_is_not_guessed():
+    data = deepcopy(demo("agreement"))
+    subject = next(s for s in agreement_subjects(data) if s["rater"].startswith("model:"))
+    link = {
+        "rater": subject["rater"],
+        "round": subject["round"],
+        "profile_digest": subject["profile"],
+        "model_observations": [{"models": ["old-model"]}],
+        "model_identity": {"identified_models": ["gpt-6-luna"]},
+    }
+    data.links["gradings"] = [link]
+    selected = next(s for s in agreement_subjects(data) if s["key"] == subject["key"])
+    assert selected["actual_models"] == ["gpt-6-luna"]
+    assert selected["model_source"] == "채점 응답에 기록됨"
+    link["model_identity"]["identified_models"] = []
+    selected = next(s for s in agreement_subjects(data) if s["key"] == subject["key"])
+    assert selected["actual_models"] == []
+    assert "모델명 미확인" in selected["display_name"]

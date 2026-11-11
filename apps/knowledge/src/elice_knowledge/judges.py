@@ -2,32 +2,43 @@
 
 import math
 import os
+import time
 from numbers import Real
-from pathlib import Path
+
+from elice_knowledge.rubrics import DIMENSIONS, load_rubric
 
 RATERS = ("chatgpt", "claude", "gemini")
-DIMENSIONS = {
-    "gold": ("correctness", "completeness", "groundedness", "relevance"),
-    "iron": ("behavior",),
-    "online": ("groundedness", "relevance"),
-}
+
 KINDS = tuple(DIMENSIONS)
-QUALITY_CONTRACT = "dimension-v1"
+QUALITY_CONTRACT = "rubric-v1"
 ONLINE_FILTER = (
     "metadata.environment = 'dev' AND metadata.evaluation_mode = 'online' "
-    "AND metadata.quality_contract = 'dimension-v1' AND trace.status = 'OK'"
+    "AND metadata.quality_contract = 'rubric-v1' AND trace.status = 'OK'"
 )
 
 
 def instructions(dimension):
-    filename = "iron" if dimension == "behavior" else dimension
-    if dimension not in {d for values in DIMENSIONS.values() for d in values}:
+    kind = "iron" if dimension == "behavior" else "gold"
+    if dimension not in DIMENSIONS[kind]:
         raise ValueError("Unknown judge dimension")
-    return (Path(__file__).parent / "data" / "judges" / f"{filename}.txt").read_text()
+    return offline_instructions(kind, dimension)
 
 
-def judge_name(kind, dimension, rater):
-    return f"qa-iron-{rater}" if kind == "iron" else f"qa-{kind}-{dimension}-{rater}"
+def offline_instructions(kind, dimension, rubric=None):
+    from elice_knowledge.rubrics import criterion
+
+    rubric = rubric or load_rubric(kind)
+    text = criterion(rubric, dimension) + "\n질문: {{ inputs }}\n답변과 허용 문맥: {{ outputs }}"
+    if dimension in {"correctness", "completeness", "behavior"}:
+        text += "\n문항별 기대 기준: {{ expectations }}"
+    return text
+
+
+def judge_name(kind, dimension, rater, rubric_id=None):
+    if kind == "online":
+        return f"qa-online-{dimension}-{rater}"
+    identity = rubric_id or load_rubric(kind)["id"]
+    return f"qa-{identity}-{dimension}-{rater}"
 
 
 def configure(settings):
@@ -37,10 +48,11 @@ def configure(settings):
     return mlflow.set_experiment(settings.qa_mlflow_experiment_name).experiment_id
 
 
-def frozen_judges(settings, kind):
+def frozen_judges(settings, kind, *, rubric=None):
     from mlflow.genai.scorers import get_scorer
 
     experiment_id = configure(settings)
+    rubric = rubric or load_rubric(kind)
     return [
         dict(
             name=judge.name,
@@ -53,7 +65,9 @@ def frozen_judges(settings, kind):
         for dimension in DIMENSIONS[kind]
         for rater in RATERS
         for judge in [
-            get_scorer(name=judge_name(kind, dimension, rater), experiment_id=experiment_id)
+            get_scorer(
+                name=judge_name(kind, dimension, rater, rubric["id"]), experiment_id=experiment_id
+            )
         ]
     ]
 
@@ -118,17 +132,18 @@ def evaluation_workers():
     return limits
 
 
-def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=True):
+def evaluate_answers(
+    settings, run_id, records, cases, specs, *, rubric=None, diagnostics=False, raise_on_error=True
+):
     import mlflow
 
-    from elice_knowledge.ragas_metrics import (
-        CONTEXT_METRICS,
-        PASS_THRESHOLD,
-        measurement_metrics,
-        payload,
-        scorer,
-    )
+    from elice_knowledge.judge_efficiency import Collector, model_identity
+    from elice_knowledge.judge_efficiency import metrics as efficiency_metrics
+    from elice_knowledge.ragas_metrics import DIAGNOSTICS, measurement_metrics, payload, scorer
 
+    rubric = rubric or load_rubric(
+        "iron" if set(s["dimension"] for s in specs) == {"behavior"} else "gold"
+    )
     limits = evaluation_workers()
     configure(settings)
     expected = {record["id"]: record for record in records}
@@ -136,13 +151,15 @@ def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=
     dimensions = list(specs)
     if len({s["rater"] for s in specs}) != 1:
         raise ValueError("one_rater_per_grading")
-    if {s["dimension"] for s in specs} == set(DIMENSIONS["gold"]):
-        dimensions += [{**specs[0], "name": d, "dimension": d} for d in CONTEXT_METRICS]
-    # Validate every dimension before submitting any paid work.
+    if diagnostics:
+        if rubric["kind"] != "gold":
+            raise ValueError("diagnostics_require_gold")
+        dimensions += [{**specs[0], "name": d, "dimension": d} for d in DIAGNOSTICS]
     for spec in dimensions:
         for key, case in valid.items():
             payload(expected[key], case, spec["dimension"])
-    scorers = [scorer(settings, spec) for spec in dimensions]
+    collector = Collector(records, valid)
+    scorers = [scorer(settings, spec, rubric=rubric, collector=collector) for spec in dimensions]
     data = [
         dict(
             inputs=expected[key]["inputs"],
@@ -152,10 +169,20 @@ def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=
         )
         for key, case in valid.items()
     ]
-    # One SDK call binds every worker to the same grading run. The SDK fans out
-    # records and scorers, captures per-cell failures, then joins their results.
-    with mlflow.start_run(run_id=run_id):
-        result = mlflow.genai.evaluate(data=data, scorers=scorers)
+    started = time.monotonic()
+    try:
+        with mlflow.start_run(run_id=run_id):
+            result = mlflow.genai.evaluate(data=data, scorers=scorers)
+    except Exception:
+        failure_efficiency = collector.artifact(
+            run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000
+        )
+        mlflow.MlflowClient().log_dict(run_id, failure_efficiency, "judge-efficiency.json")
+        mlflow.MlflowClient().log_dict(
+            run_id, model_identity(failure_efficiency, specs[0]["model"]), "judge-model.json"
+        )
+        raise
+    efficiency = collector.artifact(run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000)
     evaluated = result.tables["eval_results"].to_dict(orient="records")
     if {row["tags"]["record_id"] for row in evaluated} != set(valid) or len(evaluated) != len(
         valid
@@ -163,52 +190,55 @@ def evaluate_answers(settings, run_id, records, cases, specs, *, raise_on_error=
         raise RuntimeError("judge_assessment_record_mismatch")
     by_id = {row["tags"]["record_id"]: row for row in evaluated}
     rows = []
-    # Preserve dataset order regardless of completion order in the SDK pools.
     for key in valid:
-        row = by_id[key]
-        judgments = {}
-        measurements = []
+        row, judgments, measurements = by_id[key], {}, []
         for spec in dimensions:
             raw = row.get(spec["name"] + "/value")
-            numeric = isinstance(raw, Real) and math.isfinite(raw) and 0 <= raw <= 1
+            diagnostic = spec["dimension"] in DIAGNOSTICS
+            numeric = (
+                isinstance(raw, Real)
+                and not isinstance(raw, bool)
+                and math.isfinite(raw)
+                and (0 <= raw <= 1 if diagnostic else raw in rubric["scale"] and int(raw) == raw)
+            )
             status = (
-                "pass"
-                if numeric and raw >= PASS_THRESHOLD
-                else "fail"
-                if numeric
-                else "not_applicable"
-                if raw == "not_applicable"
-                else "error"
+                "scored" if numeric else "not_applicable" if raw == "not_applicable" else "error"
             )
-            value = True if status == "pass" else False if status == "fail" else None
-            measurements.append(
-                dict(
-                    metric=spec["dimension"],
-                    score=float(raw) if numeric else None,
-                    status="scored" if numeric else status,
-                    rationale=row.get(spec["name"] + "/rationale") or "",
+            score = (float(raw) if diagnostic else int(raw)) if numeric else None
+            reason = row.get(spec["name"] + "/rationale")
+            if not isinstance(reason, str):
+                reason = ""
+            if diagnostic:
+                measurements.append(
+                    dict(metric=spec["dimension"], score=score, status=status, rationale=reason)
                 )
-            )
-            if spec["dimension"] in CONTEXT_METRICS:
-                continue
-            judgments[spec["name"]] = dict(
-                value=value,
-                status=status,
-                rationale=row.get(spec["name"] + "/rationale"),
-                version=spec["version"],
-                dimension=spec["dimension"],
-                rater=spec["rater"],
-                trace_id=row.get("trace_id"),
-            )
+            else:
+                judgments[spec["name"]] = dict(
+                    score=score,
+                    status=status,
+                    rationale=reason,
+                    version=spec["version"],
+                    dimension=spec["dimension"],
+                    rater=spec["rater"],
+                    trace_id=row.get("trace_id"),
+                )
         rows.append(dict(record_id=key, judges=judgments, measurements=measurements))
     metrics = measurement_metrics([m for row in rows for m in row["measurements"]])
-    tracking = mlflow.MlflowClient()
-    tracking.log_dict(
-        run_id, {"cases": rows, "specs": specs, "execution": limits}, "judge-results.json"
+    mlflow.MlflowClient().log_dict(
+        run_id,
+        {"cases": rows, "specs": specs, "rubric": rubric, "execution": limits},
+        "judge-results.json",
     )
-    # Shared grading publication owns canonical quality.* metrics. SDK-native metrics are separate.
+    mlflow.MlflowClient().log_dict(run_id, efficiency, "judge-efficiency.json")
+    mlflow.MlflowClient().log_dict(
+        run_id, model_identity(efficiency, specs[0]["model"]), "judge-model.json"
+    )
+    for name, value in efficiency_metrics(efficiency).items():
+        mlflow.MlflowClient().log_metric(run_id, name, value)
     if raise_on_error and any(
-        cell["status"] == "error" for row in rows for cell in row["measurements"]
+        cell["status"] == "error"
+        for row in rows
+        for cell in [*row["judges"].values(), *row["measurements"]]
     ):
         raise RuntimeError("judge_assessment_failed: see judge-results.json")
     return metrics, rows

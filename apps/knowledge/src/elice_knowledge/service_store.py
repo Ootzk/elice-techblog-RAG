@@ -89,6 +89,7 @@ def initialize_service(conn):
 
 PROFILE_FIELDS = [
     "generation_model",
+    "generation_timeout_seconds",
     "generation_temperature",
     "generation_max_output_tokens",
     "generation_token_limit_field",
@@ -100,6 +101,8 @@ PROFILE_FIELDS = [
 
 
 def code_identity():
+    from elice_knowledge.experiment_conditions import PACKAGES
+
     base = Path(__file__).parent
     return digest(
         {
@@ -115,22 +118,11 @@ def code_identity():
                     "retrieval.py",
                     "embedding.py",
                     "execution.py",
+                    "experiment_conditions.py",
                     "tracing.py",
                 ]
             },
-            "dependencies": {
-                name: version(name)
-                for name in [
-                    "llama-index-core",
-                    "llama-index-vector-stores-postgres",
-                    "langgraph",
-                    "bm25s",
-                    "kiwipiepy",
-                    "kiwipiepy_model",
-                    "httpx",
-                    "tiktoken",
-                ]
-            },
+            "dependencies": {name: version(name) for name in PACKAGES},
         }
     )
 
@@ -243,8 +235,12 @@ class ServiceStore:
                 ).fetchone()
             if not row:
                 raise ServiceError("no_active_qa_index", 503)
+            from elice_knowledge.experiment_conditions import freeze_conditions
+
+            conditions = freeze_conditions(conn, row["key"], s)
             config = {name: getattr(s, name) for name in PROFILE_FIELDS}
             config.update(
+                experiment_conditions=conditions,
                 index_key=row["key"],
                 top_k=top_k,
                 prompts={name: prompt.model_dump() for name, prompt in prompts.items()},

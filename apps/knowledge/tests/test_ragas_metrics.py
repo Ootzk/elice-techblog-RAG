@@ -54,7 +54,7 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
             elif name == "ContextPrecisionOutput":
                 data = {"reason": "fake", "verdict": int("good_doc" in prompt)}
             else:
-                data = {"reason": "fake", "value": "yes"}
+                data = {"reason": "fake", "value": "2"}
             return response_model(**data)
 
     monkeypatch.setattr("openai.AsyncOpenAI", FakeClient)
@@ -62,7 +62,7 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
     settings = Settings(mlflow_tracking_uri="http://mlflow.test:5000")
 
     async def check():
-        for dimension in ("correctness", "completeness"):
+        for dimension in ("factual_precision",):
             score, reason, _ = await metric_score(
                 settings,
                 "gateway:/configured-judge",
@@ -74,7 +74,7 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
         score, _, _ = await metric_score(
             settings,
             "gateway:/configured-judge",
-            "groundedness",
+            "faithfulness",
             dict(user_input="q", response="answer", retrieved_contexts=["source"]),
             "",
         )
@@ -87,6 +87,10 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
         )
         assert score == 0.5
         score, _, _ = await metric_score(
+            settings, "gateway:/configured-judge", "required_point_coverage", data, ""
+        )
+        assert score == 0.5
+        score, _, _ = await metric_score(
             settings, "gateway:/configured-judge", "retrieved_context_precision", data, ""
         )
         assert score == pytest.approx(1.0)  # Average Precision, not a 1/2 document fraction.
@@ -96,9 +100,14 @@ def test_real_ragas_metrics_and_gateway_adapter(monkeypatch):
         )
         assert score == pytest.approx(0.5)
         score, _, _ = await metric_score(
-            settings, "gateway:/configured-judge", "relevance", dict(payload="data"), "rubric"
+            settings,
+            "gateway:/configured-judge",
+            "relevance",
+            dict(payload="data"),
+            "rubric",
+            allowed_values=["0", "1", "2", "not_applicable"],
         )
-        assert score == 1
+        assert score == "2"
 
     asyncio.run(check())
     assert all(c["base_url"] == "http://mlflow.test:5000/gateway/mlflow/v1" for c in configuration)
@@ -124,24 +133,33 @@ def test_scope_deduplication_na_and_measurement_coverage():
     assert payload(record, case, "generation_context_recall") is None
     summary = measurement_metrics(
         [
-            dict(metric="correctness", score=0.5, status="scored"),
-            dict(metric="correctness", score=None, status="error"),
-            dict(metric="correctness", score=None, status="not_applicable"),
+            dict(metric="factual_precision", score=0.5, status="scored"),
+            dict(metric="factual_precision", score=None, status="error"),
+            dict(metric="factual_precision", score=None, status="not_applicable"),
         ]
     )
-    assert summary["ragas.correctness.mean"] == 0.5
+    assert summary["ragas.factual_precision.mean"] == 0.5
     assert (
-        summary["ragas.correctness.scored_cases"] == summary["ragas.correctness.error_cases"] == 1
+        summary["ragas.factual_precision.scored_cases"]
+        == summary["ragas.factual_precision.error_cases"]
+        == 1
     )
     assert contract()["engine"] == "ragas"
     assert len(contract()["implementation_digest"]) == 64
 
 
 @pytest.mark.parametrize(
-    "streaming,finish_reason", [(False, "stop"), (True, "stop"), (True, "length")]
+    "streaming,finish_reason,wire_value",
+    [
+        (False, "stop", "2"),
+        (False, "stop", 2),
+        (True, "stop", "2"),
+        (True, "stop", 2),
+        (True, "length", "2"),
+    ],
 )
 def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
-    monkeypatch, streaming, finish_reason
+    monkeypatch, streaming, finish_reason, wire_value
 ):
     import json
 
@@ -153,7 +171,7 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
     def transport(request):
         requests.append(request)
         if streaming:
-            content = json.dumps({"value": "yes", "reason": "검증"})
+            content = json.dumps({"value": wire_value, "reason": "검증"})
             chunks = [
                 {"content": content[:15], "role": "assistant"},
                 {"content": content[15:]},
@@ -190,7 +208,7 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
                         "finish_reason": "stop",
                         "message": {
                             "role": "assistant",
-                            "content": json.dumps({"value": "yes", "reason": "검증"}),
+                            "content": json.dumps({"value": wire_value, "reason": "검증"}),
                         },
                     }
                 ],
@@ -215,6 +233,7 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
                 {"payload": "candidate"},
                 "Check relevance",
                 request_options=request_options,
+                allowed_values=["0", "1", "2", "not_applicable"],
             )
         )
 
@@ -225,7 +244,7 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
             run()
     else:
         score, reason, _ = run()
-        assert score == 1 and reason == "검증"
+        assert score == wire_value and reason == "검증"
     assert len(requests) == 1
     assert str(requests[0].url) == "http://mlflow.test:5000/gateway/mlflow/v1/chat/completions"
     body = json.loads(requests[0].content)

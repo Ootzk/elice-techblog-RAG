@@ -1,4 +1,4 @@
-"""A paired comparison of frozen A/B analysis inputs; never invokes models."""
+"""A paired comparison of frozen A/B agreement inputs; never invokes models."""
 
 import math
 import re
@@ -6,20 +6,25 @@ from importlib.metadata import version
 from itertools import combinations
 from numbers import Real
 
-from elice_knowledge.agreement import analyze, pairwise
+from elice_knowledge.agreement import build_agreement, pairwise
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import SCHEMA, validate_bundle
-from elice_knowledge.evaluation_schema import validate_grading
+from elice_knowledge.evaluation_bundle import validate_bundle
+from elice_knowledge.evaluation_schema import SCHEMA, validate_grading
 from elice_knowledge.judges import DIMENSIONS
-from elice_knowledge.reliability import BINARY, multirater
+from elice_knowledge.reliability import multirater
 from elice_knowledge.reliability import purpose as comparison_purpose
+
+SCORES = {0, 1, 2}
 
 
 def validate_snapshot(snapshot):
-    bundle, analysis, gradings = snapshot["bundle"], snapshot["analysis"], snapshot["gradings"]
+    bundle, agreement, gradings = snapshot["bundle"], snapshot["agreement"], snapshot["gradings"]
     validate_bundle(bundle)
-    if analysis.get("schema") != SCHEMA or analysis.get("source_run_id") != bundle["source_run_id"]:
-        raise ValueError("comparison_analysis_source_mismatch")
+    if (
+        agreement.get("schema") != SCHEMA
+        or agreement.get("source_run_id") != bundle["source_run_id"]
+    ):
+        raise ValueError("comparison_agreement_source_mismatch")
     if not gradings:
         raise ValueError("comparison_requires_gradings")
     for key, value in snapshot.get("profiles", {}).items():
@@ -33,9 +38,13 @@ def validate_snapshot(snapshot):
         if grading["rater_id"] in subjects:
             raise ValueError("comparison_requires_one_grading_per_subject")
         subjects[grading["rater_id"]] = grading
-    recomputed = analyze(bundle, [label for g in gradings for label in g["labels"]])
-    if any(analysis.get(key) != value for key, value in recomputed.items()):
-        raise ValueError("comparison_analysis_inputs_or_protocol_mismatch")
+    if len({g["rubric_digest"] for g in gradings}) != 1:
+        raise ValueError("agreement_requires_same_rubric")
+    recomputed = build_agreement(
+        bundle, [r for g in gradings for r in g["ratings"]], gradings[0]["rubric"]
+    )
+    if any(agreement.get(key) != value for key, value in recomputed.items()):
+        raise ValueError("comparison_agreement_inputs_or_protocol_mismatch")
     return subjects
 
 
@@ -154,7 +163,11 @@ def scalar(
 
 
 def labels(grading, dimension):
-    return {r["record_id"]: r["label"] for r in grading["labels"] if r["dimension"] == dimension}
+    return {
+        r["record_id"]: r["score"] if r["status"] == "scored" else r["status"]
+        for r in grading["ratings"]
+        if r["dimension"] == dimension
+    }
 
 
 def quality_values(bundle, grading, dimension, *, raw):
@@ -166,9 +179,7 @@ def quality_values(bundle, grading, dimension, *, raw):
             if r["metric"] == dimension
         }
     else:
-        values = {
-            key: BINARY.get(label, label) for key, label in labels(grading, dimension).items()
-        }
+        values = {key: label for key, label in labels(grading, dimension).items()}
     return {
         key: "generation_error" if case["error"] else values.get(key, "missing")
         for key, case in source_cases.items()
@@ -201,6 +212,7 @@ def resource_values(bundle, name):
 def matched_reliability(left, right, ids, kind):
     """Recompute coefficients with the same observed rater/question support on both sides."""
     pairs, panels, support = [], [], []
+    scale = (0, 1, 2) if kind == "gold" else (0, 1)
     raters = sorted(left)
     for dimension in DIMENSIONS[kind]:
         la = {r: labels(left[r], dimension) for r in raters}
@@ -212,7 +224,7 @@ def matched_reliability(left, right, ids, kind):
                 record_id=k,
                 baseline=la[r].get(k, "missing"),
                 candidate=lb[r].get(k, "missing"),
-                included=la[r].get(k) in BINARY and lb[r].get(k) in BINARY,
+                included=la[r].get(k) in SCORES and lb[r].get(k) in SCORES,
             )
             for r in raters
             for k in ids
@@ -222,13 +234,21 @@ def matched_reliability(left, right, ids, kind):
                 k
                 for k in ids
                 if all(
-                    values.get(k) in BINARY
+                    values.get(k) in SCORES
                     for values in (la[first], la[second], lb[first], lb[second])
                 )
             ]
-            a = pairwise({k: la[first][k] for k in eligible}, {k: la[second][k] for k in eligible})
-            b = pairwise({k: lb[first][k] for k in eligible}, {k: lb[second][k] for k in eligible})
-            # Applicability agreement on an all-binary mask would be tautologically 1.
+            a = pairwise(
+                {k: la[first][k] for k in eligible},
+                {k: la[second][k] for k in eligible},
+                scale=scale,
+            )
+            b = pairwise(
+                {k: lb[first][k] for k in eligible},
+                {k: lb[second][k] for k in eligible},
+                scale=scale,
+            )
+            # Applicability agreement on an all-scored mask would be tautologically 1.
             for stats in (a, b):
                 stats.pop("applicability_pairs")
                 stats.pop("applicability_agreement")
@@ -260,7 +280,7 @@ def matched_reliability(left, right, ids, kind):
                         ),
                         {
                             k: ratings[r][k]
-                            if ratings[r].get(k) in BINARY and other[r].get(k) in BINARY
+                            if ratings[r].get(k) in SCORES and other[r].get(k) in SCORES
                             else None
                             for k in ids
                         },
@@ -268,8 +288,8 @@ def matched_reliability(left, right, ids, kind):
                     for r in raters
                 ]
             )
-        a = {p["scope"]: p for p in multirater(selected[0], ids)}
-        b = {p["scope"]: p for p in multirater(selected[1], ids)}
+        a = {p["scope"]: p for p in multirater(selected[0], ids, scale)}
+        b = {p["scope"]: p for p in multirater(selected[1], ids, scale)}
         for scope in a:
             panels.append(
                 dict(
@@ -290,7 +310,7 @@ def matched_reliability(left, right, ids, kind):
         pairs=pairs,
         panels=panels,
         support=support,
-        policy="intersection_of_binary_rater_question_observations",
+        policy="intersection_of_scored_rater_question_observations",
     )
 
 
@@ -303,12 +323,14 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
         or not 0 < confidence < 1
     ):
         raise ValueError("invalid_comparison_bootstrap_configuration")
-    if baseline["analysis_run_id"] == candidate["analysis_run_id"]:
-        raise ValueError("comparison_requires_distinct_analysis_runs")
+    if baseline["agreement_run_id"] == candidate["agreement_run_id"]:
+        raise ValueError("comparison_requires_distinct_agreement_runs")
     left, right = validate_snapshot(baseline), validate_snapshot(candidate)
     a, b = baseline["bundle"], candidate["bundle"]
-    if any(a[k] != b[k] for k in ("dataset_digest", "kind", "rubrics")):
+    if any(a[k] != b[k] for k in ("dataset_digest", "kind")):
         raise ValueError("comparison_dataset_or_rubric_mismatch")
+    if baseline["agreement"]["rubric_digest"] != candidate["agreement"]["rubric_digest"]:
+        raise ValueError("comparison_rubric_mismatch")
     if set(left) != set(right):
         raise ValueError("comparison_rater_panel_mismatch")
     for rater in left:
@@ -319,8 +341,14 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
         if (
             purpose == "judge"
             and rater.startswith("human:")
-            and {(v["record_id"], v["dimension"]): v["label"] for v in left[rater]["labels"]}
-            != {(v["record_id"], v["dimension"]): v["label"] for v in right[rater]["labels"]}
+            and {
+                (v["record_id"], v["dimension"]): (v["status"], v["score"])
+                for v in left[rater]["ratings"]
+            }
+            != {
+                (v["record_id"], v["dimension"]): (v["status"], v["score"])
+                for v in right[rater]["ratings"]
+            }
         ):
             raise ValueError("comparison_human_reference_changed")
     if purpose == "system" and a["source_run_id"] == b["source_run_id"]:
@@ -341,7 +369,7 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
                 dict(
                     rater=rater,
                     **scalar(
-                        "quality." + dimension + ".pass_rate",
+                        "rubric." + dimension + ".mean",
                         quality_values(a, left[rater], dimension, raw=False),
                         quality_values(b, right[rater], dimension, raw=False),
                         ids,
@@ -392,8 +420,8 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
         comparison_contract="comparison-v1",
         purpose=purpose,
         hypothesis=hypothesis,
-        baseline={k: baseline[k] for k in ("analysis_run_id",)},
-        candidate={k: candidate[k] for k in ("analysis_run_id",)},
+        baseline={k: baseline[k] for k in ("agreement_run_id",)},
+        candidate={k: candidate[k] for k in ("agreement_run_id",)},
         protocol=dict(
             seed=seed,
             resamples=resamples,

@@ -13,9 +13,10 @@ DOCUMENT = Template("""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title | e }}</title>{{ bokeh_css }}{{ bokeh_js }}
-<style>body { margin: 24px; background: #fafbfc; color: #182533;
+<style>body { margin: 0; padding:36px 24px 64px; background: #f4f7fb; color: #182533;
 font-family: system-ui, sans-serif; } pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-@media print { body { margin: 0; background: white; } }</style>
+@media (max-width:700px) { body { padding:16px 10px; } }
+@media print { body { margin: 0; padding:0; background: white; } }</style>
 </head><body>{{ plot_div }}{{ plot_script }}</body></html>""")
 
 

@@ -1,4 +1,4 @@
-"""Compare two frozen analysis runs locally; --log publishes a separate comparison run."""
+"""Compare two frozen agreement runs locally; --log publishes a separate comparison run."""
 
 import argparse
 import json
@@ -7,8 +7,8 @@ from tempfile import TemporaryDirectory
 
 from elice_knowledge.comparison import compare, comparison_metrics
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import SCHEMA
-from elice_knowledge.evaluation_schema import tags
+from elice_knowledge.evaluation_bundle import SCHEMA as ANSWERS_SCHEMA
+from elice_knowledge.evaluation_schema import SCHEMA, tags
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracking import client
 
@@ -24,26 +24,26 @@ def snapshot(tracking, run_id, directory):
     if (
         run.info.status != "FINISHED"
         or run.data.tags.get("evaluation.schema") != SCHEMA
-        or run.data.tags.get("evaluation.kind") != "analysis"
+        or run.data.tags.get("evaluation.kind") != "agreement"
     ):
-        raise ValueError("comparison_requires_finished_analysis_runs")
-    analysis = artifact(tracking, run_id, "agreement.json", directory)
-    source = analysis["source_run_id"]
+        raise ValueError("comparison_requires_finished_agreement_runs")
+    agreement = artifact(tracking, run_id, "agreement.json", directory)
+    source = agreement["source_run_id"]
     original = tracking.get_run(source)
     if (
         original.data.tags.get("evaluation.kind") != "answers"
-        or original.data.tags.get("evaluation.schema") != SCHEMA
+        or original.data.tags.get("evaluation.schema") != ANSWERS_SCHEMA
         or original.info.status not in {"FINISHED", "FAILED"}
         or run.data.tags.get("source_run_id") != source
     ):
-        raise ValueError("comparison_analysis_lineage_mismatch")
+        raise ValueError("comparison_agreement_lineage_mismatch")
     bundle = artifact(tracking, source, "evaluation-bundle.json", directory)
     if run.data.tags.get("source_bundle_digest") != bundle["digest"]:
-        raise ValueError("comparison_analysis_digest_mismatch")
+        raise ValueError("comparison_agreement_digest_mismatch")
     gradings = artifact(tracking, run_id, "grading-inputs.json", directory)["results"]
     profiles = {}
     expected_profiles = {g["rater_profile_digest"] for g in gradings}
-    for grading_id in analysis.get("grading_run_ids", []):
+    for grading_id in agreement.get("grading_run_ids", []):
         grade = tracking.get_run(grading_id)
         if (
             grade.data.tags.get("evaluation.kind") != "grading"
@@ -60,9 +60,9 @@ def snapshot(tracking, run_id, directory):
             raise ValueError("comparison_grading_profile_mismatch")
         profiles[key] = profile
     return {
-        "analysis_run_id": run_id,
+        "agreement_run_id": run_id,
         "experiment_id": run.info.experiment_id,
-        "analysis": analysis,
+        "agreement": agreement,
         "bundle": bundle,
         "gradings": gradings,
         "profiles": profiles,
@@ -71,8 +71,8 @@ def snapshot(tracking, run_id, directory):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline-analysis-run-id", required=True)
-    parser.add_argument("--candidate-analysis-run-id", required=True)
+    parser.add_argument("--baseline-agreement-run-id", required=True)
+    parser.add_argument("--candidate-agreement-run-id", required=True)
     parser.add_argument("--purpose", choices=("system", "judge"), required=True)
     parser.add_argument("--hypothesis", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -96,8 +96,8 @@ def main():
             "Use a new output directory; existing comparison files are preserved"
         )
     tracking = client(Settings())
-    baseline = snapshot(tracking, args.baseline_analysis_run_id, args.output_dir)
-    candidate = snapshot(tracking, args.candidate_analysis_run_id, args.output_dir)
+    baseline = snapshot(tracking, args.baseline_agreement_run_id, args.output_dir)
+    candidate = snapshot(tracking, args.candidate_agreement_run_id, args.output_dir)
     report = compare(
         baseline,
         candidate,
@@ -123,11 +123,11 @@ def main():
             tags=tags(
                 "comparison",
                 **{
-                    "mlflow.runName": f"compare-{args.purpose}-{args.baseline_analysis_run_id[:8]}-vs-{args.candidate_analysis_run_id[:8]}",
+                    "mlflow.runName": f"compare-{args.purpose}-{args.baseline_agreement_run_id[:8]}-vs-{args.candidate_agreement_run_id[:8]}",
                     "comparison_contract": report["comparison_contract"],
                     "purpose": args.purpose,
-                    "baseline_analysis_run_id": args.baseline_analysis_run_id,
-                    "candidate_analysis_run_id": args.candidate_analysis_run_id,
+                    "baseline_agreement_run_id": args.baseline_agreement_run_id,
+                    "candidate_agreement_run_id": args.candidate_agreement_run_id,
                     "comparison_digest": report["digest"],
                 },
             ),

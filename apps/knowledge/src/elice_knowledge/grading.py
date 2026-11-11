@@ -20,7 +20,7 @@ from elice_knowledge.tracking import client
 def initialize_grading(conn):
     for statement in [
         """CREATE TABLE IF NOT EXISTS evaluation_sources (
-            run_id text PRIMARY KEY,bundle jsonb NOT NULL,packet jsonb NOT NULL,
+            run_id text PRIMARY KEY,bundle jsonb NOT NULL,
             created_at timestamptz NOT NULL DEFAULT now())""",
         """CREATE TABLE IF NOT EXISTS grading_runs (
             id uuid PRIMARY KEY,source_run_id text NOT NULL REFERENCES evaluation_sources(run_id),
@@ -33,7 +33,7 @@ def initialize_grading(conn):
             CHECK((rater_type='human')=(reviewer_id IS NOT NULL)))""",
         """CREATE TABLE IF NOT EXISTS grading_cases (
             grading_id uuid NOT NULL REFERENCES grading_runs(id),record_id text NOT NULL,
-            labels jsonb NOT NULL,synced boolean NOT NULL DEFAULT false,
+            ratings jsonb NOT NULL,synced boolean NOT NULL DEFAULT false,
             created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(grading_id,record_id))""",
         """CREATE TABLE IF NOT EXISTS grading_measurements (
             grading_id uuid NOT NULL REFERENCES grading_runs(id),record_id text NOT NULL,
@@ -51,22 +51,12 @@ class Grading:
         self.store = store
 
     def register_source(self, bundle):
-        from elice_knowledge.agreement import review_packet
-        from elice_knowledge.judges import inapplicable
-
         validate_bundle(bundle)
-        packet, _ = review_packet(bundle, "unused")
-        records = {r["id"]: r for r in bundle["records"]}
-        cases = {c["record_id"]: c for c in bundle["cases"]}
-        for entry in packet:
-            entry["forced_na"] = inapplicable(
-                records[entry["record_id"]], cases[entry["record_id"]], entry["dimension"]
-            )
         with self.store.connection() as conn:
             conn.execute(
-                """INSERT INTO evaluation_sources(run_id,bundle,packet) VALUES (%s,%s,%s)
+                """INSERT INTO evaluation_sources(run_id,bundle) VALUES (%s,%s)
                 ON CONFLICT DO NOTHING""",
-                (bundle["source_run_id"], Jsonb(bundle), Jsonb(packet)),
+                (bundle["source_run_id"], Jsonb(bundle)),
             )
             saved = conn.execute(
                 "SELECT bundle FROM evaluation_sources WHERE run_id=%s", (bundle["source_run_id"],)
@@ -84,9 +74,14 @@ class Grading:
         ):
             raise ValueError("Invalid rater profile identity")
         expected = (
-            human_profile(bundle)
+            human_profile(bundle, profile.get("rubric"))
             if reviewer_id is not None
-            else model_profile(bundle, profile.get("scorers", []))
+            else model_profile(
+                bundle,
+                profile.get("scorers", []),
+                rubric=profile.get("rubric"),
+                diagnostics=profile.get("diagnostics", False),
+            )
         )
         if profile != expected or (
             reviewer_id is None and rater_id != "model:" + profile["scorers"][0]["rater"]
@@ -174,6 +169,7 @@ class Grading:
                             "rater_id": grading["rater_id"],
                             "rater_profile_digest": grading["profile_digest"],
                             "round": str(grading["round"]),
+                            "rubric_digest": grading["profile"]["rubric_digest"],
                         },
                     ),
                 ).info.run_id
@@ -188,19 +184,19 @@ class Grading:
             )
             return run_id
 
-    def write_case(self, grading_id, record_id, labels, measurements=None):
+    def write_case(self, grading_id, record_id, ratings, measurements=None):
         with self.store.connection() as conn:
             conn.execute("SELECT id FROM grading_runs WHERE id=%s FOR UPDATE", (grading_id,))
             conn.execute(
-                """INSERT INTO grading_cases(grading_id,record_id,labels) VALUES (%s,%s,%s)
+                """INSERT INTO grading_cases(grading_id,record_id,ratings) VALUES (%s,%s,%s)
                 ON CONFLICT DO NOTHING""",
-                (grading_id, record_id, Jsonb(labels)),
+                (grading_id, record_id, Jsonb(ratings)),
             )
             saved = conn.execute(
-                "SELECT labels FROM grading_cases WHERE grading_id=%s AND record_id=%s",
+                "SELECT ratings FROM grading_cases WHERE grading_id=%s AND record_id=%s",
                 (grading_id, record_id),
-            ).fetchone()["labels"]
-            if saved != labels:
+            ).fetchone()["ratings"]
+            if saved != ratings:
                 raise ServiceError("review_already_submitted", 409)
             if measurements is not None:
                 conn.execute(
@@ -231,7 +227,7 @@ class Grading:
             result = grading_result(
                 bundle,
                 grading,
-                [label for row in rows for label in row["labels"]],
+                [label for row in rows for label in row["ratings"]],
                 [
                     {"record_id": r["record_id"], **m}
                     for r in conn.execute(
@@ -261,7 +257,7 @@ class Grading:
             if result["complete"]:
                 state = (
                     "FAILED"
-                    if any(r["label"] == "error" for r in result["labels"])
+                    if any(r["status"] == "error" for r in result["ratings"])
                     or any(m["status"] == "error" for m in result["measurements"])
                     else "FINISHED"
                 )

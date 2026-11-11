@@ -1,4 +1,4 @@
-"""Blind human rounds using the shared evaluation-v1 grading registry."""
+"""Blind human rounds using the shared rubric-v1 grading registry."""
 
 import json
 from pathlib import Path
@@ -7,8 +7,9 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from psycopg.types.json import Jsonb
 
+from elice_knowledge.agreement import review_packet
 from elice_knowledge.evaluation_bundle import SCHEMA, validate_bundle
-from elice_knowledge.evaluation_schema import grading_result, human_profile
+from elice_knowledge.evaluation_schema import grading_result, human_profile, validate_rating
 from elice_knowledge.grading import Grading, initialize_grading
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client
@@ -89,14 +90,20 @@ class HumanReview:
         except Exception:
             raise ServiceError("review_bundle_unavailable_or_invalid", 422) from None
 
-    def start(self, run_id, reviewer_id):
+    def start(self, run_id, reviewer_id, *, rubric_id=None):
         bundle = self.import_run(run_id)
+        from elice_knowledge.rubrics import load_rubric
+
+        try:
+            rubric = load_rubric(bundle["kind"], rubric_id)
+        except (OSError, ValueError) as exc:
+            raise ServiceError("review_invalid_rubric", 422) from exc
         if not any(not c["error"] for c in bundle["cases"]):
             raise ServiceError("review_no_answers", 422)
         grading = self.grading.allocate(
             bundle,
             "human:" + str(reviewer_id),
-            human_profile(bundle),
+            human_profile(bundle, rubric),
             reviewer_id=reviewer_id,
             resume=True,
         )
@@ -107,6 +114,8 @@ class HumanReview:
         return {
             "run_id": run_id,
             "round": grading["round"],
+            "grading_id": str(grading["id"]),
+            "rubric_id": rubric["id"],
             "grading_run_id": remote,
             "tracking_pending": remote is None,
         }
@@ -115,17 +124,20 @@ class HumanReview:
         with self.store.connection() as conn:
             rows = conn.execute(
                 """SELECT s.run_id,s.bundle->>'kind' AS kind,s.bundle->>'dataset_id' AS dataset_id,
+                g.id AS grading_id,g.profile->>'rubric_digest' AS rubric_digest,
+                g.profile->'rubric'->>'id' AS rubric_id,
                 g.round,g.created_at,g.mlflow_run_id AS grading_run_id,g.state AS grading_state,
-                s.packet,(SELECT coalesce(array_agg(c.record_id),ARRAY[]::text[])
+                s.bundle,(SELECT coalesce(array_agg(c.record_id),ARRAY[]::text[])
                 FROM grading_cases c WHERE c.grading_id=g.id) AS submitted,
                 (SELECT count(*) FROM grading_cases c
                 WHERE c.grading_id=g.id AND c.synced) AS synced
                 FROM evaluation_sources s JOIN grading_runs g ON g.source_run_id=s.run_id
-                WHERE g.reviewer_id=%s AND g.rater_type='human' ORDER BY g.created_at DESC""",
+                WHERE g.reviewer_id=%s AND g.rater_type='human'
+                AND g.profile->>'contract'='rubric-v1' ORDER BY g.created_at DESC""",
                 (reviewer_id,),
             ).fetchall()
         for row in rows:
-            ids = list(dict.fromkeys(e["record_id"] for e in row.pop("packet")))
+            ids = [c["record_id"] for c in row.pop("bundle")["cases"] if not c["error"]]
             submitted = set(row.pop("submitted"))
             row.update(
                 total=len(ids),
@@ -136,29 +148,30 @@ class HumanReview:
             )
         return rows
 
-    def source(self, run_id, reviewer_id, number):
+    def source(self, run_id, reviewer_id, grading_id):
         with self.store.connection() as conn:
             grading = conn.execute(
                 """SELECT * FROM grading_runs WHERE source_run_id=%s AND reviewer_id=%s
-                AND rater_type='human' AND round=%s""",
-                (run_id, reviewer_id, number),
+                AND rater_type='human' AND id=%s AND profile->>'contract'='rubric-v1'""",
+                (run_id, reviewer_id, grading_id),
             ).fetchone()
             if not grading:
                 raise ServiceError("not_found", 404)
             source = conn.execute(
                 "SELECT * FROM evaluation_sources WHERE run_id=%s", (run_id,)
             ).fetchone()
-        return {**source, "grading": grading}
+        packet, _ = review_packet(source["bundle"], str(reviewer_id), grading["profile"]["rubric"])
+        return {**source, "packet": packet, "grading": grading}
 
-    def case(self, run_id, reviewer_id, number, position):
-        source = self.source(run_id, reviewer_id, number)
+    def case(self, run_id, reviewer_id, grading_id, position):
+        source = self.source(run_id, reviewer_id, grading_id)
         ids = list(dict.fromkeys(e["record_id"] for e in source["packet"]))
         if not 0 <= position < len(ids):
             raise ServiceError("not_found", 404)
         entries = [e for e in source["packet"] if e["record_id"] == ids[position]]
         with self.store.connection() as conn:
             saved = conn.execute(
-                "SELECT labels,synced FROM grading_cases WHERE grading_id=%s AND record_id=%s",
+                "SELECT ratings,synced FROM grading_cases WHERE grading_id=%s AND record_id=%s",
                 (source["grading"]["id"], ids[position]),
             ).fetchone()
             draft = conn.execute(
@@ -176,8 +189,8 @@ class HumanReview:
             "draft": draft if not saved else None,
         }
 
-    def progress(self, run_id, reviewer_id, number):
-        source = self.source(run_id, reviewer_id, number)
+    def progress(self, run_id, reviewer_id, grading_id):
+        source = self.source(run_id, reviewer_id, grading_id)
         ids = list(dict.fromkeys(e["record_id"] for e in source["packet"]))
         with self.store.connection() as conn:
             rows = conn.execute(
@@ -199,23 +212,34 @@ class HumanReview:
             for i, key in enumerate(ids)
         ]
 
-    def _validate_scores(self, run_id, reviewer_id, number, position, answer_digest, scores):
-        case = self.case(run_id, reviewer_id, number, position)
+    def _validate_scores(
+        self, run_id, reviewer_id, grading_id, position, answer_digest, scores, *, draft=False
+    ):
+        case = self.case(run_id, reviewer_id, grading_id, position)
         if case["answer_digest"] != answer_digest:
             raise ServiceError("review_answer_changed", 409)
         if set(scores) != {e["dimension"] for e in case["dimensions"]}:
             raise ServiceError("review_dimensions_mismatch", 422)
         for entry in case["dimensions"]:
-            label = scores[entry["dimension"]]["label"]
+            rating = scores[entry["dimension"]]
+            try:
+                validate_rating(rating, entry["scale"], draft=draft)
+            except ValueError as exc:
+                raise ServiceError("review_invalid_score", 422) from exc
+            label = rating["status"]
             if (entry["forced_na"] and label != "not_applicable") or (
-                entry["dimension"] == "behavior" and label == "not_applicable"
+                entry["dimension"] in {"behavior", "relevance"} and label == "not_applicable"
             ):
                 raise ServiceError("review_invalid_applicability", 422)
         return case
 
-    def save_draft(self, run_id, reviewer_id, number, position, answer_digest, revision, scores):
-        case = self._validate_scores(run_id, reviewer_id, number, position, answer_digest, scores)
-        grading = self.source(run_id, reviewer_id, number)["grading"]
+    def save_draft(
+        self, run_id, reviewer_id, grading_id, position, answer_digest, revision, scores
+    ):
+        case = self._validate_scores(
+            run_id, reviewer_id, grading_id, position, answer_digest, scores, draft=True
+        )
+        grading = self.source(run_id, reviewer_id, grading_id)["grading"]
         with self.store.connection() as conn:
             conn.execute("SELECT id FROM grading_runs WHERE id=%s FOR UPDATE", (grading["id"],))
             if conn.execute(
@@ -238,18 +262,21 @@ class HumanReview:
         return {"revision": revision + 1}
 
     def save(
-        self, run_id, reviewer_id, number, position, answer_digest, scores, draft_revision=None
+        self, run_id, reviewer_id, grading_id, position, answer_digest, scores, draft_revision=None
     ):
-        case = self._validate_scores(run_id, reviewer_id, number, position, answer_digest, scores)
-        grading = self.source(run_id, reviewer_id, number)["grading"]
-        labels = [
+        case = self._validate_scores(
+            run_id, reviewer_id, grading_id, position, answer_digest, scores
+        )
+        grading = self.source(run_id, reviewer_id, grading_id)["grading"]
+        ratings = [
             {
                 "record_id": case["record_id"],
                 "answer_digest": answer_digest,
                 "dimension": e["dimension"],
                 "rater": grading["rater_id"],
-                "round": str(number),
-                "label": scores[e["dimension"]]["label"],
+                "round": str(grading["round"]),
+                "score": scores[e["dimension"]]["score"],
+                "status": scores[e["dimension"]]["status"],
                 "rationale": scores[e["dimension"]]["rationale"].strip(),
                 "protocol": grading["profile_digest"],
             }
@@ -264,15 +291,15 @@ class HumanReview:
             if draft and draft["revision"] != draft_revision:
                 raise ServiceError("review_draft_conflict", 409)
             conn.execute(
-                """INSERT INTO grading_cases(grading_id,record_id,labels)
+                """INSERT INTO grading_cases(grading_id,record_id,ratings)
                 VALUES (%s,%s,%s) ON CONFLICT DO NOTHING""",
-                (grading["id"], case["record_id"], Jsonb(labels)),
+                (grading["id"], case["record_id"], Jsonb(ratings)),
             )
             previous = conn.execute(
-                "SELECT labels FROM grading_cases WHERE grading_id=%s AND record_id=%s",
+                "SELECT ratings FROM grading_cases WHERE grading_id=%s AND record_id=%s",
                 (grading["id"], case["record_id"]),
-            ).fetchone()["labels"]
-            if previous != labels:
+            ).fetchone()["ratings"]
+            if previous != ratings:
                 raise ServiceError("review_already_submitted", 409)
             conn.execute(
                 "DELETE FROM grading_drafts WHERE grading_id=%s AND record_id=%s",
@@ -280,17 +307,17 @@ class HumanReview:
             )
         return {"saved": True}
 
-    def labels(self, run_id, reviewer_id, number):
-        source = self.source(run_id, reviewer_id, number)
+    def ratings(self, run_id, reviewer_id, grading_id):
+        source = self.source(run_id, reviewer_id, grading_id)
         with self.store.connection() as conn:
             return conn.execute(
-                """SELECT record_id,labels,synced FROM grading_cases
+                """SELECT record_id,ratings,synced FROM grading_cases
                 WHERE grading_id=%s ORDER BY record_id""",
                 (source["grading"]["id"],),
             ).fetchall()
 
-    def sync(self, run_id, reviewer_id, number):
-        source = self.source(run_id, reviewer_id, number)
+    def sync(self, run_id, reviewer_id, grading_id):
+        source = self.source(run_id, reviewer_id, grading_id)
         try:
             result = self.grading.publish(source["grading"]["id"])
             return {
@@ -301,15 +328,15 @@ class HumanReview:
         except Exception:
             raise ServiceError("review_sync_failed", 503) from None
 
-    def result(self, run_id, reviewer_id, number):
-        source = self.source(run_id, reviewer_id, number)
-        rows = self.labels(run_id, reviewer_id, number)
+    def result(self, run_id, reviewer_id, grading_id):
+        source = self.source(run_id, reviewer_id, grading_id)
+        rows = self.ratings(run_id, reviewer_id, grading_id)
         return grading_result(
-            source["bundle"], source["grading"], [label for row in rows for label in row["labels"]]
+            source["bundle"], source["grading"], [label for row in rows for label in row["ratings"]]
         )
 
-    def grading_origin(self, run_id, reviewer_id, number):
-        grading = self.source(run_id, reviewer_id, number)["grading"]
+    def grading_origin(self, run_id, reviewer_id, grading_id):
+        grading = self.source(run_id, reviewer_id, grading_id)["grading"]
         if not grading["mlflow_run_id"]:
             return None
         try:

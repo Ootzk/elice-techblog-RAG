@@ -12,6 +12,7 @@ dependencies = [
   "mlflow-skinny>=3.18,<4",
   "pandas>=2.2,<4",
   "panel>=1.8,<2",
+  "markdown-it-py>=3,<5",
 ]
 
 [dependency-groups]

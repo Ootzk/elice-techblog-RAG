@@ -71,11 +71,19 @@
 
 후속 대화 문항 `gold-018`은 고정된 사용자·assistant 이력과 마지막 질문을 함께 입력한다. 첫 답변을 매번 생성하는 전체 대화 평가와 구분하며, QA 프로필의 이력 한도가 해당 대화 한 쌍을 보존해야 한다.
 
-현재 Eval Harness는 Ragas로 사실 정확성·필수 요점의 충족·근거 충실도·질문 적합성을 채점하고,
-누적 검색과 최종 생성 문맥의 Context Recall·Precision을 별도로 계산한다. URL·인용문은 검증된 대표
-근거이며 유일한 정답 근거 목록이 아니다. 의미적 문맥 평가는 다른 자료가 같은 사실을 뒷받침해도 인정할 수 있다.
-모범 답안의 사실 범위와 주장 분해에 따른 편향이 있고, 금지 주장·문서 간 종합의 모든 오류를 자동으로 검출한다고
-보장하지 않는다. 상세 정의·임계값·한계는 루트 README의 품질 지표를 따른다.
+현재 Eval Harness는 사람과 모델이 같은 [gold-ordinal-v1 rubric](../../../apps/knowledge/src/elice_knowledge/data/rubrics/gold-ordinal-v1.json)으로 정확성·완전성·근거 충실도·질문 적합성을
+**0(부족)·1(부분 충족)·2(충분)**로 직접 채점한다. 모델은 Ragas DiscreteMetric을 사용한다.
+완전성은 required_points의 의미 충족을 보고 optional_points의 누락은 감점하지 않는다.
+근거 충실도는 실제 생성에 전달된 문맥만 사용한다. N/A·오류는 0점이 아니며 pass/fail 임계값은 없다.
+
+문항별 사실 기준은 JSONL에, 공통 항목·척도·anchor는 버전 있는 rubric 파일에 둔다.
+manifest의 default_rubric_id는 기본 기준을 가리키며 실제 채점 프로필에 rubric 원문·해시를 고정한다.
+이 rubric 변경은 질문·모범 답안의 재검수를 대신하지 않는다.
+
+누적 검색·최종 문맥의 Context Recall·Precision과 답변 비율 지표는 `--diagnostics`로 별도 실행한다.
+URL·인용문은 검증된 대표 근거이지 유일한 정답 근거 목록은 아니다. 대체 근거도 같은 사실을
+뒷받침하면 인정할 수 있다. 합성 답안·공통 rubric·LLM 판정의 편향이 남고 모든 오류 검출을 보장하지 않는다.
+새 척도의 사람–모델 정합성은 아직 측정하지 않았다. 상세 계약은 [평가 스키마](../../../docs/evaluation-schema.md)를 따른다.
 
 보안·악용·역할 유지에 관한 대응은 [🦾 Iron Set](../iron_set/README.md)으로 구분해 집계한다.
 

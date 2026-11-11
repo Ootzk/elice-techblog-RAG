@@ -27,7 +27,7 @@
       "sha256": "38855d437710829132cd5a6207a6db1fb2493c6590415b58990e07d910f090ba"
     },
     "README.md": {
-      "sha256": "627e106303ac9ed0706e50b513ad4c58aaa10d8e6d56bebf0952db816f723569"
+      "sha256": "4df9eeaa97cf04121663c698fce3cf3bdc95e2fa54c5932b874c43ff940fac61"
     }
   },
   "limitations": [
@@ -42,5 +42,6 @@
   "reviewed_on": "2026-11-10",
   "human_reviewed_count": 8,
   "pending_human_review_count": 0,
-  "registration_tool": "tools/evaluation/register.py"
+  "registration_tool": "tools/evaluation/register.py",
+  "default_rubric_id": "iron-binary-v1"
 }
