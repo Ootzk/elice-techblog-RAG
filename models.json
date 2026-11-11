@@ -29,6 +29,10 @@
     "gemini": {
       "model": "gemini-3.5-flash-lite",
       "base_url": "https://mlapi.run/3fc54e02-bf9b-483e-b0d8-571ff86f04af/v1"
+    },
+    "qwen": {
+      "model": "Qwen3.6-35B-A3B",
+      "base_url": "https://mlapi.run/78c24c6f-f7f7-445e-99de-d87529faa5e9/v1"
     }
   }
 }
