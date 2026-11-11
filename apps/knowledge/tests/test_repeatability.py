@@ -4,7 +4,169 @@ import pytest
 from test_comparison import frozen, refresh
 
 from elice_knowledge.corpus import digest
-from elice_knowledge.repeatability import boundary_changes, build
+from elice_knowledge.repeatability import (
+    boundary_changes,
+    boundary_levels,
+    build,
+    dimension_average_levels,
+    model_boundary_changes,
+    model_boundary_levels,
+    question_average_levels,
+)
+
+
+def test_boundary_levels_weight_answers_runs_equally_and_keep_raters_separate():
+    def scored(count, valid):
+        return {
+            "valid": valid,
+            "boundaries": {"sufficient": {"rate": count / valid if valid else None}},
+        }
+
+    rows = {
+        ("q1", "model:chatgpt", "correctness"): {
+            "A1": scored(1, 1),
+            "A2": scored(0, 3),
+            "A3": scored(0, 0),
+        },
+        ("q1", "human:reviewer", "correctness"): {"A1": scored(0, 1)},
+    }
+    levels = boundary_levels(
+        rows,
+        ["A1", "A2", "A3"],
+        ["q1"],
+        [("model:chatgpt", "correctness"), ("human:reviewer", "correctness")],
+        ("sufficient",),
+    )
+    model, human = levels
+    assert model["mean_rate"] == 0.5  # pooled grading would incorrectly give 0.25
+    assert (model["observed_runs"], model["possible_runs"], model["valid_gradings"]) == (
+        2,
+        3,
+        4,
+    )
+    assert human["mean_rate"] == 0
+    assert human["observed_runs"] == 1
+
+
+def test_model_boundary_mean_weights_models_equally_and_excludes_human():
+    levels = [
+        dict(
+            record_id="q1",
+            rater=rater,
+            dimension="correctness",
+            boundary="sufficient",
+            mean_rate=rate,
+            observed_runs=runs,
+            possible_runs=3,
+            valid_gradings=gradings,
+        )
+        for rater, rate, runs, gradings in (
+            ("model:chatgpt", 1.0, 3, 9),
+            ("model:claude", 0.0, 1, 1),
+            ("human:reviewer", 1.0, 3, 3),
+        )
+    ]
+    result = model_boundary_levels(levels, ["q1"], ["correctness"], ["sufficient"])[0]
+    assert result["mean_rate"] == 0.5
+    assert (result["observed_models"], result["possible_models"]) == (2, 2)
+    assert (
+        result["observed_model_runs"],
+        result["possible_model_runs"],
+        result["valid_gradings"],
+    ) == (4, 6, 10)
+
+
+def test_question_average_skips_unrated_questions_and_weights_questions_equally():
+    levels = [
+        dict(
+            record_id=record_id,
+            rater="model:chatgpt",
+            dimension="correctness",
+            boundary="sufficient",
+            mean_rate=rate,
+            valid_gradings=valid,
+        )
+        for record_id, rate, valid in (("q1", 1.0, 9), ("q2", 0.0, 1), ("q3", None, 0))
+    ]
+    result = question_average_levels(
+        levels, [], ["q1", "q2", "q3"], ["correctness"], ["sufficient"]
+    )
+    model = next(item for item in result if item["rater"] == "model:chatgpt")
+    assert model["mean_rate"] == 0.5
+    assert (model["observed_questions"], model["possible_questions"]) == (2, 3)
+    assert model["valid_gradings"] == 10
+
+
+def test_dimension_average_uses_valid_dimensions_and_matches_bottom_row_columns():
+    levels = [
+        dict(
+            record_id="q1",
+            rater="model:chatgpt",
+            dimension=dimension,
+            boundary="sufficient",
+            mean_rate=rate,
+            valid_gradings=valid,
+        )
+        for dimension, rate, valid in (
+            ("correctness", 1.0, 3),
+            ("completeness", 0.0, 3),
+            ("groundedness", None, 0),
+        )
+    ]
+    questions = [
+        dict(
+            rater="model:chatgpt",
+            dimension=dimension,
+            boundary="sufficient",
+            mean_rate=rate,
+            valid_gradings=valid,
+        )
+        for dimension, rate, valid in (
+            ("correctness", 0.75, 6),
+            ("completeness", 0.25, 6),
+            ("groundedness", None, 0),
+        )
+    ]
+    result = dimension_average_levels(
+        levels,
+        [],
+        questions,
+        ["q1"],
+        ["correctness", "completeness", "groundedness"],
+        ["sufficient"],
+    )
+    model = [item for item in result if item["rater"] == "model:chatgpt"]
+    assert [item["mean_rate"] for item in model] == [0.5, 0.5]
+    assert [(item["observed_dimensions"], item["possible_dimensions"]) for item in model] == [
+        (2, 3),
+        (2, 3),
+    ]
+
+
+def test_model_change_mean_excludes_human_and_preserves_pair_coverage():
+    changes = {
+        "by_rater": [{"rater": rater} for rater in ("model:chatgpt", "model:claude", "human:x")],
+        "by_dimension": [
+            dict(
+                rater=rater,
+                dimension="correctness",
+                boundary="sufficient",
+                mean_absolute_change=value,
+                observed_pairs=pairs,
+                possible_pairs=3,
+            )
+            for rater, value, pairs in (
+                ("model:chatgpt", 0.0, 3),
+                ("model:claude", 1.0, 1),
+                ("human:x", 1.0, 3),
+            )
+        ],
+    }
+    result = model_boundary_changes(changes, ["correctness"], ["sufficient"])
+    item = result["by_dimension"][0]
+    assert item["mean_absolute_change"] == 0.5
+    assert (item["observed_models"], item["observed_pairs"], item["possible_pairs"]) == (2, 4, 6)
+    assert result["overall"][0]["mean_absolute_change"] == 0.5
 
 
 def test_boundary_changes_keep_question_pairs_and_equal_question_weight():

@@ -8,6 +8,154 @@ from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA
 
 CONTRACT = "repeatability-v1"
+MODEL_MEAN = "aggregate:models"
+
+
+def boundary_levels(rows, run_ids, record_ids, rater_dimensions, boundary_names):
+    """Average per-answers-run boundary rates for each question and evaluator."""
+    result = []
+    for record_id in record_ids:
+        for rater, dimension in rater_dimensions:
+            distributions = rows.get((record_id, rater, dimension), {})
+            for boundary in boundary_names:
+                valid = [
+                    distributions[run_id]
+                    for run_id in run_ids
+                    if run_id in distributions and distributions[run_id]["valid"]
+                ]
+                result.append(
+                    dict(
+                        record_id=record_id,
+                        rater=rater,
+                        dimension=dimension,
+                        boundary=boundary,
+                        mean_rate=(
+                            sum(item["boundaries"][boundary]["rate"] for item in valid) / len(valid)
+                            if valid
+                            else None
+                        ),
+                        observed_runs=len(valid),
+                        possible_runs=len(run_ids),
+                        valid_gradings=sum(item["valid"] for item in valid),
+                    )
+                )
+    return result
+
+
+def model_boundary_levels(levels, record_ids, dimensions, boundary_names):
+    """Macro-average available model rates after each model's answers-run average."""
+    model_ids = {item["rater"] for item in levels if item["rater"].startswith("model:")}
+    possible_runs = max((item["possible_runs"] for item in levels), default=0)
+    indexed = {
+        (item["record_id"], item["rater"], item["dimension"], item["boundary"]): item
+        for item in levels
+    }
+    result = []
+    for record_id in record_ids:
+        for dimension in dimensions:
+            for boundary in boundary_names:
+                observed = [
+                    indexed[(record_id, rater, dimension, boundary)]
+                    for rater in sorted(model_ids)
+                    if (record_id, rater, dimension, boundary) in indexed
+                    and indexed[(record_id, rater, dimension, boundary)]["mean_rate"] is not None
+                ]
+                result.append(
+                    dict(
+                        record_id=record_id,
+                        dimension=dimension,
+                        boundary=boundary,
+                        mean_rate=(
+                            sum(item["mean_rate"] for item in observed) / len(observed)
+                            if observed
+                            else None
+                        ),
+                        observed_models=len(observed),
+                        possible_models=len(model_ids),
+                        observed_model_runs=sum(item["observed_runs"] for item in observed),
+                        possible_model_runs=len(model_ids) * possible_runs,
+                        valid_gradings=sum(item["valid_gradings"] for item in observed),
+                    )
+                )
+    return result
+
+
+def question_average_levels(levels, model_levels, record_ids, dimensions, boundary_names):
+    """Macro-average available questions after answers and model aggregation."""
+    raters = sorted({item["rater"] for item in levels}) + [MODEL_MEAN]
+    combined = [*levels, *(dict(item, rater=MODEL_MEAN) for item in model_levels)]
+    indexed = {
+        (item["record_id"], item["rater"], item["dimension"], item["boundary"]): item
+        for item in combined
+    }
+    result = []
+    for rater in raters:
+        for dimension in dimensions:
+            for boundary in boundary_names:
+                observed = [
+                    indexed[(record_id, rater, dimension, boundary)]
+                    for record_id in record_ids
+                    if (record_id, rater, dimension, boundary) in indexed
+                    and indexed[(record_id, rater, dimension, boundary)]["mean_rate"] is not None
+                ]
+                result.append(
+                    dict(
+                        rater=rater,
+                        dimension=dimension,
+                        boundary=boundary,
+                        mean_rate=(
+                            sum(item["mean_rate"] for item in observed) / len(observed)
+                            if observed
+                            else None
+                        ),
+                        observed_questions=len(observed),
+                        possible_questions=len(record_ids),
+                        valid_gradings=sum(item["valid_gradings"] for item in observed),
+                    )
+                )
+    return result
+
+
+def dimension_average_levels(
+    levels, model_levels, question_averages, record_ids, dimensions, boundary_names
+):
+    """Macro-average available rubric dimensions for each question and the question-average row."""
+    raters = sorted({item["rater"] for item in question_averages})
+    combined = [
+        *levels,
+        *(dict(item, rater=MODEL_MEAN) for item in model_levels),
+        *(dict(item, record_id=None) for item in question_averages),
+    ]
+    indexed = {
+        (item["record_id"], item["rater"], item["dimension"], item["boundary"]): item
+        for item in combined
+    }
+    result = []
+    for record_id in (*record_ids, None):
+        for rater in raters:
+            for boundary in boundary_names:
+                observed = [
+                    indexed[(record_id, rater, dimension, boundary)]
+                    for dimension in dimensions
+                    if (record_id, rater, dimension, boundary) in indexed
+                    and indexed[(record_id, rater, dimension, boundary)]["mean_rate"] is not None
+                ]
+                result.append(
+                    dict(
+                        record_id=record_id,
+                        rater=rater,
+                        boundary=boundary,
+                        mean_rate=(
+                            sum(item["mean_rate"] for item in observed) / len(observed)
+                            if observed
+                            else None
+                        ),
+                        observed_dimensions=len(observed),
+                        possible_dimensions=len(dimensions),
+                        valid_gradings=sum(item["valid_gradings"] for item in observed),
+                    )
+                )
+    return result
 
 
 def boundary_changes(rows, run_ids, record_ids, rater_dimensions, boundary_names):
@@ -113,6 +261,63 @@ def boundary_changes(rows, run_ids, record_ids, rater_dimensions, boundary_names
     )
 
 
+def model_boundary_changes(changes, dimensions, boundary_names):
+    """Macro-average saved question-paired changes across model raters only."""
+    model_ids = {
+        item["rater"] for item in changes["by_rater"] if item["rater"].startswith("model:")
+    }
+    indexed = {
+        (item["rater"], item["dimension"], item["boundary"]): item
+        for item in changes["by_dimension"]
+    }
+    by_dimension, overall = [], []
+    for boundary in boundary_names:
+        for dimension in dimensions:
+            observed = [
+                indexed[(rater, dimension, boundary)]
+                for rater in sorted(model_ids)
+                if (rater, dimension, boundary) in indexed
+                and indexed[(rater, dimension, boundary)]["mean_absolute_change"] is not None
+            ]
+            by_dimension.append(
+                dict(
+                    boundary=boundary,
+                    dimension=dimension,
+                    mean_absolute_change=(
+                        sum(item["mean_absolute_change"] for item in observed) / len(observed)
+                        if observed
+                        else None
+                    ),
+                    observed_models=len(observed),
+                    possible_models=len(model_ids),
+                    observed_pairs=sum(item["observed_pairs"] for item in observed),
+                    possible_pairs=sum(item["possible_pairs"] for item in observed),
+                )
+            )
+        available = [
+            item
+            for item in by_dimension
+            if item["boundary"] == boundary and item["mean_absolute_change"] is not None
+        ]
+        overall.append(
+            dict(
+                boundary=boundary,
+                mean_absolute_change=(
+                    sum(item["mean_absolute_change"] for item in available) / len(available)
+                    if available
+                    else None
+                ),
+                observed_dimensions=len(available),
+                possible_dimensions=len(dimensions),
+                observed_pairs=sum(item["observed_pairs"] for item in available),
+                possible_pairs=sum(
+                    item["possible_pairs"] for item in by_dimension if item["boundary"] == boundary
+                ),
+            )
+        )
+    return dict(by_dimension=by_dimension, overall=overall)
+
+
 def build(snapshots):
     if len(snapshots) < 2:
         raise ValueError("repeatability_requires_two_analyses")
@@ -193,6 +398,12 @@ def build(snapshots):
         ("partial_or_better", "sufficient") if first["kind"] == "gold" else ("satisfied",)
     )
     changes = boundary_changes(rows, ids, record_ids, rater_dimensions, boundary_names)
+    levels = boundary_levels(rows, ids, record_ids, rater_dimensions, boundary_names)
+    dimensions = sorted({dimension for _, dimension in rater_dimensions})
+    model_levels = model_boundary_levels(levels, record_ids, dimensions, boundary_names)
+    question_averages = question_average_levels(
+        levels, model_levels, record_ids, dimensions, boundary_names
+    )
     summaries = []
     for snapshot in snapshots:
         run_id = snapshot["analysis_run_id"]
@@ -268,6 +479,13 @@ def build(snapshots):
             significance_test=False,
         ),
         boundary_changes=changes,
+        boundary_levels=levels,
+        model_boundary_levels=model_levels,
+        question_average_levels=question_averages,
+        dimension_average_levels=dimension_average_levels(
+            levels, model_levels, question_averages, record_ids, dimensions, boundary_names
+        ),
+        model_boundary_changes=model_boundary_changes(changes, dimensions, boundary_names),
         summaries=summaries,
     )
     report["digest"] = digest(report)

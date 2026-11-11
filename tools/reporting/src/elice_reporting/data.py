@@ -58,6 +58,16 @@ def _validate(kind, report, inputs, source, run_id=None):
             raise ValueError("Repeatability summary is missing")
         if not isinstance(report.get("boundary_changes"), dict):
             raise ValueError("Repeatability boundary change metrics are missing")
+        if not isinstance(report.get("boundary_levels"), list):
+            raise ValueError("Repeatability boundary level metrics are missing")
+        if not isinstance(report.get("model_boundary_levels"), list):
+            raise ValueError("Repeatability model boundary means are missing")
+        if not isinstance(report.get("question_average_levels"), list):
+            raise ValueError("Repeatability question averages are missing")
+        if not isinstance(report.get("dimension_average_levels"), list):
+            raise ValueError("Repeatability dimension averages are missing")
+        if not isinstance(report.get("model_boundary_changes"), dict):
+            raise ValueError("Repeatability model boundary changes are missing")
         if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
             raise ValueError("Repeatability content digest mismatch")
         snapshots = inputs.get("analyses", [])
