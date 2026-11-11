@@ -410,6 +410,8 @@ def build(snapshots):
         eligible = {case["record_id"] for case in bundle["cases"] if not case["error"]}
         scale = {str(score) for score in agreement["rubric"]["scale"]}
         for item in agreement["distributions"]:
+            if item["rater"].startswith("baseline:"):
+                continue
             if item["record_id"] not in eligible or set(item["score_counts"]) != scale:
                 raise ValueError("repeatability_invalid_distribution")
             rater, profile = item["rater"], item["profile_digest"]

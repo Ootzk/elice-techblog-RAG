@@ -99,3 +99,11 @@ def test_comparison_rejects_mismatched_judge_repetitions():
     b["inputs"]["agreements"][0]["grading_runs"].append({"rater": "model:chatgpt"})
     with pytest.raises(ValueError, match="comparison_grading_repetitions_mismatch"):
         build(a, b)
+
+
+def test_comparison_rejects_previously_aggregated_random_baseline():
+    a = snapshot("a", "terra", [1, 0.5], 0.5, [0, 0])
+    b = snapshot("b", "qwen", [0.5, 0], 0.5, [0, 1])
+    a["report"]["summaries"].append({"rater": "baseline:uniform-random"})
+    with pytest.raises(ValueError, match="comparison_contains_baseline_rater"):
+        build(a, b)

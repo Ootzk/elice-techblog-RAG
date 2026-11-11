@@ -98,9 +98,21 @@ Bernoulli 분포의 1차 Wasserstein 거리 `W₁ = |p_i-p_j|`를 닫힌식으�
 
 ## Agreement 표시 기준
 
-평가 조건 → 평가 주체 범례 → Grading/Agreement 지표 정의 → 항목별 κ → 문항별 평가 순서다.
+평가 조건 → 평가 주체 범례 → Grading/Agreement 지표 정의 → 항목별 κ → 전체 문항 품질 → 문항별 평가 순서다.
 조건에는 데이터셋·원본 answers 링크·QA 설정·rubric 정보를 표시한다. 원본 grading 링크는
 평가 주체의 해당 회차 행에 둔다. 불필요한 아코디언·하단 상세 부록은 두지 않는다.
+
+무작위 기준선은 다음 명령으로 만든다. `--submit`을 생략하면 생성 계획만 확인한다.
+기존 채점의 rubric을 지정하면 정확히 같은 기준을 쓴다. 모델 호출은 없다.
+
+```sh
+./tools/operations/rag random-baseline --answers-run-id <answers-run-id> \
+  --rubric-grading-run-id <grading-run-id> --seed 42 --repeat 5 --submit
+```
+
+기준선은 적용 가능한 문항마다 Gold 0·1·2점을 균등하게 추출하고 공통 N/A 규칙을 적용한다.
+seed·회차·문항·항목으로 결과를 재현한다. 생성 후 `rag agreement`로 새 agreement를 만들면
+`무작위 기준선`으로 표시된다. 실제 검수자나 모델 성능으로 해석하지 않는다.
 
 - Grading: 저장된 공통 rubric의 항목별 0·1·2 anchor를 표로 표시한다. Iron은 0·1이다.
   등급·N/A·오류·미기록을 구분하며 비율 점수로 등급을 재생성하지 않는다.

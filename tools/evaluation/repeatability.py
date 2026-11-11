@@ -60,6 +60,8 @@ def snapshot(tracking, run_id, directory):
             or not grading_tags.get("round")
         ):
             raise ValueError("repeatability_grading_lineage_mismatch")
+        if grading_tags["rater_id"].startswith("baseline:"):
+            continue
         grading_runs.append(
             {
                 "run_id": grading_id,

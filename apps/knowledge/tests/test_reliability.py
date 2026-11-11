@@ -155,7 +155,7 @@ def test_cli_logs_panel_coefficients_and_protocol_without_model_calls(monkeypatc
         download_artifacts=download,
         create_run=lambda *a, **kw: SimpleNamespace(info=SimpleNamespace(run_id="agreement")),
         log_dict=lambda *a: artifacts.append(a),
-        log_metric=lambda run, key, value: logged.update({key: value}),
+        log_batch=lambda run, metrics: logged.update({m.key: m.value for m in metrics}),
         set_terminated=lambda *a: None,
     )
     monkeypatch.setattr(tool, "configure", lambda *a: "experiment")

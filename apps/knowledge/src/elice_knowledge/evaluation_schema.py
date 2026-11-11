@@ -83,7 +83,9 @@ def validate_grading(bundle, result):
     if result.get("rubric_digest") != digest(rubric):
         raise ValueError("grading_rubric_mismatch")
     kind = result.get("rater_type")
-    if kind not in {"human", "model"} or not result.get("rater_id", "").startswith(kind + ":"):
+    if kind not in {"human", "model", "baseline"} or not result.get("rater_id", "").startswith(
+        kind + ":"
+    ):
         raise ValueError("grading_rater_mismatch")
     if type(result.get("round")) is not int or result["round"] < 1:
         raise ValueError("grading_round_invalid")

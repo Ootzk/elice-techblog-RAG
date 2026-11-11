@@ -295,6 +295,20 @@ def test_boundary_counts_preserve_all_judge_rounds_without_pairing():
     assert total["missing_records"] == 0
 
 
+def test_random_baseline_is_excluded_from_repeatability_even_with_different_profiles():
+    first, second = frozen("A"), frozen("B")
+    first["agreement_run_id"], second["agreement_run_id"] = "agreement-A", "agreement-B"
+    original = build([first, second])
+    for index, item in enumerate((first, second)):
+        random_row = deepcopy(item["agreement"]["distributions"][0])
+        random_row["rater"] = "baseline:uniform-random"
+        random_row["profile_digest"] = f"different-seed-{index}"
+        item["agreement"]["distributions"].append(random_row)
+    result = build([first, second])
+    for key in ("summaries", "boundary_levels", "boundary_changes", "model_boundary_levels"):
+        assert result[key] == original[key]
+
+
 def test_repeatability_rejects_changed_conditions_and_reused_answers():
     first, second = frozen("A"), frozen("B")
     first["agreement_run_id"], second["agreement_run_id"] = "agreement-A", "agreement-B"
