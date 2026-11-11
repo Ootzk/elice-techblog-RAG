@@ -29,6 +29,31 @@ def find_root(start=None):
     raise ValueError("Run the notebook within the project or supply the repository path")
 
 
+def ordered_records(bundle):
+    """Keep frozen source order; for existing runs match the repository's exact records."""
+    records = bundle["records"]
+    if all(str(r.get("source_order", "")).isdigit() for r in records):
+        return sorted(records, key=lambda r: int(r["source_order"]))
+    try:
+        kind = bundle["kind"]
+        path = find_root() / "tools" / "evaluation" / f"{kind}_set" / f"{kind}.jsonl"
+        source = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        order = {
+            _digest({"inputs": item["inputs"], "expectations": item["expectations"]}): index
+            for index, item in enumerate(source)
+        }
+        keys = [
+            _digest({"inputs": r["inputs"], "expectations": r["expectations"]}) for r in records
+        ]
+        if len(set(keys)) == len(keys) and all(key in order for key in keys):
+            return [
+                record for _, record in sorted(zip((order[k] for k in keys), records, strict=True))
+            ]
+    except (KeyError, OSError, ValueError):
+        pass
+    return records
+
+
 def _digest(value):
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -361,6 +386,7 @@ def _identity(subject):
 
 def _cases(bundle):
     records = {r["id"]: r for r in bundle["records"]}
+    cases = {c["record_id"]: c for c in bundle["cases"]}
     return pd.DataFrame(
         [
             dict(
@@ -369,7 +395,7 @@ def _cases(bundle):
                 answer=(c.get("result") or {}).get("answer"),
                 error=c.get("error"),
             )
-            for c in bundle["cases"]
+            for c in (cases[r["id"]] for r in ordered_records(bundle))
         ]
     )
 

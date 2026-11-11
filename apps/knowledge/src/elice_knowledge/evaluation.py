@@ -1,5 +1,6 @@
 """Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
 
@@ -46,6 +47,8 @@ def dataset_snapshot(settings, dataset_id):
     # EvaluationDataset.records lazily uses MLflow's active tracking store.
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri.get_secret_value())
     dataset = tracking_client(settings).get_dataset(dataset_id)
+    source_order = json.loads((dataset.tags or {}).get("source_order", "[]"))
+    positions = {source_id: index for index, source_id in enumerate(source_order)}
     records = []
     for record in dataset.records:
         # Only inputs are validated as QA input. Expectations never enter QA.
@@ -69,6 +72,8 @@ def dataset_snapshot(settings, dataset_id):
         records.append(
             {
                 "id": str(record.dataset_record_id),
+                "source_id": (record.tags or {}).get("source_id"),
+                "source_order": positions.get((record.tags or {}).get("source_id")),
                 "inputs": {
                     "question": request.question,
                     "history": [m.model_dump() for m in request.history],

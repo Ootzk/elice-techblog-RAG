@@ -561,10 +561,13 @@ def efficiency_view(data):
 
 
 def question_view(data):
-    records = data.inputs["baseline"]["inputs"]["agreements"][0]["bundle"]["records"]
+    from .data import ordered_records
+
+    records = ordered_records(data.inputs["baseline"]["inputs"]["agreements"][0]["bundle"])
     questions = {record["id"]: record["inputs"]["question"] for record in records}
+    included = set(data.report["record_ids"])
     options = []
-    for index, record_id in enumerate(data.report["record_ids"], 1):
+    for index, record_id in enumerate((r["id"] for r in records if r["id"] in included), 1):
         values = {}
         for boundary in BOUNDARIES:
             rows = {
