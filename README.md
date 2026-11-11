@@ -783,8 +783,10 @@ repeatability는 같은 조건의 서로 다른 answers에 대한 agreement 두 
 answers별 상세 등급과 사유는 평가 조건의 원본 agreement 링크에서 확인합니다.
 Iron은 0·1 경계 하나를 씁니다. 이는 작은 반복 표본의 기술 통계이며 답변 변동과 Judge 변동을
 인과적으로 분리한 추정치는 아닙니다. 시행별 grading 횟수는 같지 않아도 되며, 보고서에서
-평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 현재 comparison CLI는 agreement 한 쌍과
-주체당 grading 하나만 받습니다.
+평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 조건 비교는 `compare_repeated.py`로
+서로 다른 설정의 Repeatability 두 건을 입력받아 공통 질문의 경계 충족률과 조건별 시행 간
+변화폭·시간·토큰·생성 실패를 나란히 보여줍니다. 같은 Dataset·rubric·평가 주체와 채점 반복 횟수를 요구합니다.
+기존 `compare.py`의 Agreement 한 쌍 비교는 개발용 계약으로 남아 있습니다.
 
 반복성 보고서의 `1점 이상`·`2점` 시행 간 평균 변화폭은 같은 질문의 answers 시행 쌍에서
 Judge 반복 채점의 경계 충족률 차이를 절댓값으로 계산합니다. 경계 충족 여부를 0/1로 보면
@@ -810,10 +812,17 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/repe
 이 명령은 모델을 호출하지 않고 완료된 agreement의 저장 결과만 읽습니다. 기존 agreement에
 등급 건수·rubric 경계 결과가 없다면 같은 grading으로 agreement를 다시 생성해야 합니다.
 
-Comparison은 agreement A/B의 공통 관측에서 등급·선택적 진단·QA 자원 사용량의 대응 평균 차이와
-SciPy paired bootstrap 구간을 저장합니다. system 비교는 평가자·기준을, judge 비교는 답변·사람 판정을
-고정합니다. κ·α도 공통 관측에서 다시 계산합니다. Judge 점수 상승을 답변 개선으로 표시하지 않습니다.
-원본 run 수정·모델 재호출·자동 승자 선정 없이 입력·제외 사유·계보를 보존합니다.
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/compare_repeated.py \
+  --baseline-repeatability-run-id <A-repeatability-run-id> \
+  --candidate-repeatability-run-id <B-repeatability-run-id> \
+  --output-dir artifacts/evaluation/comparison-a-b --log
+```
+
+Comparison은 두 Repeatability에서 같은 질문의 경계 충족률을 대응시켜 질문별 동일 가중치로
+평균합니다. 조건별 시행 간 변화폭과 생성 실패도 나란히 저장합니다. 유효 관측이 없는 질문은
+품질 비교에서 제외하고 대응 문항 수를 표시합니다. 원본 run 수정·모델 재호출·자동 승자 선정은
+하지 않습니다. 현재 표본이 작으므로 유의성·인과관계를 추정하지 않습니다.
 [보고서](tools/reporting/README.md)는 저장된 수치·anchor·사유·문맥만 표현하며 해석을 자동 생성하지 않습니다.
 
 효율성은 질문당 입력·캐시 입력·출력·전체 토큰과 LLM/도구 호출 수, QA 실행 시간으로 봅니다.

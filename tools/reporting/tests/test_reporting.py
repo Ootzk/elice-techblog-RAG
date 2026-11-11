@@ -36,7 +36,7 @@ def test_report_purpose_callouts_explain_each_report_scope():
     comparison = report_purpose_callout("comparison").object
     assert "AGREEMENT" in agreement and "같은 평가자가 다시 채점해도" in agreement
     assert "REPEATABILITY" in repeatability and "채점 자체의 흔들림" in repeatability
-    assert "COMPARISON" in comparison and "차이의 원인까지 단정하지는" in comparison
+    assert "COMPARISON" in comparison and "답변을 각각 여러 번 만든 결과" in comparison
 
 
 def test_demo_tables_preserve_unavailable_coefficients_and_rater_identity():
@@ -229,9 +229,23 @@ def test_exported_table_search_sort_reset_and_escaping_without_python_callbacks(
     assert "<script>bad()" not in original
 
 
-@pytest.mark.parametrize(
-    "kind, judge_mode", [("agreement", False), ("comparison", False), ("comparison", True)]
-)
+def test_comparison_template_uses_repeated_condition_contract():
+    path = PACKAGE / "notebooks/templates/comparison.ipynb"
+    notebook = nbformat.read(path, as_version=4)
+    nbformat.validate(notebook)
+    source = "\n".join(cell.source for cell in notebook.cells)
+    assert "comparison-v2" in source
+    assert "quality_view(data, subjects)" in source
+    assert "stability_view(data, subjects)" in source
+    assert source.index("## 2. 지표 정의와 판정 기준") < source.index("## 3. 결과 분석")
+    assert "비교 가설" not in source
+    for cell in notebook.cells:
+        if cell.cell_type == "code":
+            assert cell.execution_count is None and not cell.outputs
+            compile(cell.source, str(path), "exec")
+
+
+@pytest.mark.parametrize("kind, judge_mode", [("agreement", False)])
 def test_template_executes_and_exports_without_network_or_saved_outputs(
     kind, judge_mode, tmp_path, monkeypatch
 ):

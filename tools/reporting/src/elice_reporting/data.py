@@ -74,9 +74,10 @@ def _validate(kind, report, inputs, source, run_id=None):
         if len(snapshots) < 2 or len(snapshots) != len(report.get("agreements", [])):
             raise ValueError("Repeatability requires agreement snapshots")
         for expected, snapshot in zip(report["agreements"], snapshots, strict=True):
-            if "agreement_run_id" not in expected or not {
-                "agreement_run_id", "agreement"
-            } <= snapshot.keys():
+            if (
+                "agreement_run_id" not in expected
+                or not {"agreement_run_id", "agreement"} <= snapshot.keys()
+            ):
                 raise ValueError("Repeatability requires agreement run references")
             bundle, agreement = snapshot["bundle"], snapshot["agreement"]
             if (
@@ -94,24 +95,36 @@ def _validate(kind, report, inputs, source, run_id=None):
             ):
                 raise ValueError("Repeatability grading run metadata mismatch")
     elif kind == "comparison":
-        if report.get("comparison_contract") != "comparison-v1":
+        contract = report.get("comparison_contract")
+        if contract not in {"comparison-v1", "comparison-v2"}:
             raise ValueError("Unsupported comparison contract")
         if not {"baseline", "candidate"} <= inputs.keys():
             raise ValueError("Comparison requires both input snapshots")
         if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
             raise ValueError("Comparison content digest mismatch")
         for side in ("baseline", "candidate"):
-            if (
-                not isinstance(report.get(side), dict)
-                or "agreement_run_id" not in report[side]
-                or "agreement_run_id" not in inputs[side]
-                or "agreement" not in inputs[side]
-                or report[side]["agreement_run_id"] != inputs[side]["agreement_run_id"]
-            ):
-                raise ValueError("Comparison requires agreement run references")
-            if report[side]["input_digest"] != _digest(inputs[side]):
-                raise ValueError("Comparison input digest mismatch")
-            _validate_gradings(inputs[side]["gradings"])
+            if contract == "comparison-v2":
+                snapshot = inputs[side]
+                if (
+                    report[side]["repeatability_run_id"] != snapshot.get("run_id")
+                    or report[side]["repeatability_digest"]
+                    != snapshot.get("report", {}).get("digest")
+                    or snapshot["report"]["digest"]
+                    != _digest({k: v for k, v in snapshot["report"].items() if k != "digest"})
+                ):
+                    raise ValueError("Comparison repeatability input binding mismatch")
+            else:
+                if (
+                    not isinstance(report.get(side), dict)
+                    or "agreement_run_id" not in report[side]
+                    or "agreement_run_id" not in inputs[side]
+                    or "agreement" not in inputs[side]
+                    or report[side]["agreement_run_id"] != inputs[side]["agreement_run_id"]
+                ):
+                    raise ValueError("Comparison requires agreement run references")
+                if report[side]["input_digest"] != _digest(inputs[side]):
+                    raise ValueError("Comparison input digest mismatch")
+                _validate_gradings(inputs[side]["gradings"])
     else:
         if not isinstance(report.get("agreement_protocol"), dict):
             raise ValueError("Agreement protocol is missing")
@@ -262,6 +275,25 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
         inputs = read(run_id, "comparison-inputs.json")
         if run.data.tags.get("comparison_digest") != report.get("digest"):
             raise ValueError("Comparison digest mismatch")
+        links = {}
+        if report.get("comparison_contract") == "comparison-v2":
+            links["source_repeatabilities"] = {}
+            for side in ("baseline", "candidate"):
+                repeatability_id = inputs[side]["run_id"]
+                repeatability_run = tracking.get_run(repeatability_id)
+                links[side] = {"repeatability": _run_link(uri, repeatability_run, repeatability_id)}
+                links["source_repeatabilities"][side] = from_mlflow(
+                    "repeatability", repeatability_id, cache_dir, tracking_uri=uri
+                )
+        else:
+            for side in ("baseline", "candidate"):
+                snapshot = inputs[side]
+                agreement_id = snapshot["agreement_run_id"]
+                answers_id = snapshot["bundle"]["source_run_id"]
+                links[side] = {
+                    "agreement": _run_link(uri, tracking.get_run(agreement_id), agreement_id),
+                    "answers": _run_link(uri, tracking.get_run(answers_id), answers_id),
+                }
     elif kind == "repeatability":
         report = read(run_id, "repeatability-result.json")
         inputs = read(run_id, "repeatability-inputs.json")

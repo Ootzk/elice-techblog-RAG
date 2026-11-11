@@ -12,7 +12,36 @@ from elice_knowledge.repeatability import (
     model_boundary_changes,
     model_boundary_levels,
     question_average_levels,
+    resource_levels,
 )
+
+
+def test_resource_levels_exclude_failed_and_missing_observations():
+    snapshots = [
+        {
+            "bundle": {
+                "cases": [
+                    {
+                        "record_id": "q1",
+                        "error": None,
+                        "duration_ms": 1000,
+                        "result": {"usage": {"prompt_tokens": 100}},
+                    }
+                ]
+            }
+        },
+        {
+            "bundle": {
+                "cases": [
+                    {"record_id": "q1", "error": "timeout", "duration_ms": 9000, "result": None}
+                ]
+            }
+        },
+    ]
+    rows = {row["metric"]: row for row in resource_levels(snapshots, ["q1"])}
+    assert rows["qa_duration_ms"]["mean"] == 1000
+    assert rows["input_tokens"]["observed_runs"] == 1
+    assert rows["cached_input_tokens"]["mean"] is None
 
 
 def test_boundary_levels_weight_answers_runs_equally_and_keep_raters_separate():

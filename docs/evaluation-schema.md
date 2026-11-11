@@ -34,7 +34,7 @@ flowchart TD
     IA2 -. 참조 .-> RA
     IB1 -. 참조 .-> RB["repeatability B"]
     IB2 -. 참조 .-> RB
-    RA -. 참조 .-> CMP["comparison A ↔ B · 반복 입력 방식 설계 중"]
+    RA -. 참조 .-> CMP["comparison A ↔ B"]
     RB -. 참조 .-> CMP
 ```
 
@@ -45,20 +45,25 @@ flowchart TD
 | answers → agreement | 1:N. agreement 하나는 answers 하나에서 선택한 grading들을 분석한다. 다른 선택으로 다시 분석할 수 있다. |
 | grading ↔ agreement | 참조 관계. agreement는 grading 여러 개를 읽고, 원본 grading은 다른 agreement에서도 재사용할 수 있다. |
 | agreement → repeatability | 같은 조건의 서로 다른 answers에서 나온 agreement 두 개 이상을 참조한다. |
-| repeatability → comparison | 조건 A와 B의 반복 결과를 참조하는 목표 구조다. |
+| repeatability → comparison | 서로 다른 조건의 반복 결과 두 개를 입력으로 참조한다. |
 
 agreement는 같은 모델의 여러 회차를 별도 관측으로 보존하고, Cohen κ를 회차 쌍별로 계산한다.
 회차 등급을 평균·다수결로 합쳐 하나의 평가자로 만들지 않는다. repeatability에서는 같은 조건의
 여러 answers를 질문 ID로 연결하되, A1의 Judge 1회차와 A2의 Judge 1회차를 대응 관측으로 가정하지 않는다.
 agreement는 문항·평가 주체·프로필·항목별 등급 건수와 rubric 경계 충족 건수를 보존한다.
 repeatability는 이 집계만 읽고, 원본 grading을 다시 채점하거나 회차 번호를 대응시키지 않는다.
-`comparison`은 앞으로 조건 A/B의 차이를 보는 이름으로 사용하고 `condition_change`라는 별도 종류를 만들지 않는다.
+`comparison`은 조건 A/B의 차이를 보는 이름으로 사용하고 `condition_change`라는 별도 종류를 만들지 않는다.
 
 현재 `review.py agreement`는 answers 하나와 여러 grading 회차를 받아 agreement를 만든다.
-현재 `compare.py`의 `comparison-v1`은 agreement 한 쌍과
-평가 주체당 grading 하나씩만 받는다. 같은 조건의 A1/A2를 회차 번호끼리 대응시킨 결과는
-반복성의 최종 결과로 취급하지 않으며, 여러 answers·반복 grading을 받는 comparison 계약은 아직 설계 중이다.
-현재 CLI의 `system`·`judge` 비교 모드와 향후 조건 간 반복 비교의 범위도 이 설계에서 정리한다.
+조건 비교의 현재 계약은 `comparison-v2`다. `compare_repeated.py`가 같은 Dataset·rubric·평가 주체·
+채점 반복 횟수를 가진 Repeatability A/B를 입력받는다. 조건별 답변 생성 횟수는 보고서에 명시한다.
+두 조건에서 모두 유효한 질문의 경계 충족률을 질문별로 대응시켜 같은 비중으로 평균하고,
+각 조건의 저장된 시행 간 변화폭과 생성 실패를 나란히 표시한다. Judge 회차를 서로 대응시키거나
+원본 grading을 재채점하지 않는다. 소수 문항 결과의 유의성·인과관계는 추정하지 않는다.
+시간과 토큰도 Repeatability에서 성공한 답변의 질문별 시행 평균과 관측 수를 저장한다. Comparison은
+양쪽에서 값이 있는 질문을 같은 비중으로 평균한다. 캐시 입력 토큰은 입력 토큰에 포함되며,
+실패 또는 미기록 값은 제외하고 관측 문항·시행 수를 표시한다.
+기존 `compare.py`의 `comparison-v1`은 Agreement 한 쌍의 개발용 비교 계약으로 남아 있다.
 
 ## Run과 계보
 
@@ -72,7 +77,7 @@ answers A1: 고정된 질문·기대 조건·답변·문맥
 
 agreement: 같은 A1에 연결된 지정 grading들의 정합성
 repeatability: 같은 조건의 여러 agreement에 저장된 rubric 경계 분포 비교
-comparison-v1: 현재는 agreement 한 쌍 비교; 향후 조건 A/B의 반복 결과 비교로 확장 예정
+comparison-v2: 서로 다른 조건의 repeatability 두 개 비교
 ```
 
 | 종류 | 단위 | 주요 artifact | Metrics |
@@ -81,7 +86,8 @@ comparison-v1: 현재는 agreement 한 쌍 비교; 향후 조건 A/B의 반복 �
 | grading | 한 주체가 answers 전체를 채점한 1회 | grading-result.json, rater-profile.json | rubric 등급 평균·분포·상태별 건수, 선택적 Ragas 진단 |
 | agreement | 같은 답변에 대한 지정 grading 집합 | agreement.json, grading-inputs.json | 항목별 일치율·가중 κ·다자 계수 |
 | repeatability | 같은 조건의 서로 다른 answers에 대한 agreement 2개 이상 | repeatability-result.json, repeatability-inputs.json | 시행·주체·항목별 전체 문항 등급 건수와 rubric 경계 충족 건수·비율 |
-| comparison-v1 · 현재 | agreement A/B 한 쌍, 주체당 grading 하나 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·bootstrap 구간·문항 전이·공통 표본의 계수 차이 |
+| comparison-v2 · 조건 비교 | repeatability A/B 한 쌍 | comparison-result.json, comparison-inputs.json | 대응 질문의 경계 충족률·조건별 시행 간 변화폭·생성 실패 |
+| comparison-v1 · 개발용 | agreement A/B 한 쌍, 주체당 grading 하나 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·bootstrap 구간·문항 전이·공통 표본의 계수 차이 |
 
 `evaluation.kind` 태그로 run 종류를 구분한다. grading은 `mlflow.parentRunId`와
 source_run_id로 answers에 연결한다. agreement·comparison은 입력 run과 해시를 artifact로 기록하며

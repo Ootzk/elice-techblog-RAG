@@ -21,7 +21,7 @@ VS Code에서는 `tools/reporting/.venv/bin/python`을 커널로 선택하고 ML
 | --- | --- | --- |
 | agreement.ipynb | 완료된 agreement run | 평가 조건·평가 주체·rubric·가중 κ·문항별 등급·사유·문맥 |
 | repeatability.ipynb | 같은 조건의 완료된 repeatability run | 평가 조건·시행 간 Wasserstein 변화폭·문항별 경계 충족률 히트맵 |
-| comparison.ipynb | 완료된 comparison run | 조건 차이·공통 관측의 등급/자원 변화·구간·정합성 차이·A/B 답변 |
+| comparison.ipynb | 완료된 comparison-v2 run | Repeatability A/B의 조건 차이·경계 충족률·시행 간 변화폭·시간·토큰·생성 실패·문항별 비교 |
 
 템플릿을 복사한 뒤 설정 셀을 바꿔 순서대로 실행한다.
 
@@ -32,7 +32,7 @@ REPORT_TITLE = "실험 제목"
 OUTPUT_HTML = ROOT / "artifacts/reports/my-agreement.html"
 ```
 
-RUN_ID를 비우면 최근 완료 run 목록을 표시한다. 기본은 실제 MLflow이며 `demo`는 명시적으로 선택한다.
+Comparison 템플릿은 `comparison-v2`의 `RUN_ID`를 지정한다. 로컬 artifact를 읽을 때는 `SOURCE_MODE="local"`을 선택한다.
 연결은 `MLFLOW_TRACKING_URI`와 필요한 username/password 또는 token 환경변수를 사용한다.
 `import mlflow`·`mlflow.MlflowClient()`로 추가 조회할 수 있다.
 
@@ -51,7 +51,7 @@ rubric·입력·프로필 hash를 확인하며 이전 이진 계약은 거부한
 해당 grading의 `review.provenance=synthetic` 태그를 읽어 평가자 범례에도 구분한다.
 
 로컬 모드는 `SOURCE_MODE="local"`과 LOCAL_REPORT·LOCAL_INPUTS를 설정한다.
-comparison은 comparison-result.json·comparison-inputs.json을 사용한다. agreement는 agreement.json과
+comparison은 두 Repeatability를 입력으로 한 comparison-v2의 comparison-result.json·comparison-inputs.json을 사용한다. agreement는 agreement.json과
 `{"bundle": <answers bundle>, "gradings": <grading manifest 목록>}`을 사용하며 profiles에
 프로필 hash→원문을 선택적으로 포함한다. 다운로드한 data.report·data.inputs도 저장해 사용할 수 있다.
 repeatability는 repeatability-result.json·repeatability-inputs.json을 사용한다.

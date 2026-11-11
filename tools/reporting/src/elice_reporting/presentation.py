@@ -22,20 +22,20 @@ def report_purpose_callout(kind):
         ),
         "comparison": (
             "두 실험에서 무엇이 달라졌는가?",
-            "두 실험의 답변 품질과 평가 결과를 나란히 비교합니다. "
-            "공통으로 비교할 수 있는 질문을 기준으로 차이를 보여주며, "
-            "차이의 원인까지 단정하지는 않습니다.",
+            "조건 A와 B에서 답변을 각각 여러 번 만든 결과를 나란히 봅니다. "
+            "공통 질문의 품질 수준, 답변 시행 사이의 변화폭, 생성 실패를 비교합니다. "
+            "차이의 원인은 제시하지 않습니다.",
         ),
     }
     title, description = messages[kind]
     return pn.pane.HTML(
         '<section style="background:#edf5f7;border-left:4px solid #16818a;'
-        'border-radius:10px;padding:16px 20px;margin:4px 0 20px;'
+        "border-radius:10px;padding:16px 20px;margin:4px 0 20px;"
         'color:#24404d;font:14px/1.7 system-ui,sans-serif">'
         '<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:7px">'
         '<span style="background:#d6ecec;color:#08636b;border-radius:5px;'
         'padding:2px 8px;font-size:12px;font-weight:750;letter-spacing:.04em">'
-        f'{escape(kind.upper())}</span>'
+        f"{escape(kind.upper())}</span>"
         f'<strong style="font-size:16px">{escape(title)}</strong></div>'
         f'<p style="margin:0;color:#526571">{escape(description)}</p></section>',
         sizing_mode="stretch_width",

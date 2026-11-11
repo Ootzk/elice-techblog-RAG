@@ -2,6 +2,8 @@
 
 from collections import defaultdict
 from itertools import combinations
+from math import isfinite
+from numbers import Real
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import validate_bundle
@@ -9,6 +11,42 @@ from elice_knowledge.evaluation_schema import SCHEMA
 
 CONTRACT = "repeatability-v1"
 MODEL_MEAN = "aggregate:models"
+
+
+def resource_levels(snapshots, record_ids):
+    """Summarize successful answers per question, retaining observation counts."""
+    fields = {
+        "input_tokens": "prompt_tokens",
+        "cached_input_tokens": "cached_tokens",
+        "output_tokens": "completion_tokens",
+        "total_tokens": "total_tokens",
+    }
+    metrics = ("qa_duration_ms", *fields)
+    result = []
+    for record_id in record_ids:
+        for metric in metrics:
+            values = []
+            for snapshot in snapshots:
+                case = next(c for c in snapshot["bundle"]["cases"] if c["record_id"] == record_id)
+                if case["error"]:
+                    continue
+                value = (
+                    case.get("duration_ms")
+                    if metric == "qa_duration_ms"
+                    else ((case.get("result") or {}).get("usage") or {}).get(fields[metric])
+                )
+                if isinstance(value, Real) and not isinstance(value, bool) and isfinite(value):
+                    values.append(value)
+            result.append(
+                {
+                    "record_id": record_id,
+                    "metric": metric,
+                    "mean": sum(values) / len(values) if values else None,
+                    "observed_runs": len(values),
+                    "possible_runs": len(snapshots),
+                }
+            )
+    return result
 
 
 def boundary_levels(rows, run_ids, record_ids, rater_dimensions, boundary_names):
@@ -486,6 +524,7 @@ def build(snapshots):
             levels, model_levels, question_averages, record_ids, dimensions, boundary_names
         ),
         model_boundary_changes=model_boundary_changes(changes, dimensions, boundary_names),
+        resource_levels=resource_levels(snapshots, record_ids),
         summaries=summaries,
     )
     report["digest"] = digest(report)

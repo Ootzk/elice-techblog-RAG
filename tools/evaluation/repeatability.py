@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from elice_knowledge.evaluation_bundle import SCHEMA as ANSWERS_SCHEMA
+from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA, tags
 from elice_knowledge.repeatability import build
 from elice_knowledge.settings import Settings
@@ -29,11 +30,17 @@ def snapshot(tracking, run_id, directory):
     agreement = artifact(tracking, run_id, "agreement.json", directory)
     source_id = agreement["source_run_id"]
     source = tracking.get_run(source_id)
-    bundle = artifact(tracking, source_id, "evaluation-bundle.json", directory)
+    bundle = validate_bundle(
+        artifact(tracking, source_id, "evaluation-bundle.json", directory)
+    )
     if (
         source.data.tags.get("evaluation.schema") != ANSWERS_SCHEMA
         or source.data.tags.get("evaluation.kind") != "answers"
-        or source.info.status != "FINISHED"
+        or source.info.status not in {"FINISHED", "FAILED"}
+        or (
+            source.info.status == "FAILED"
+            and not any(case["error"] for case in bundle["cases"])
+        )
         or run.data.tags.get("source_run_id") != source_id
         or run.data.tags.get("source_bundle_digest") != bundle.get("digest")
     ):
