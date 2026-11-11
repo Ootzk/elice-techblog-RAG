@@ -14,7 +14,7 @@ from mcp import types
 from mcp.server.lowlevel import Server
 from mcp.server.transport_security import TransportSecuritySettings
 
-from elice_knowledge.retrieval import latest_index_key
+from elice_knowledge.retrieval import IndexSelectionError, active_index_key
 from elice_knowledge.settings import Settings
 from elice_knowledge.tools import (
     TOOL_CONTRACTS,
@@ -47,7 +47,9 @@ def _error(message: str) -> types.CallToolResult:
 
 def call_tool(settings: Settings, name: str, arguments: dict | None) -> types.CallToolResult:
     try:
-        index_key = latest_index_key(settings)
+        index_key = active_index_key(settings)
+    except IndexSelectionError:
+        return _error("Multiple matching indexes; configure corpus and chunk policy")
     except Exception:
         return _error("Knowledge index is temporarily unavailable")
     if index_key is None:

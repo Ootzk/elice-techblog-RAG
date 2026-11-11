@@ -16,9 +16,7 @@ def load_tool(name):
     return module
 
 
-def test_export_is_blind_does_not_overwrite_human_labels_and_leaves_no_downloads(
-    tmp_path, monkeypatch
-):
+def test_export_is_blind_does_not_overwrite_packet_and_leaves_no_downloads(tmp_path, monkeypatch):
     tool = load_tool("review")
     records = [dict(id="r", inputs={"question": "Q"}, expectations={"answerable": False})]
     cases = [
@@ -48,9 +46,9 @@ def test_export_is_blind_does_not_overwrite_human_labels_and_leaves_no_downloads
         "sys.argv", ["review", "export", "--source-run-id", "source", "--output-dir", str(tmp_path)]
     )
     tool.main()
-    assert {p.name for p in tmp_path.iterdir()} == {"review-packet.json", "human-labels.jsonl"}
+    assert {p.name for p in tmp_path.iterdir()} == {"review-packet.json"}
     assert "SECRET-GENERATOR" not in (tmp_path / "review-packet.json").read_text()
-    original = (tmp_path / "human-labels.jsonl").read_text()
+    original = (tmp_path / "review-packet.json").read_text()
     with pytest.raises(FileExistsError):
         tool.main()
-    assert (tmp_path / "human-labels.jsonl").read_text() == original
+    assert (tmp_path / "review-packet.json").read_text() == original

@@ -189,6 +189,9 @@ def main():
                     "records": load_records(path, kind),
                     "tags": {
                         "dataset_kind": kind,
+                        "default_rubric_id": __import__(
+                            "elice_knowledge.rubrics", fromlist=["load_rubric"]
+                        ).load_rubric(kind)["id"],
                         "source_path": f"tools/evaluation/{kind}_set/{kind}.jsonl",
                         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                     },

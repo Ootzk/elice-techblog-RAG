@@ -89,6 +89,8 @@ class ReleaseContractTests(unittest.TestCase):
                         "WEB_RESULT": "success",
                         "KNOWLEDGE_REQUIRED": "true",
                         "KNOWLEDGE_RESULT": "success",
+                        "REPORTING_REQUIRED": "true",
+                        "REPORTING_RESULT": "success",
                         "RELEASE_PR": release_pr,
                         "HAS_IMAGES": images,
                         "IMAGES_RESULT": image_result,

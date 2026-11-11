@@ -52,6 +52,7 @@ def service(store, monkeypatch):
     config.update(
         code_identity=code_identity(),
         provider_identity=provider_identity(settings),
+        experiment_conditions={"schema": "experiment-conditions-v1"},
         index_key="b" * 64,
         top_k=5,
         prompts=registry_prompts(),
@@ -278,7 +279,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
 
     monkeypatch.setattr("elice_knowledge.execution.run_qa", answer)
 
-    links, params = [], {}
+    links, params, artifacts = [], {}, {}
 
     class Tracking:
         def get_experiment_by_name(self, *a):
@@ -292,6 +293,9 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
 
         def log_param(self, run_id, key, value):
             params[key] = value
+
+        def log_dict(self, run_id, value, name):
+            artifacts[name] = value
 
         def __getattr__(self, name):
             return lambda *a, **kw: None
@@ -307,6 +311,14 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     records[0]["inputs"]["question"] = "changed after snapshot"
     assert process_one(service)
     assert calls[0]["question"] == "Q" and "GOLD" not in str(calls)
+    assert (
+        artifacts["experiment-conditions.json"] == service.profile(PROFILE)["experiment_conditions"]
+    )
+    assert (
+        artifacts["evaluation-bundle.json"]["qa_profile"]["experiment_conditions"]
+        == artifacts["experiment-conditions.json"]
+    )
+    assert "experiment_conditions_digest" in params
     assert sorted(uri for _, uri in links) == sorted(f"prompts:/{n}/1" for n in PROMPT_NAMES)
     assert params[f"prompt.{PROMPT_NAMES[0]}.digest"] == bundled(PROMPT_NAMES[0]).digest
     client = TestClient(
@@ -314,7 +326,7 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
     result = client.get(f"/api/evaluations/{job_id}").json()
     assert result["status"] == "completed"
-    assert result["summary"]["evidence_recall"] == 1
+    assert "evidence_recall" not in result["summary"]
     assert (
         client.get(f"/api/evaluations/{job_id}/cases").json()["items"][0]["scores"][
             "answerability_correct"
@@ -323,18 +335,14 @@ def test_evaluation_uses_only_inputs_and_persists_scores(service, monkeypatch):
     )
 
 
-def test_scorer_requires_url_and_actual_quote():
-    expectations = {
-        "answerable": True,
-        "evidence": [{"url": "https://elice.io/ko/a", "quote": "실제 근거"}],
+def test_answerability_is_a_deterministic_status_check_only():
+    assert score({"status": "answered"}, {"answerable": True}) == {"answerability_correct": 1}
+    assert score({"status": "insufficient_evidence"}, {"answerable": True}) == {
+        "answerability_correct": 0
     }
-    result = {
-        "status": "answered",
-        "retrieved_sources": [{"url": "https://elice.io/ko/a#h2", "text": "실제\n 근거"}],
+    assert score({"status": "insufficient_evidence"}, {"answerable": False}) == {
+        "answerability_correct": 1
     }
-    assert score(result, expectations)["evidence_recall"] == 1
-    result["retrieved_sources"][0]["text"] = "무관한 내용"
-    assert score(result, expectations)["evidence_recall"] == 0
 
 
 def test_global_worker_concurrency_and_profile_drift(service):
@@ -605,8 +613,13 @@ def test_revoked_admin_does_not_return_when_bootstrap_is_repeated(service):
     assert owner["role"] == "admin"
 
 
-def test_evaluation_rejects_profiles_resolved_from_bundled_prompts(service):
-    config = {"prompts": {n: bundled(n, "registry_unavailable").model_dump() for n in PROMPT_NAMES}}
+@pytest.mark.parametrize("missing", ["prompts", "experiment_conditions"])
+def test_evaluation_rejects_incomplete_experiment_profiles(service, missing):
+    config = (
+        {"prompts": {n: bundled(n, "registry_unavailable").model_dump() for n in PROMPT_NAMES}}
+        if missing == "prompts"
+        else {"experiment_conditions": {}}
+    )
     with service.connection() as conn:
         base = conn.execute("SELECT config FROM qa_profiles WHERE key=%s", (PROFILE,)).fetchone()
         conn.execute(
@@ -621,25 +634,41 @@ def test_evaluation_rejects_profiles_resolved_from_bundled_prompts(service):
     )
     with pytest.raises(ServiceError) as error:
         enqueue_evaluation(service, request)
-    assert error.value.code == "evaluation_requires_registry_prompts"
+    assert error.value.code == (
+        "evaluation_requires_registry_prompts"
+        if missing == "prompts"
+        else "evaluation_requires_experiment_conditions"
+    )
     assert error.value.status == 409
 
 
 def test_experiment_profile_api_pins_prompt_selectors(service, monkeypatch):
     seen = []
 
-    def active(self, index_key=None, top_k=5, prompt_selectors=None):
-        seen.append((index_key, top_k, prompt_selectors))
+    def active(
+        self,
+        index_key=None,
+        top_k=5,
+        prompt_selectors=None,
+        generation_options=None,
+        embedding_options=None,
+    ):
+        seen.append((index_key, top_k, prompt_selectors, generation_options, embedding_options))
         return PROFILE
 
     monkeypatch.setattr(ServiceStore, "active_profile", active)
     client = TestClient(
         create_app(service.settings), headers={"Authorization": "Bearer test-admin"}
     )
-    body = {"top_k": 3, "prompts": {PROMPT_NAMES[0]: "7"}}
+    body = {
+        "top_k": 3,
+        "prompts": {PROMPT_NAMES[0]: "7"},
+        "generation_options": {"temperature": 0.1},
+        "embedding_options": {"dimensions": 2},
+    }
     response = client.post("/api/qa-profiles", json=body)
     assert response.status_code == 201 and response.json()["key"] == PROFILE
-    assert seen == [(None, 3, {PROMPT_NAMES[0]: "7"})]
+    assert seen == [(None, 3, {PROMPT_NAMES[0]: "7"}, {"temperature": 0.1}, {"dimensions": 2})]
     summary = response.json()["prompts"][PROMPT_NAMES[0]]
     assert summary["source"] == "registry" and "template" not in summary
     assert client.post("/api/qa-profiles", json={"unexpected": 1}).status_code == 422
@@ -660,7 +689,7 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
         "elice_knowledge.evaluation.dataset_snapshot",
         lambda *a: {"kind": "gold", "digest": "d" * 64, "records": [record]},
     )
-    specs = [{"name": "qa-gold-chatgpt", "version": 1}]
+    specs = [{"name": "qa-gold-chatgpt", "version": 1, "rater": "chatgpt"}]
     monkeypatch.setattr("elice_knowledge.evaluation.frozen_judges", lambda *a: specs)
 
     class Tracking:
@@ -685,19 +714,12 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
     )
     seen = []
 
-    def judge(settings, run_id, records, cases, frozen):
+    def judge(store, bundle, frozen):
         seen.append(frozen)
-        assert cases[0]["error"] is None
-        return {}, [
-            {
-                "record_id": "r1",
-                "judges": {
-                    "qa-gold-chatgpt": {"value": False, "rationale": "missing", "version": 1}
-                },
-            }
-        ]
+        assert bundle["cases"][0]["error"] is None
+        return [{"run_id": "model-child", "state": "FINISHED", "rater_id": "model:chatgpt"}]
 
-    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_answers", judge)
+    monkeypatch.setattr("elice_knowledge.evaluation.evaluate_models", judge)
     job_id = enqueue_evaluation(
         service,
         EvaluationRequest(
@@ -705,18 +727,25 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
             dataset_digest="d" * 64,
             qa_profile_key=PROFILE,
             scorer_profile_key=SCORER_KEY,
+            judge_options={"chatgpt": {"temperature": 0.3}},
         ),
     )
     specs[0]["version"] = 2
     process_one(service)
     assert seen[0][0]["version"] == 1
+    assert seen[0][0]["request_options"] == {"temperature": 0.3}
     with service.connection() as conn:
         case = conn.execute(
             "SELECT scores FROM evaluation_cases WHERE evaluation_id=%s", (job_id,)
         ).fetchone()
         job = conn.execute("SELECT status FROM qa_jobs WHERE id=%s", (job_id,)).fetchone()
     assert job["status"] == "completed"
-    assert case["scores"]["qa-gold-chatgpt"] == 0.0
+    assert "qa-gold-chatgpt" not in case["scores"]
+    with service.connection() as conn:
+        summary = conn.execute(
+            "SELECT summary FROM evaluation_runs WHERE id=%s", (job_id,)
+        ).fetchone()["summary"]
+    assert summary["grading_runs"][0]["run_id"] == "model-child"
 
 
 @pytest.mark.parametrize("changed_field", ["code_identity", "provider_identity"])

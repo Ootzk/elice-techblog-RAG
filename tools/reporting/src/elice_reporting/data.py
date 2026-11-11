@@ -1,0 +1,476 @@
+"""Load frozen artifacts and normalize tables without evaluating models or statistics."""
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass, field
+from importlib.resources import files
+from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
+
+import pandas as pd
+
+
+@dataclass
+class ReportData:
+    kind: str
+    report: dict
+    inputs: dict
+    source: str
+    run_id: str | None = None
+    links: dict = field(default_factory=dict)
+
+
+def find_root(start=None):
+    start = Path(start or Path.cwd()).resolve()
+    for directory in (start, *start.parents):
+        if (directory / "AGENTS.md").is_file() and (directory / "apps").is_dir():
+            return directory
+    raise ValueError("Run the notebook within the project or supply the repository path")
+
+
+def _digest(value):
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _validate_gradings(gradings):
+    for grading in gradings:
+        if grading.get("schema") != "evaluation-v2":
+            raise ValueError("Unsupported grading schema")
+        if (
+            grading.get("contract") != "rubric-v1"
+            or grading.get("measurement_contract") != "ragas-diagnostics-v1"
+        ):
+            raise ValueError("Only rubric-v1 grading results are supported")
+
+
+def _validate(kind, report, inputs, source, run_id=None):
+    if (
+        kind not in {"agreement", "comparison", "repeatability"}
+        or report.get("schema") != "evaluation-v2"
+    ):
+        raise ValueError("Unsupported report schema or kind")
+    if kind == "repeatability":
+        if report.get("repeatability_contract") != "repeatability-v1":
+            raise ValueError("Unsupported repeatability contract")
+        if not isinstance(report.get("summaries"), list):
+            raise ValueError("Repeatability summary is missing")
+        if not isinstance(report.get("boundary_changes"), dict):
+            raise ValueError("Repeatability boundary change metrics are missing")
+        if not isinstance(report.get("boundary_levels"), list):
+            raise ValueError("Repeatability boundary level metrics are missing")
+        if not isinstance(report.get("model_boundary_levels"), list):
+            raise ValueError("Repeatability model boundary means are missing")
+        if not isinstance(report.get("question_average_levels"), list):
+            raise ValueError("Repeatability question averages are missing")
+        if not isinstance(report.get("dimension_average_levels"), list):
+            raise ValueError("Repeatability dimension averages are missing")
+        if not isinstance(report.get("model_boundary_changes"), dict):
+            raise ValueError("Repeatability model boundary changes are missing")
+        if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
+            raise ValueError("Repeatability content digest mismatch")
+        snapshots = inputs.get("agreements", [])
+        if len(snapshots) < 2 or len(snapshots) != len(report.get("agreements", [])):
+            raise ValueError("Repeatability requires agreement snapshots")
+        for expected, snapshot in zip(report["agreements"], snapshots, strict=True):
+            if (
+                "agreement_run_id" not in expected
+                or not {"agreement_run_id", "agreement"} <= snapshot.keys()
+            ):
+                raise ValueError("Repeatability requires agreement run references")
+            bundle, agreement = snapshot["bundle"], snapshot["agreement"]
+            if (
+                expected["agreement_run_id"] != snapshot["agreement_run_id"]
+                or expected["agreement_digest"] != _digest(agreement)
+                or expected["source_run_id"] != bundle["source_run_id"]
+                or expected["source_bundle_digest"] != bundle["digest"]
+                or bundle["digest"] != _digest({k: v for k, v in bundle.items() if k != "digest"})
+                or agreement.get("source_digest") != bundle["digest"]
+            ):
+                raise ValueError("Repeatability input binding mismatch")
+            grading_runs = snapshot.get("grading_runs")
+            if grading_runs is not None and [g["run_id"] for g in grading_runs] != agreement.get(
+                "grading_run_ids", []
+            ):
+                raise ValueError("Repeatability grading run metadata mismatch")
+    elif kind == "comparison":
+        contract = report.get("comparison_contract")
+        if contract not in {"comparison-v1", "comparison-v2"}:
+            raise ValueError("Unsupported comparison contract")
+        if not {"baseline", "candidate"} <= inputs.keys():
+            raise ValueError("Comparison requires both input snapshots")
+        if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
+            raise ValueError("Comparison content digest mismatch")
+        for side in ("baseline", "candidate"):
+            if contract == "comparison-v2":
+                snapshot = inputs[side]
+                if (
+                    report[side]["repeatability_run_id"] != snapshot.get("run_id")
+                    or report[side]["repeatability_digest"]
+                    != snapshot.get("report", {}).get("digest")
+                    or snapshot["report"]["digest"]
+                    != _digest({k: v for k, v in snapshot["report"].items() if k != "digest"})
+                ):
+                    raise ValueError("Comparison repeatability input binding mismatch")
+            else:
+                if (
+                    not isinstance(report.get(side), dict)
+                    or "agreement_run_id" not in report[side]
+                    or "agreement_run_id" not in inputs[side]
+                    or "agreement" not in inputs[side]
+                    or report[side]["agreement_run_id"] != inputs[side]["agreement_run_id"]
+                ):
+                    raise ValueError("Comparison requires agreement run references")
+                if report[side]["input_digest"] != _digest(inputs[side]):
+                    raise ValueError("Comparison input digest mismatch")
+                _validate_gradings(inputs[side]["gradings"])
+    else:
+        if not isinstance(report.get("agreement_protocol"), dict):
+            raise ValueError("Agreement protocol is missing")
+        bundle = inputs.get("bundle", {})
+        if bundle.get("digest") != _digest({k: v for k, v in bundle.items() if k != "digest"}):
+            raise ValueError("Agreement bundle digest mismatch")
+        if report.get("source_run_id") != bundle.get("source_run_id") or report.get(
+            "source_digest"
+        ) != bundle.get("digest"):
+            raise ValueError("Agreement input binding mismatch")
+        _validate_gradings(inputs["gradings"])
+        rubric_digest = report.get("rubric_digest")
+        if rubric_digest != _digest(report.get("rubric")) or any(
+            g.get("rubric_digest") != rubric_digest or _digest(g.get("rubric")) != rubric_digest
+            for g in inputs["gradings"]
+        ):
+            raise ValueError("Agreement requires the same rubric snapshot")
+        expected = {g["rater_profile_digest"] for g in inputs["gradings"]}
+        for key, profile in inputs.get("profiles", {}).items():
+            if key not in expected or _digest(profile) != key:
+                raise ValueError("Agreement grading profile binding mismatch")
+            if profile.get("rubric_digest") != rubric_digest:
+                raise ValueError("Agreement grading rubric binding mismatch")
+    return ReportData(kind, report, inputs, source, run_id)
+
+
+def from_files(kind, report_path, inputs_path):
+    """Agreement inputs contain bundle+gradings; comparison uses comparison-inputs.json."""
+    return _validate(
+        kind,
+        json.loads(Path(report_path).read_text()),
+        json.loads(Path(inputs_path).read_text()),
+        "local",
+    )
+
+
+def demo(kind):
+    if kind not in {"agreement", "comparison", "repeatability"}:
+        raise ValueError("Unknown demo kind")
+    content = json.loads(files("elice_reporting").joinpath("examples", kind + ".json").read_text())
+    return _validate(kind, content["report"], content["inputs"], "demo")
+
+
+def _run_link(uri, run, identity):
+    parts = urlsplit(uri)
+    experiment = getattr(run.info, "experiment_id", None)
+    url = None
+    if parts.scheme in {"http", "https"} and parts.netloc and experiment is not None:
+        base = urlunsplit(
+            (parts.scheme, parts.netloc.rsplit("@", 1)[-1], parts.path.rstrip("/"), "", "")
+        )
+        url = (
+            f"{base}/#/experiments/{quote(str(experiment), safe='')}"
+            f"/runs/{quote(identity, safe='')}"
+        )
+    return {"run_id": identity, "url": url}
+
+
+def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
+    """Read-only MLflow access. Does not create runs, upload artifacts or invoke models."""
+    import mlflow
+    from mlflow.exceptions import MlflowException
+
+    tracking = mlflow.MlflowClient(tracking_uri=tracking_uri)
+    uri = tracking_uri or mlflow.get_tracking_uri()
+    links = {}
+
+    def read(identity, filename):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", identity):
+            raise ValueError("Invalid run ID")
+        directory = Path(cache_dir) / identity
+        directory.mkdir(parents=True, exist_ok=True)
+        path = tracking.download_artifacts(identity, filename, str(directory))
+        return json.loads(Path(path).read_text())
+
+    run = tracking.get_run(run_id)
+    if (
+        run.info.status != "FINISHED"
+        or run.data.tags.get("evaluation.kind") != kind
+        or run.data.tags.get("evaluation.schema") != "evaluation-v2"
+    ):
+        raise ValueError("Select a finished compatible reporting run")
+    if kind == "agreement":
+        report = read(run_id, "agreement.json")
+        original = tracking.get_run(report["source_run_id"])
+        if original.data.tags.get("evaluation.kind") != "answers":
+            raise ValueError("Invalid agreement source run")
+        links = {"answers": _run_link(uri, original, report["source_run_id"]), "gradings": []}
+        inputs = {
+            "bundle": read(report["source_run_id"], "evaluation-bundle.json"),
+            "gradings": read(run_id, "grading-inputs.json")["results"],
+        }
+        if run.data.tags.get("source_bundle_digest") != inputs["bundle"]["digest"]:
+            raise ValueError("Agreement source digest mismatch")
+        profiles = {}
+        expected = {g["rater_profile_digest"] for g in inputs["gradings"]}
+        for grading_id in report.get("grading_run_ids", []):
+            grade = tracking.get_run(grading_id)
+            profile = read(grading_id, "rater-profile.json")
+            key = _digest(profile)
+            if (
+                grade.data.tags.get("evaluation.kind") != "grading"
+                or grade.data.tags.get("source_run_id") != report["source_run_id"]
+                or grade.data.tags.get("source_bundle_digest") != inputs["bundle"]["digest"]
+                or grade.data.tags.get("rater_profile_digest") != key
+                or key not in expected
+            ):
+                raise ValueError("Agreement grading profile binding mismatch")
+            profiles[key] = profile
+            links["gradings"].append(
+                {
+                    **_run_link(uri, grade, grading_id),
+                    "rater": grade.data.tags.get("rater_id"),
+                    "round": grade.data.tags.get("round"),
+                    "profile_digest": key,
+                    "synthetic": grade.data.tags.get("review.provenance") == "synthetic",
+                }
+            )
+            if profile.get("type") == "model":
+                artifacts = {item.path for item in tracking.list_artifacts(grading_id)}
+                if "judge-efficiency.json" in artifacts:
+                    efficiency = read(grading_id, "judge-efficiency.json")
+                    if (
+                        efficiency.get("schema") != "judge-efficiency-v1"
+                        or efficiency.get("grading_run_id") != grading_id
+                    ):
+                        raise ValueError("Invalid judge efficiency artifact")
+                    links["gradings"][-1]["efficiency"] = efficiency
+                if "judge-model.json" in artifacts:
+                    identity = read(grading_id, "judge-model.json")
+                    endpoints = {spec.get("model") for spec in profile.get("scorers", [])}
+                    if (
+                        identity.get("schema") != "judge-model-v1"
+                        or identity.get("grading_run_id") != grading_id
+                        or identity.get("requested_endpoint") not in endpoints
+                        or not isinstance(identity.get("identified_models"), list)
+                    ):
+                        raise ValueError("Invalid judge model identity artifact")
+                    links["gradings"][-1]["model_identity"] = identity
+                observations = []
+                # Only older gradings need trace observations to identify the model.
+                traces = (
+                    []
+                    if "judge-model.json" in artifacts
+                    else tracking.search_traces(
+                        locations=[grade.info.experiment_id],
+                        filter_string=f"attributes.run_id = '{grading_id}'",
+                        max_results=3,
+                    )
+                )
+                for item in traces:
+                    try:
+                        trace = tracking.get_trace(item.info.trace_id)
+                    except MlflowException:
+                        observations.append(
+                            {"trace_id": item.info.trace_id, "models": [], "status": "unavailable"}
+                        )
+                        continue
+                    models = sorted(
+                        {
+                            span.attributes["mlflow.llm.model"]
+                            for span in trace.data.spans
+                            if isinstance(span.attributes.get("mlflow.llm.model"), str)
+                        }
+                    )
+                    observations.append({"trace_id": item.info.trace_id, "models": models})
+                links["gradings"][-1]["model_observations"] = observations
+        if profiles:
+            inputs["profiles"] = profiles
+    elif kind == "comparison":
+        report = read(run_id, "comparison-result.json")
+        inputs = read(run_id, "comparison-inputs.json")
+        if run.data.tags.get("comparison_digest") != report.get("digest"):
+            raise ValueError("Comparison digest mismatch")
+        links = {}
+        if report.get("comparison_contract") == "comparison-v2":
+            links["source_repeatabilities"] = {}
+            for side in ("baseline", "candidate"):
+                repeatability_id = inputs[side]["run_id"]
+                repeatability_run = tracking.get_run(repeatability_id)
+                links[side] = {"repeatability": _run_link(uri, repeatability_run, repeatability_id)}
+                links["source_repeatabilities"][side] = from_mlflow(
+                    "repeatability", repeatability_id, cache_dir, tracking_uri=uri
+                )
+        else:
+            for side in ("baseline", "candidate"):
+                snapshot = inputs[side]
+                agreement_id = snapshot["agreement_run_id"]
+                answers_id = snapshot["bundle"]["source_run_id"]
+                links[side] = {
+                    "agreement": _run_link(uri, tracking.get_run(agreement_id), agreement_id),
+                    "answers": _run_link(uri, tracking.get_run(answers_id), answers_id),
+                }
+    elif kind == "repeatability":
+        report = read(run_id, "repeatability-result.json")
+        inputs = read(run_id, "repeatability-inputs.json")
+        if run.data.tags.get("repeatability_digest") != report.get("digest"):
+            raise ValueError("Repeatability digest mismatch")
+        _validate(kind, report, inputs, "mlflow", run_id)
+        links = {"agreements": [], "source_agreements": []}
+        for snapshot in inputs.get("agreements", []):
+            agreement_run = tracking.get_run(snapshot["agreement_run_id"])
+            source_run = tracking.get_run(snapshot["bundle"]["source_run_id"])
+            if (
+                agreement_run.info.status != "FINISHED"
+                or agreement_run.data.tags.get("evaluation.kind") != "agreement"
+                or source_run.data.tags.get("evaluation.kind") != "answers"
+            ):
+                raise ValueError("Invalid repeatability lineage")
+            links["agreements"].append(
+                {
+                    "agreement": _run_link(uri, agreement_run, snapshot["agreement_run_id"]),
+                    "answers": _run_link(uri, source_run, snapshot["bundle"]["source_run_id"]),
+                }
+            )
+            links["source_agreements"].append(
+                from_mlflow(
+                    "agreement",
+                    snapshot["agreement_run_id"],
+                    cache_dir,
+                    tracking_uri=tracking_uri,
+                )
+            )
+    else:
+        raise ValueError("Unknown report kind")
+    data = _validate(kind, report, inputs, "mlflow", run_id)
+    data.links = links
+    return data
+
+
+def _identity(subject):
+    return f"{subject['rater']} · {subject['round']}회차"
+
+
+def _cases(bundle):
+    records = {r["id"]: r for r in bundle["records"]}
+    return pd.DataFrame(
+        [
+            dict(
+                record_id=c["record_id"],
+                question=records[c["record_id"]]["inputs"]["question"],
+                answer=(c.get("result") or {}).get("answer"),
+                error=c.get("error"),
+            )
+            for c in bundle["cases"]
+        ]
+    )
+
+
+def agreement_frames(data):
+    if data.kind != "agreement":
+        raise ValueError("Expected agreement data")
+    pairs = [
+        dict(
+            dimension=r["dimension"],
+            purpose=r["purpose"],
+            left=_identity(r["left"]),
+            right=_identity(r["right"]),
+            pair=_identity(r["left"]) + " ↔ " + _identity(r["right"]),
+            cohen_kappa=r["cohen_kappa"],
+            agreement=r["agreement"],
+            valid_pairs=r["valid_pairs"],
+            excluded_pairs=r["excluded_pairs"],
+            undefined_reason=r["kappa_undefined_reason"],
+        )
+        for r in data.report["comparisons"]
+    ]
+    panels = [
+        {k: v for k, v in r.items() if k not in {"members", "rater_coverage"}}
+        for r in data.report["panels"]
+    ]
+    labels = [
+        dict(
+            rater=g["rater_id"],
+            round=g["round"],
+            **{k: v for k, v in label.items() if k not in {"rater", "round"}},
+        )
+        for g in data.inputs["gradings"]
+        for label in g["ratings"]
+    ]
+    return dict(
+        pairs=pd.DataFrame(
+            pairs,
+            columns=[
+                "dimension",
+                "purpose",
+                "left",
+                "right",
+                "pair",
+                "cohen_kappa",
+                "agreement",
+                "valid_pairs",
+                "excluded_pairs",
+                "undefined_reason",
+            ],
+        ),
+        panels=pd.DataFrame(panels),
+        labels=pd.DataFrame(labels),
+        cases=_cases(data.inputs["bundle"]),
+    )
+
+
+def comparison_frames(data):
+    if data.kind != "comparison":
+        raise ValueError("Expected comparison data")
+
+    def summary(rows):
+        return pd.DataFrame(
+            [
+                {
+                    **{
+                        k: v
+                        for k, v in r.items()
+                        if k not in {"cases", "counts", "confidence_interval"}
+                    },
+                    **r["counts"],
+                    "ci_low": r["confidence_interval"][0] if r["confidence_interval"] else None,
+                    "ci_high": r["confidence_interval"][1] if r["confidence_interval"] else None,
+                }
+                for r in rows
+            ]
+        )
+
+    transitions = [
+        dict(metric=row["metric"], rater=row.get("rater", "QA resources"), **case)
+        for row in data.report["quality"] + data.report["resources"]
+        for case in row["cases"]
+    ]
+    pairs = [
+        dict(
+            dimension=r["dimension"],
+            purpose=r["purpose"],
+            raters=" ↔ ".join(r["raters"]),
+            baseline_kappa=r["baseline"]["cohen_kappa"],
+            candidate_kappa=r["candidate"]["cohen_kappa"],
+            delta_kappa=r["delta"]["cohen_kappa"],
+            paired_cases=len(r["paired_record_ids"]),
+        )
+        for r in data.report["reliability"]["pairs"]
+    ]
+    return dict(
+        quality=summary(data.report["quality"]),
+        resources=summary(data.report["resources"]),
+        transitions=pd.DataFrame(transitions),
+        pairs=pd.DataFrame(pairs),
+        conditions=pd.DataFrame(data.report["configuration_changes"]),
+        baseline_cases=_cases(data.inputs["baseline"]["bundle"]),
+        candidate_cases=_cases(data.inputs["candidate"]["bundle"]),
+    )

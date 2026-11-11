@@ -50,7 +50,7 @@
       "sha256": "6fe82fddd4c2683e2e22f29f343157a881a54d0b0e309183d036624e179a7eb1"
     },
     "README.md": {
-      "sha256": "fa33f66006f03c764cb0c4445f3d38005116920d44be030c14db69fc3d1010cb"
+      "sha256": "bef1f36a26594010fea069da89e1c365166cbf6ca564689608516482b1380092"
     }
   },
   "validation": {
@@ -59,11 +59,12 @@
     "evidence": "every positive quote is a whitespace-normalized literal substring of a frozen policy chunk",
     "absence_cases": "27-document context search and relevant article inspection; not lexical absence alone",
     "semantic_review": "human_reviewed",
-    "scorer_limitation": "evidence-v1 does not grade required_points, unacceptable_claims or cross-document synthesis",
+    "scorer_limitation": "Shared ordinal rubric depends on reference and required-point coverage and LLM judgment; new-scale human alignment has not been measured",
     "question_style": "user scenarios without article-title or benchmark-configuration lookup hints; nonessential numeric details are optional",
     "registration_tool": "tools/evaluation/register.py"
   },
   "reviewed_on": "2026-11-10",
   "human_reviewed_count": 22,
-  "pending_human_review_count": 0
+  "pending_human_review_count": 0,
+  "default_rubric_id": "gold-ordinal-v1"
 }

@@ -7,7 +7,7 @@ import subprocess
 
 
 def select_checks(paths, *, release_pr=False):
-    web = knowledge = release_pr
+    web = knowledge = reporting = release_pr
     for path in paths:
         if (
             path.startswith(
@@ -24,14 +24,20 @@ def select_checks(paths, *, release_pr=False):
             or path in {".gitignore", ".gitattributes", ".editorconfig", "LICENSE"}
         ):
             continue
+        elif path.startswith("tools/reporting/"):
+            reporting = True
         elif path.startswith("apps/web/"):
             web = True
         elif path.startswith(("apps/knowledge/", "tools/evaluation/")):
             knowledge = True
         else:
-            # Shared configuration, CI and unclassified paths affect both apps.
-            web = knowledge = True
-    return {"web": str(web).lower(), "knowledge": str(knowledge).lower()}
+            # Shared configuration, CI and unclassified paths affect all executable packages.
+            web = knowledge = reporting = True
+    return {
+        "web": str(web).lower(),
+        "knowledge": str(knowledge).lower(),
+        "reporting": str(reporting).lower(),
+    }
 
 
 def main():

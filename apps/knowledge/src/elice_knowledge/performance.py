@@ -10,6 +10,25 @@ TOKEN_FIELDS = {
 }
 
 
+def tool_counts(result):
+    """Return per-tool counts only when steps reconcile with the recorded total."""
+    from elice_knowledge.tools import TOOL_NAMES
+
+    steps = result.get("agent_steps")
+    total = result.get("tool_call_count")
+    if (
+        not isinstance(steps, list)
+        or type(total) is not int
+        or total < 0
+        or any(
+            not isinstance(step, dict) or not isinstance(step.get("action"), str) for step in steps
+        )
+    ):
+        return None
+    counts = {name: sum(step["action"] == name for step in steps) for name in TOOL_NAMES}
+    return counts if sum(counts.values()) == total else None
+
+
 def summarize(cases):
     metrics = {}
 

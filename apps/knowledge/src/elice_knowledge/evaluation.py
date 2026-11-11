@@ -1,24 +1,30 @@
 """Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
 from elice_knowledge.corpus import digest
-from elice_knowledge.evaluation_bundle import create_bundle
+from elice_knowledge.evaluation_bundle import SCHEMA, create_bundle
+from elice_knowledge.evaluation_schema import tags
 from elice_knowledge.execution import execute
-from elice_knowledge.judges import evaluate_answers, frozen_judges
+from elice_knowledge.experiment_conditions import SCHEMA as CONDITIONS_SCHEMA
+from elice_knowledge.experiment_conditions import mlflow_parameters
+from elice_knowledge.judge_runs import evaluate_models
+from elice_knowledge.judges import frozen_judges
 from elice_knowledge.performance import summarize as performance_summary
 from elice_knowledge.qa import QARequest
+from elice_knowledge.ragas_metrics import contract
+from elice_knowledge.rubrics import load_rubric
 from elice_knowledge.service_store import ServiceError
 from elice_knowledge.tracking import client as tracking_client
 
 SCORER = {
-    "name": "evidence-v1",
-    "evidence": "url-and-normalized-verbatim-quote",
+    "name": "rubric-v1",
+    "ragas": contract(),
+    "quality": "shared-rubric-ordinal-grading",
     "answerability": "answered-status-vs-expected",
-    "version": 1,
+    "version": 2,
 }
 SCORER_KEY = digest(SCORER)
 
@@ -83,6 +89,8 @@ def enqueue_evaluation(store, request):
     # Before/After comparisons must never silently mix in bundled fallback prompts.
     if any(p.get("source") != "registry" for p in (profile.get("prompts") or {None: {}}).values()):
         raise ServiceError("evaluation_requires_registry_prompts", 409)
+    if profile.get("experiment_conditions", {}).get("schema") != CONDITIONS_SCHEMA:
+        raise ServiceError("evaluation_requires_experiment_conditions", 409)
     if request.scorer_profile_key != SCORER_KEY:
         raise ServiceError("unknown_scorer_profile", 422)
     snapshot = dataset_snapshot(store.settings, request.dataset_id)
@@ -98,6 +106,11 @@ def enqueue_evaluation(store, request):
         raise ServiceError("evaluation_too_large", 422)
     kind = snapshot.get("kind", "gold")
     judges = frozen_judges(store.settings, kind) if store.settings.evaluation_judges_enabled else []
+    options = getattr(request, "judge_options", {})
+    if set(options) - {judge["rater"] for judge in judges}:
+        raise ServiceError("unknown_model_rater", 422)
+    for judge in judges:
+        judge["request_options"] = options.get(judge["rater"], {})
     if kind == "iron" and not judges:
         raise ServiceError("iron_requires_judges", 422)
     job_id = uuid4()
@@ -110,9 +123,11 @@ def enqueue_evaluation(store, request):
                 Jsonb(
                     {
                         "profile_key": request.qa_profile_key,
+                        "evaluation_schema": SCHEMA,
                         "scorer_key": SCORER_KEY,
                         "dataset_kind": kind,
                         "judges": judges,
+                        "rubric": load_rubric(kind),
                     }
                 ),
             ),
@@ -136,26 +151,12 @@ def score(result, expectations):
     values = {}
     if "answerable" in expectations:
         values["answerability_correct"] = float(answerable == expectations["answerable"])
-    evidence = expectations.get("evidence", [])
-
-    def url(value):
-        p = urlsplit(value)
-        return p.netloc.lower(), p.path.rstrip("/")
-
-    if evidence:
-        retrieved = result.get("retrieved_sources", [])
-        values["evidence_recall"] = sum(
-            any(
-                url(e["url"]) == url(s["url"])
-                and " ".join(e["quote"].split()) in " ".join(s["text"].split())
-                for s in retrieved
-            )
-            for e in evidence
-        ) / len(evidence)
     return values
 
 
 def run_evaluation(store, job):
+    if job["payload"].get("evaluation_schema") != SCHEMA:
+        raise ServiceError("unsupported_evaluation_schema", 409)
     with store.connection() as conn:
         evaluation = conn.execute(
             "SELECT * FROM evaluation_runs WHERE id=%s", (job["id"],)
@@ -168,10 +169,11 @@ def run_evaluation(store, job):
         else tracking.create_experiment(store.settings.qa_mlflow_experiment_name)
     )
     run_id = tracking.create_run(
-        exp_id, tags={"mlflow.runName": "dataset-qa", "activity": "evaluation"}
+        exp_id, tags=tags("answers", **{"mlflow.runName": "dataset-qa", "activity": "evaluation"})
     ).info.run_id
     with store.connection() as conn:
         conn.execute("UPDATE evaluation_runs SET mlflow_run_id=%s WHERE id=%s", (run_id, job["id"]))
+    source_finished = False
     try:
         for key, value in {
             "dataset_id": evaluation["dataset_id"],
@@ -182,6 +184,10 @@ def run_evaluation(store, job):
         }.items():
             tracking.log_param(run_id, key, value)
         profile = store.profile(evaluation["profile_key"])
+        conditions = profile["experiment_conditions"]
+        tracking.log_dict(run_id, conditions, "experiment-conditions.json")
+        for name, value in mlflow_parameters(conditions).items():
+            tracking.log_param(run_id, name, value)
         judge_specs = job["payload"].get("judges", [])
         tracking.log_dict(run_id, judge_specs, "judge-versions.json")
         tracking.set_tag(run_id, "dataset_kind", job["payload"].get("dataset_kind", "gold"))
@@ -214,40 +220,16 @@ def run_evaluation(store, job):
                 )
             cases.append(case)
         failed = sum(bool(c["error"]) for c in cases)
-        tracking.log_dict(
-            run_id, create_bundle(run_id, evaluation, profile, cases), "evaluation-bundle.json"
-        )
-        judge_metrics = {}
-        if judge_specs:
-            judge_metrics, judgments = evaluate_answers(
-                store.settings, run_id, evaluation["records"], cases, judge_specs
-            )
-            by_id = {row["record_id"]: row for row in judgments}
-            for case in cases:
-                if case["record_id"] in by_id:
-                    case["judges"] = by_id[case["record_id"]]["judges"]
-                    case["scores"].update(
-                        {
-                            name: float(value["value"])
-                            for name, value in case["judges"].items()
-                            if value["value"] is not None
-                        }
-                    )
-                    with store.connection() as conn:
-                        conn.execute(
-                            "UPDATE evaluation_cases SET scores=%s "
-                            "WHERE evaluation_id=%s AND record_id=%s",
-                            (Jsonb(case["scores"]), job["id"], case["record_id"]),
-                        )
+        bundle = create_bundle(run_id, evaluation, profile, cases)
+        tracking.log_dict(run_id, bundle, "evaluation-bundle.json")
+        tracking.set_tag(run_id, "source_bundle_digest", bundle["digest"])
         summary = {
             **performance_summary(cases),
-            "judge_metrics": judge_metrics,
             "cases": len(cases),
             "completed": len(cases) - failed,
             "failed": failed,
             "failure_rate": failed / len(cases),
             "mlflow_run_id": run_id,
-            **judge_metrics,
         }
         for name in {k for c in cases for k in c["scores"]}:
             values = [c["scores"][name] for c in cases if name in c["scores"]]
@@ -258,11 +240,16 @@ def run_evaluation(store, job):
             if isinstance(value, (int, float)):
                 tracking.log_metric(run_id, name, value)
         tracking.set_terminated(run_id, "FAILED" if failed else "FINISHED")
+        source_finished = True
+        summary["grading_runs"] = evaluate_models(store, bundle, judge_specs) if judge_specs else []
         with store.connection() as conn:
             conn.execute(
                 "UPDATE evaluation_runs SET summary=%s WHERE id=%s", (Jsonb(summary), job["id"])
             )
+        if any(row["state"] == "FAILED" for row in summary["grading_runs"]):
+            raise RuntimeError("model_grading_failed")
         return summary
     except Exception:
-        tracking.set_terminated(run_id, "FAILED")
+        if not source_finished:
+            tracking.set_terminated(run_id, "FAILED")
         raise

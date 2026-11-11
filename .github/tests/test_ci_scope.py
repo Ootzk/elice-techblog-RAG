@@ -32,7 +32,32 @@ class CIScopeTests(unittest.TestCase):
         for paths, web, knowledge in cases:
             with self.subTest(paths=paths):
                 self.assertEqual(
-                    scope.select_checks(paths), {"web": web, "knowledge": knowledge}
+                    scope.select_checks(paths),
+                    {
+                        "web": web,
+                        "knowledge": knowledge,
+                        "reporting": "true"
+                        if paths
+                        and paths[0]
+                        in {
+                            "compose.yaml",
+                            ".github/workflows/ci.yml",
+                            "new-unclassified-file",
+                        }
+                        else "false",
+                    },
+                )
+
+    def test_reporting_changes_are_isolated_from_apps(self):
+        for path in (
+            "tools/reporting/pyproject.toml",
+            "tools/reporting/notebooks/templates/a.ipynb",
+            "tools/reporting/src/a.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    scope.select_checks([path]),
+                    {"web": "false", "knowledge": "false", "reporting": "true"},
                 )
 
     def test_release_always_checks_both_apps(self):
@@ -40,8 +65,35 @@ class CIScopeTests(unittest.TestCase):
             with self.subTest(paths=paths):
                 self.assertEqual(
                     scope.select_checks(paths, release_pr=True),
-                    {"web": "true", "knowledge": "true"},
+                    {"web": "true", "knowledge": "true", "reporting": "true"},
                 )
+
+    def test_ready_gate_requires_reporting_success(self):
+        workflow = (SCRIPT.parents[1] / "workflows" / "ci.yml").read_text()
+        script = textwrap.dedent(
+            workflow.split("  ready:", 1)[1].split("        run: |", 1)[1]
+        )
+        for status in ("success", "failure", "skipped", "cancelled"):
+            with self.subTest(status=status):
+                result = subprocess.run(
+                    ["bash", "-e", "-o", "pipefail", "-c", script],
+                    check=False,
+                    env={
+                        **os.environ,
+                        "CHECKS_RESULT": "success",
+                        "WEB_REQUIRED": "false",
+                        "WEB_RESULT": "skipped",
+                        "KNOWLEDGE_REQUIRED": "false",
+                        "KNOWLEDGE_RESULT": "skipped",
+                        "REPORTING_REQUIRED": "true",
+                        "REPORTING_RESULT": status,
+                        "RELEASE_PR": "false",
+                        "HAS_IMAGES": "true",
+                        "IMAGES_RESULT": "skipped",
+                    },
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode == 0, status == "success")
 
     def test_ready_gate_requires_selected_jobs_to_succeed(self):
         workflow = (SCRIPT.parents[1] / "workflows" / "ci.yml").read_text()
@@ -72,6 +124,8 @@ class CIScopeTests(unittest.TestCase):
                         "WEB_RESULT": web_result,
                         "KNOWLEDGE_REQUIRED": knowledge,
                         "KNOWLEDGE_RESULT": knowledge_result,
+                        "REPORTING_REQUIRED": "false",
+                        "REPORTING_RESULT": "skipped",
                         "RELEASE_PR": "false",
                         "HAS_IMAGES": "true",
                         "IMAGES_RESULT": "skipped",

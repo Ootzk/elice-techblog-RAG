@@ -7,7 +7,7 @@ import httpx
 from elice_knowledge.chunk_store import run_chunking
 from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
-from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, profile_id
+from elice_knowledge.embedding import EmbeddingInputTooLong, create_embedder, profile_id
 from elice_knowledge.execution import execute
 from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
@@ -44,16 +44,20 @@ def main():
     chunk.add_argument("--chunk-overlap", type=int, default=64)
     index = subparsers.add_parser("index", help="Embed stored chunks and publish a dense index")
     index.add_argument("--policy-key", required=True)
+    index.add_argument("--embedding-options", type=json.loads, default={})
+    index.add_argument("--batch-size", type=int)
+    index.add_argument("--embedding-timeout", type=float)
     index.add_argument("--snapshot-id", help="Defaults to the latest corpus snapshot")
     search = subparsers.add_parser("search", help="Find chunks and sources in a published index")
     search.add_argument("query")
     search.add_argument("--index-key", required=True)
     search.add_argument("--top-k", type=int, default=5)
+    search.add_argument("--embedding-options", type=json.loads, default={})
     search.add_argument(
         "--mode",
         choices=["meaning", "keyword"],
         default="meaning",
-        help="meaning: BGE-M3 dense search; keyword: Kiwi BM25 search (no embedding call)",
+        help="meaning: configured embedding dense search; keyword: Kiwi BM25 (no embedding call)",
     )
     ask = subparsers.add_parser(
         "ask", help="Answer with the agentic RAG workflow over a selected index"
@@ -61,6 +65,8 @@ def main():
     ask.add_argument("question")
     ask.add_argument("--index-key", required=True)
     ask.add_argument("--top-k", type=int, default=5)
+    ask.add_argument("--generation-options", type=json.loads, default={})
+    ask.add_argument("--embedding-options", type=json.loads, default={})
     ask.add_argument(
         "--prompt",
         action="append",
@@ -84,6 +90,20 @@ def main():
     stage = "configuration"
     try:
         settings = Settings()
+        if args.command in {"index", "search"}:
+            from elice_knowledge.model_options import validate_embedding_options
+
+            updates = {"embedding_options": validate_embedding_options(args.embedding_options)}
+            if args.command == "index":
+                if args.batch_size is not None:
+                    if not 1 <= args.batch_size <= 256:
+                        raise ValueError("batch_size_out_of_range")
+                    updates["embedding_batch_size"] = args.batch_size
+                if args.embedding_timeout is not None:
+                    if not 0 < args.embedding_timeout <= 300:
+                        raise ValueError("embedding_timeout_out_of_range")
+                    updates["embedding_timeout_seconds"] = args.embedding_timeout
+            settings = settings.model_copy(update=updates)
         if args.command == "revoke-admin":
             from elice_knowledge.access_codes import AccessCodes
 
@@ -113,7 +133,13 @@ def main():
 
             stage = "qa"
             store = ServiceStore(settings)
-            key = store.active_profile(args.index_key, args.top_k, parse_selectors(args.prompt))
+            key = store.active_profile(
+                args.index_key,
+                args.top_k,
+                parse_selectors(args.prompt),
+                args.generation_options,
+                args.embedding_options,
+            )
             output = execute(store, key, args.question)
             if output["error"]:
                 raise ServiceError(output["error"])
@@ -159,7 +185,7 @@ def main():
         text = "엘리스 한국어 테크블로그 기반 RAG 연결 검증입니다."
         stage = "embedding"
         with httpx.Client() as http:
-            embedder = OllamaEmbedder(settings, http)
+            embedder = create_embedder(settings, http)
             before = embedder.profile()
             vector = embedder.embed([text])[0]
             after = embedder.profile()

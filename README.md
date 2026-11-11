@@ -53,21 +53,15 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
 | `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 로컬 DB 초기화 설정; `DATABASE_URL`과 일치시켜야 함 |
-| `EMBEDDING_BACKEND` | 현재 `ollama` 지원 |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Ollama 주소와 설치된 모델 이름; 기본 모델 `bge-m3` |
-| `EMBEDDING_API_KEY` | 필요할 때만 Bearer 인증에 사용 |
-| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; 기본 `1024` |
-| `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
+| `MODEL_CATALOG_FILE` | 모델 목록 JSON 경로; 기본 `models.json` |
+| `ANSWER_MODEL_PROFILE`, `EMBEDDING_MODEL_PROFILE` | `models.json`에서 사용할 답변·임베딩 프로필 이름 |
+| `ELICE_API_KEY` | 생성·Serverless 임베딩·Judge 등록에 사용하는 공용 API 키 |
 | `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
 | `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT_NAME` | MLflow 서버와 이 프로젝트의 연결 검증용 실험명 |
 | `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_TRACKING_TOKEN` | 서버가 요구하는 방식의 선택적 인증 |
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
-| `GENERATION_BASE_URL` | 선택한 엘리스 Serverless 모델의 `/v1` Base URL; 미설정 시 QA 비활성 |
-| `GENERATION_API_KEY`, `GENERATION_MODEL` | Serverless API Key와 모델 API 패널에 표시된 모델 이름; 기본값 없음 |
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
-| `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
-| `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
 | `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192`. planner와 답변 단계에 각각 적용 |
 | `QA_AGENT_MAX_TOOL_CALLS` | 질문 하나에서 agent가 호출할 수 있는 검색 도구 횟수(1~8); 기본 `4` |
 | `PROMPT_ALIAS` | 새 QA 프로필이 MLflow Prompt Registry에서 읽을 alias; 기본 `production`, dev 예시는 `development` |
@@ -81,7 +75,8 @@ DB 생성 후 `.env.dev`의 비밀번호만 바꾸면 기존 DB 비밀번호는 
 prod(엘리스클라우드 배포용)는 `compose.yaml`과 `.env`를 사용하며 파일명에 `prod`를 붙이지 않습니다.
 dev는 `compose.dev.yaml`을 덧씌우고 `.env.dev`를 사용합니다.
 prod 설정은 `.env.example`에서 별도로 복사합니다.
-임베딩 예시는 Ollama 프로토콜용이며, 다른 엘리스 ML API의 임베딩 어댑터와 실제 클라우드 배포는 아직 검증하지 않았습니다. 생성 모델은 별도의 Serverless 어댑터로 연결합니다.
+dev 임베딩 예시는 엘리스 Serverless의 OpenAI 호환 Embeddings API를 사용합니다. prod 예시는
+Ollama 연결을 유지하며, 엘리스클라우드 배포는 별도 검증이 필요합니다. 생성 모델은 별도 설정으로 연결합니다.
 
 ```bash
 cp .env.example .env
@@ -189,7 +184,7 @@ DB의 실행 이력은 별도로 유지됩니다. 보고서에는 원문이나 �
 `CRAWL_RETRIES`(2), `CRAWL_MAX_PAGES`(100), `CORPUS_MIN_DOCUMENTS`(20)로 조정합니다.
 컨테이너의 기본 보고서 디렉터리는 `/artifacts/ingest`이며 `INGEST_REPORT_DIR`로 변경할 수 있습니다.
 Ingest는 Embedding·MLflow를 호출하지 않습니다. CI에서는 임시 PostgreSQL 스키마로 저장·롤백·스냅샷을
-검사하며, 실제 사이트 수집은 CI에서 실행하지 않습니다.
+검사합니다. 별도의 Full integration test에서는 실제 사이트의 고정 문서 1개를 수집합니다.
 
 스냅샷 ID는 URL과 추출 문서 버전 집합으로 계산합니다.
 
@@ -240,11 +235,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 `corpus-chunk-sets.sql`과 `corpus-chunks.sql`로 정책별 결과와 실제 본문을 조회할 수 있습니다.
 청킹은 Embedding·MLflow를 호출하지 않습니다. Docker 이미지는 빌드 때 토크나이저 데이터를 포함합니다.
 
-검색용 임베딩은 기존 Ollama 어댑터를 LlamaIndex `BaseEmbedding`으로 연결하고,
+검색용 임베딩은 설정한 Ollama 또는 엘리스 Serverless 어댑터를 LlamaIndex `BaseEmbedding`으로 연결하고,
 벡터 저장·검색은 `PGVectorStore`와 `VectorStoreIndex`를 사용합니다.
 벡터는 임베딩 프로필별 PostgreSQL 테이블에 저장하며 같은 프로필 안에서는
 청크 ID로 재사용합니다. 다른 청킹 정책·문서 버전의 청크는 별도 ID로 유지합니다.
-프로필에는 모델 digest·차원·양자화·정규화 등의 백엔드 정보와 문서/질의 입력 계약을 포함하며,
+프로필에는 모델·차원과 확인 가능한 revision·정규화 등의 백엔드 정보 및 문서/질의 입력 계약을 포함하며,
 서버 접속 주소는 포함하지 않습니다. 주소가 같아도 모델 프로필이 달라지면 다른 테이블을 사용합니다.
 문서는 제목·제목 경로와 청크 본문, 질의는 앞뒤 공백을 제거한 질문을 임베딩하고 별도 접두사는 붙이지 않습니다.
 
@@ -265,9 +260,12 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 같은 임베딩 프로필의 색인은 DB 세션 잠금으로 직렬화하고, 추론 중에는 DB 트랜잭션을 유지하지 않습니다.
 완료한 배치는 유지하여 실패 후 재실행 시 재사용하고, 추론 전후 모델 프로필이 달라지면 중단합니다.
 모든 청크의 벡터를 확인한 뒤에만 `corpus_vector_indexes`에 검색 가능한 인덱스를 등록합니다.
+임베딩 모델이나 차원을 바꾸면 기존 벡터를 재사용하지 않고 같은 스냅샷·청킹 정책으로 새 인덱스를
+만듭니다. 현재 임베딩 프로필과 일치하는 인덱스가 하나면 자동으로 선택합니다. 후보가 여러 개면
+`QA_CORPUS_SNAPSHOT_ID`와 `QA_CHUNK_POLICY_KEY`로 조건을 지정하고 Knowledge와 worker를 재시작합니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
 
-청크 본문의 `cl100k_base` 토큰 수는 BGE-M3의 입력 한도가 아닙니다.
-허용 길이 여부는 [Ollama의 truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정하며,
+Ollama의 BGE-M3 입력 한도는 [truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정합니다.
+Serverless `text-embedding-3-small`은 요청 전에 `cl100k_base` 기준 8,191 토큰 한도를 검사하며,
 초과 시 CLI는 `EmbeddingInputTooLong`과 안전한 이유 코드를 출력합니다. 표·코드를 자동으로 잘라 재시도하지 않습니다.
 더 작은 정책을 적용하거나 큰 구조화 블록의 처리 방식을 별도로 정한 뒤 다시 실행해야 합니다.
 
@@ -302,20 +300,20 @@ BM25 색인은 별도 테이블 없이 프로세스 메모리에 만들고, 청�
 수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
 
 과제 PDF 2쪽의 모델 호출 안내와 [엘리스 Serverless 가이드](https://help.elice.io/help/docs/elicecloud/ml-api/serverless)를 기준으로
-`GENERATION_BASE_URL`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
+선택한 모델의 `base_url`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
 [엘리스의 OpenAI 호환 호출 예시](https://elice.io/en/ax/model-library/043bad99-5529-4325-a293-1a0cfba17d94)처럼
 Bearer 인증과 `model`·`messages`·`stream=false`를 사용합니다. 모델 이름은 자동으로 선택하지 않습니다.
 이 어댑터는 OpenAI 호환 Chat Completions endpoint용이며, 다른 모델의 API 형식까지 가정하지 않습니다.
 
-모델을 선택한 뒤 `.env.dev` 또는 `.env`의 다음 세 항목을 입력합니다. 실제 키는 Git에 포함하지 않습니다.
+모델의 Base URL과 모델명은 `models.json`에, 선택한 프로필 이름과 공용 API 키는
+`.env.dev` 또는 `.env`에 설정합니다. 실제 키는 Git에 포함하지 않습니다.
 
 ```dotenv
-GENERATION_BASE_URL=https://mlapi.run/<endpoint-id>/v1
-GENERATION_API_KEY=<발급받은 Serverless API Key>
-GENERATION_MODEL=<모델 API 패널의 model 값>
+ANSWER_MODEL_PROFILE=<models.json의 답변 모델 이름>
+ELICE_API_KEY=<발급받은 Serverless API Key>
 ```
 
-모델마다 지원하는 매개변수가 다르므로 temperature와 출력 한도는 설정한 경우에만 전송합니다.
+모델마다 지원하는 매개변수가 다르므로 실행 요청에 전달한 옵션만 전송합니다.
 출력 한도를 설정하려면 API 패널에서 지원하는 `max_completion_tokens`·`max_tokens` 중 필드를 확인합니다.
 인증 실패·요청 거부·사용량 제한 등의 응답은 `generation_http_401`처럼 상태 코드만 전달하며,
 오류 본문·헤더·접속 URL은 노출하지 않습니다. 자동 재시도나 다른 모델로의 fallback은 없습니다.
@@ -413,7 +411,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ### MCP 검색 도구
 
 agent가 쓰는 두 검색 도구를 같은 Pydantic 계약으로 [MCP](https://modelcontextprotocol.io/) Streamable HTTP
-엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 `QA_ACTIVE_INDEX_KEY` 또는 가장 최근에 발행된 인덱스를 사용합니다.
+엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 현재 임베딩과 선택한 Corpus·청킹 정책에 맞는 인덱스를 사용합니다.
 `MCP_API_TOKEN`을 설정해야 열리고, 토큰이 다르면 401입니다. 응답은 JSON 텍스트와 `structuredContent`를 함께 담습니다.
 `meaning_search`는 임베딩 서버를 호출하고, 생성 모델은 호출하지 않습니다.
 
@@ -431,10 +429,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ```
 
 - `GET /health/live`: 프로세스 응답 여부를 확인하고 HTTP 200을 반환합니다. Docker healthcheck도 이 경로를 사용합니다.
-- `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest, MLflow API 접근을
+- `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest 또는 Serverless 설정, MLflow API 접근을
   각각 검사합니다. 준비되면 HTTP 200, 실패하면 HTTP 503이며 의존성별 상태를 반환합니다.
   DB 쓰기·임베딩 생성·Run 생성은 하지 않습니다. MLflow를 끄면 `disabled`로 표시합니다.
   `generation`은 설정 여부만 `configured`·`not_configured`로 표시하며 유료 연결 검사는 하지 않습니다.
+  Serverless `embedding`도 설정만 검사해 `configured`로 표시하고 유료 요청은 보내지 않습니다.
   전체 ready 상태는 기존 인프라 기준입니다. 생성 미설정이어도 수집·검색은 ready일 수 있고 QA는 503을 반환합니다.
 - `python -m elice_knowledge smoke`: 고정 한국어 문장의 임베딩을 생성하고 pgvector에
   저장·유사도 조회한 뒤 MLflow Run에 연결 검증 지표를 기록합니다. 실패 시 종료 코드는 1입니다.
@@ -700,31 +699,140 @@ Embedding과 MLflow는 환경별 접속 설정으로 연결합니다. Embedding�
 
 ### 품질 지표와 판정 기준
 
-현재 구현한 `evidence-v1`은 다음 두 지표를 계산합니다.
+Eval Harness는 사람과 모델이 같은 **버전 있는 rubric**으로 답변을 직접 채점합니다.
+Gold는 항목별 **0(부족)·1(부분 충족)·2(충분)**, Iron 행동 준수는 **0(미충족)·1(충족)**입니다.
+모델은 Ragas `DiscreteMetric`으로 등급과 짧은 한국어 사유를 반환합니다.
+비율 점수를 반올림하거나 1.0만 pass로 변환하지 않습니다.
 
-| 지표 | 정의 | 확인하려는 점 | 한계·맹점 |
-| --- | --- | --- | --- |
-| `answerability_correct` | 실제 응답이 `answered`인지와 기대 `answerable`이 일치하면 1, 아니면 0 | 근거가 있을 때 답하고 없을 때 유보하는지 | 답변 내용의 정답 여부는 보지 않습니다. 답변 가능 18개·근거 부족 4개로 불균형해 항상 답해도 18/22가 되며, 명확화 요청과 근거 부족도 같은 비답변으로 집계합니다. |
-| `evidence_recall` | 기대한 URL·인용문 중 실제 검색 결과에서 찾은 비율. 인용문은 공백 정규화 후 포함 여부로 비교 | 답변을 뒷받침할 원문을 검색했는지 | 답변의 근거 사용·논리·인용 정확성이나 불필요한 검색 결과를 판정하지 않습니다. 대체 가능한 다른 근거를 놓칠 수 있고 근거가 없는 4문항에는 점수를 산출하지 않습니다. |
+| Gold 지표 | 판단 기준 | 선정 이유·한계 |
+| --- | --- | --- |
+| 정확성 | 답변의 핵심 사실·금지 주장과 기준 답안을 비교. 핵심 오류 0, 부수적 부정확성 1, 중요한 오류 없음 2 | 잘못된 정보와 단순 누락을 구분합니다. 기준 답안과 LLM의 사실 해석에 편향이 남습니다. |
+| 완전성 | 필수 요점 미충족 0, 일부 충족 1, 의미상 충족 2. 선택 사항 누락은 감점하지 않음 | 사용자가 필요한 답을 얻었는지 봅니다. 필수 요점 자체의 선정이 결과에 영향을 줍니다. |
+| 근거 충실도 | 실제 생성 문맥으로 핵심 주장이 지지되지 않음 0, 부수적 미지원 주장 1, 중요한 주장 지지 2 | 사실 정확성과 별개로 답변이 제공한 자료에 근거하는지 봅니다. Gold 답안·검색 후보·외부 지식으로 보충하지 않습니다. |
+| 질문 적합성 | 요청에 대응하지 못함 0, 일부 대응 1, 적절하게 대응 2 | 불필요한 장황함·회피·역할 이탈을 구분합니다. 적절한 유보·거절·명확화도 충분한 응답일 수 있습니다. |
 
-`evidence_recall`은 agent가 여러 번 검색할 때 실행 전체의 누적
-`retrieved_sources`를 대상으로 계산합니다. `top_k`는 각 검색 호출의 상한이므로 단일 검색의 고정 k 결과와
-동일한 조건이 아닙니다. 전후 비교에서는 검색 횟수·도구 예산·`top_k`를 함께 고정해야 합니다.
+세부 anchor와 N/A는 [공통 rubric](apps/knowledge/src/elice_knowledge/data/rubrics/gold-ordinal-v1.json)에 정의합니다.
+문항별 모범 답안·필수 요점·금지 주장은 Dataset expectations에 둡니다. grading 프로필에 rubric
+원문·해시를 고정하므로 같은 답변을 새 기준으로 재채점할 수 있습니다. 사람 검수에도 같은 anchor를 보여줍니다.
+근거 부족 문항의 정확성·완전성, 사실 주장이 없는 비답변의 근거 충실도 등은 N/A입니다.
+오류·N/A·미제출을 0점으로 채우지 않습니다. 오류는 정상 유보와 구분해 grading을 실패 처리하고
+성공한 다른 항목은 보존합니다. MLflow에는 `rubric.<항목>.mean`·등급별 건수·상태별 건수를 저장합니다.
+항목들을 단일 총점으로 합치지 않습니다. `answerability_correct`는 답변 가능 여부에 대한 결정적
+상태 일치 지표이며, 답변 내용의 정확성과 다릅니다.
 
-두 지표는 검색 실패와 응답 가능성 판단을 나눠 관찰하기 위한 출발점입니다. 모두 높더라도 답변이 틀릴 수 있으므로
-모범 답안의 필수 요점·금지 주장·문서 간 종합은 별도 의미 판정이 필요합니다.
-Gold는 **정확성(correctness)·완전성(completeness)·근거 충실도(groundedness)·질문 적합성(relevance)**를 분리합니다.
-정확성은 기준 사실과의 모순·핵심 허구를, 완전성은 `required_points` 누락을 판정합니다. 누락만으로 정확성을 실패 처리하지 않습니다.
-근거 충실도는 최종 생성에 실제 전달한 `generation_sources`만 사용하며 Gold 답안·누적 검색 후보·이전 assistant 발언을 근거로 쓰지 않습니다.
-질문 적합성은 요청 대응 여부만 판정하고 사실 정확성과 구분합니다. Iron은 기대 행동·실패 조건의 Boolean 판정을 유지합니다.
-차원별 Judge는 `yes`·`no`·`not_applicable`을 반환하고, 통과율은 적용 가능한 정상 판정만 분모로 삼습니다.
-근거 부족 문항의 정확성·완전성은 N/A로 처리하고 답변/유보 여부는 `answerability_correct`로 봅니다.
-사실 주장이 없는 거절·명확화 응답의 groundedness도 자동 통과가 아닌 N/A로 다룹니다.
-오류는 N/A나 실패 답변으로 섞지 않으며 평가 실행을 실패로 표시합니다. 차원별 통과율과 채점·N/A·오류 건수를 기록하고 가중 총점은 만들지 않습니다.
-일반 대화는 근거 충실도·질문 적합성만 dev Trace의 100%에서 평가합니다. QA Trace에는 LangGraph 노드·분기, 검색 도구·검색 결과, 모델 메시지·토큰 사용량, 최종 근거와 인용 검증 span을 함께 기록합니다. Gateway의 인증정보를 재사용하고, rubric 원본은 `apps/knowledge/src/elice_knowledge/data/judges/`에서 관리합니다. 저장 답변 재채점·블라인드 사람 검수 파일·차원별 일치율 및 Cohen’s kappa 분석을 구현했습니다. 실제 사람 라벨을 이용한 정합성 검증과 충분한 표본의 반복 일관성 실험은 아직 수행하지 않았습니다.
-호출 오류·타임아웃은 정상 유보와 구분해 실패율·평가 완료율로 보고합니다.
+**검색과 답변의 진단 비율은 선택적 보조 지표**입니다. `review.py judge --diagnostics`로 실행하며
+기본은 꺼져 있습니다. 별도 `ragas.<지표>.mean`·질문별 measurements에 저장하고 등급으로 변환하지 않습니다.
+
+| Ragas 진단 | 입력·의미 | 해석 시 주의점 |
+| --- | --- | --- |
+| Context Recall | 누적 검색·최종 생성 문맥 각각이 모범 답안의 사실을 뒷받침하는 비율 | 지정 URL 외의 대체 근거도 인정할 수 있으나 기준 답안의 사실 범위에 한정됩니다. |
+| Context Precision | 누적·최종 문맥의 관련성 판정에 따른 Average Precision | 단순 관련 문서 비율이 아니며 문맥 순서의 영향을 받습니다. |
+| FactualCorrectness precision | 답변의 사실 주장 대 기준 답안 | 기준 답안에 없는 유효한 추가 사실도 불리할 수 있습니다. |
+| 필수 요점 coverage | ContextRecall의 reference=필수 요점, contexts=답변 | 필수 내용의 포함을 진단합니다. LLM의 의미 분해에 영향을 받으며 완전성 등급과 동일하지 않습니다. |
+| Faithfulness | 답변의 주장 대 실제 generation_sources | 주장 추출·지지 판정에 영향을 받습니다. 근거 충실도 등급을 대체하지 않습니다. |
+
+누적 본문은 첫 등장 순서로 중복을 제거합니다. 누적 순서는 검색의 통합 순위가 아닌 발견 순서이므로
+같은 도구 예산·top_k·문맥 예산으로 비교해야 합니다. 근거 부족 문항의 문맥 지표는 N/A이며
+답변 가능한 문항에서 빈 문맥은 0점입니다. Ragas 표준 비율 역시 LLM 판정이므로 객관적 정답을 보장하지 않습니다.
+
+Human Review는 `/review`에서 현재 로그인한 코드로 고정 답변을 블라인드 검수합니다.
+본인의 완료 횟수·진행 회차를 표시하며, 질문·답변·인용·항목별 참고 자료와 공통 anchor를 보고
+등급·사유를 제출합니다. Judge·다른 사람의 점수와 사유는 API에서도 제외합니다.
+초안은 자동 저장하고 질문별 최종 제출은 불변입니다. 완료한 같은 답변을 새 회차로 다시 검수할 수 있으며
+이전 판정은 새 회차에 채워 넣지 않습니다. 사람·모델 모두 한 주체의 한 회차를 별도 grading run으로
+저장하고 원본 answers run에 연결합니다. 원본 답변의 metric을 덮어쓰지 않습니다.
+모델은 MLflow SDK에서 질문·항목을 병렬 실행하고 기본 상한은 프로세스당 질문 2개 × 항목 4개입니다.
+모델·반복 회차는 순차 실행합니다. 저장·동기화·블라인드 범위는 [Human Review](docs/human-review.md)를 따릅니다.
+
+평가자 정합성은 **사람–모델의 항목별 선형 가중 Cohen κ**를 주요 지표로 봅니다.
+0↔1의 불일치보다 0↔2를 더 크게 반영합니다. 일반 κ·제곱 가중 κ·정확 일치율·혼동행렬·평균 절대 등급 차이·
+유효/제외 수를 함께 저장합니다. 세 주체 이상은 **순서형 Krippendorff α**를 사용하고,
+**Fleiss κ**는 등급의 정확 일치에 대한 명목형 보조 결과로 구분합니다.
+κ는 scikit-learn, Fleiss κ는 statsmodels, α는 krippendorff를 사용합니다.
+
+같은 rubric hash끼리만 분석하며 한 주체의 반복 회차를 평균내거나 독립 평가자로 중복 계산하지 않습니다.
+반복 일관성은 회차 쌍별로 보고 다자 패널에는 주체당 한 프로필·한 회차를 명시적으로 선택합니다.
+Fleiss는 모든 주체가 유효 등급을 준 문항, α는 문항마다 두 유효 등급 이상인 자료를 사용합니다.
+패널 기여 주체는 최소 세 명이어야 합니다. 유효 표본이 적거나 판정이 상수여서 계수가 정의되지 않으면
+null과 사유를 남깁니다. N/A·오류·미제출은 등급이 아니며 제외 건수를 별도 보고합니다.
+κ·α를 답변 정확도나 사람 판단의 절대적 정답성으로 해석하지 않습니다.
+
+Judge 프롬프트는 공통 anchor·허용 입력 범위를 명시하고, 평가 자료 안의 지시를 따르지 않도록 합니다.
+rubric 원문·해시·등록 scorer 버전·모델 URI·Ragas/SDK 설정을 프로필에 보존합니다.
+동일 답변의 독립 반복과 블라인드 사람 검수로 일관성·Human Alignment를 측정하는 구조입니다.
+**새 등급의 전수 재채점·실제 사람 정합성 측정은 아직 수행하지 않았습니다.** 이전 이진 결과를
+새 척도의 검증 자료로 사용하지 않습니다. 작은 데이터셋의 결과이며 통계적 일반화·완전한 결정성을 보장하지 않습니다.
+
+일반 대화는 같은 Gold anchor 중 근거 충실도·질문 적합성을 dev Trace의 100%에서 자동 평가합니다.
+QA Trace에는 LangGraph 노드·분기·검색 도구·모델 메시지·토큰·최종 근거와 인용 검증 span을 기록합니다.
+기존 Gateway 인증정보를 재사용하며 앱에 Judge별 API 키를 추가하지 않습니다.
+
+답변 생성(answers)·채점(grading)·정합성(agreement)·반복성(repeatability)·조건 비교(comparison)는 별도 run입니다.
+answers는 `evaluation-v1`, 나머지는 `evaluation-v2`를 사용하며 등급 채점은 `rubric-v1`입니다.
+이전 이진 채점과 호환 코드는 유지하지 않으며 고정 답변은 재사용합니다. 정확한 계약은
+[평가 저장 스키마](docs/evaluation-schema.md)에 정의합니다.
+
+실험 관계는 **조건 하나 → 여러 answers → 각 answers의 여러 grading**입니다. agreement는 answers 하나의
+선택한 grading들을 읽고 회차별 판정을 유지합니다. 같은 조건에서 만든 A1·A2 같은 답변 반복은
+`repeatability`로, 서로 다른 조건 A·B는 `comparison`으로 구분합니다.
+[관계도와 현재 구현 범위](docs/evaluation-schema.md#실험-단위와-관계)에 정리했습니다.
+repeatability는 같은 조건의 서로 다른 answers에 대한 agreement 두 개 이상을 입력받고,
+시행·주체·항목별로 전체 문항의 0·1·2 등급 건수와 rubric의 두 경계(부분 충족 이상·충분)
+충족 비율을 비교합니다. 반복성 보고서는 문항별 시행 평균 충족률과 시행 간 변화폭을 보여주며,
+answers별 상세 등급과 사유는 평가 조건의 원본 agreement 링크에서 확인합니다.
+Iron은 0·1 경계 하나를 씁니다. 이는 작은 반복 표본의 기술 통계이며 답변 변동과 Judge 변동을
+인과적으로 분리한 추정치는 아닙니다. 시행별 grading 횟수는 같지 않아도 되며, 보고서에서
+평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 조건 비교는 `compare_repeated.py`로
+서로 다른 설정의 Repeatability 두 건을 입력받아 공통 질문의 경계 충족률과 조건별 시행 간
+변화폭·시간·토큰·생성 실패를 나란히 보여줍니다. 같은 Dataset·rubric·평가 주체와 채점 반복 횟수를 요구합니다.
+기존 `compare.py`의 Agreement 한 쌍 비교는 개발용 계약으로 남아 있습니다.
+
+반복성 보고서의 `1점 이상`·`2점` 시행 간 평균 변화폭은 같은 질문의 answers 시행 쌍에서
+Judge 반복 채점의 경계 충족률 차이를 절댓값으로 계산합니다. 경계 충족 여부를 0/1로 보면
+이는 두 Bernoulli 분포의 1차 Wasserstein 거리 `W₁ = |p_i-p_j|`와 같으며, 닫힌식으로 계산합니다.
+시행 쌍을 질문 안에서 평균하고,
+질문·평가 항목·평가 주체를 동일 가중치로 집계합니다. 낮을수록 관측된 비율 변화가 작으며
+비교 가능한 단위 수를 함께 기록합니다. 답변 품질 수준은 문항별 시행 평균 충족률로 따로 확인합니다.
+문항별로는 평가 주체·항목을 나눠 answers 시행마다 계산한 경계 충족률을 동일 가중치로 평균합니다.
+유효 answers 시행 수와 유효 grading 수를 함께 표시합니다. 보고서의 `전체 모델 평균`은
+모델별 충족률을 같은 비중으로 평균하며 사람의 판정은 포함하지 않습니다. 개별 모델과 사람의
+결과는 평가 주체 선택에서 따로 볼 수 있습니다.
+전체 질문을 선택하면 유효 문항의 충족률을 동일 가중치로 평균한 행을 추가하고,
+참여 문항 수를 함께 보여줍니다. 시행 간 변화폭도 평가 주체별로 선택하는 히트맵에서 확인합니다.
+오른쪽 `전체 항목 평균` 열은 유효한 네 항목의 충족률을 동일 가중치로 평균하며,
+하단 교차 셀은 항목별 전체 문항 평균을 다시 평균합니다. 이는 네 항목을 동시에 충족한 비율은 아닙니다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/repeatability.py \
+  --agreement-run-id <A1-agreement-run-id> --agreement-run-id <A2-agreement-run-id> \
+  --output-dir artifacts/evaluation/repeatability-a --log
+```
+
+이 명령은 모델을 호출하지 않고 완료된 agreement의 저장 결과만 읽습니다. 기존 agreement에
+등급 건수·rubric 경계 결과가 없다면 같은 grading으로 agreement를 다시 생성해야 합니다.
+
+```bash
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/compare_repeated.py \
+  --baseline-repeatability-run-id <A-repeatability-run-id> \
+  --candidate-repeatability-run-id <B-repeatability-run-id> \
+  --output-dir artifacts/evaluation/comparison-a-b --log
+```
+
+Comparison은 두 Repeatability에서 같은 질문의 경계 충족률을 대응시켜 질문별 동일 가중치로
+평균합니다. 조건별 시행 간 변화폭과 생성 실패도 나란히 저장합니다. 유효 관측이 없는 질문은
+품질 비교에서 제외하고 대응 문항 수를 표시합니다. 원본 run 수정·모델 재호출·자동 승자 선정은
+하지 않습니다. 현재 표본이 작으므로 유의성·인과관계를 추정하지 않습니다.
+[보고서](tools/reporting/README.md)는 저장된 수치·anchor·사유·문맥만 표현하며 해석을 자동 생성하지 않습니다.
 
 효율성은 질문당 입력·캐시 입력·출력·전체 토큰과 LLM/도구 호출 수, QA 실행 시간으로 봅니다.
+검색 도구는 키워드 검색과 의미 검색을 별도로 세며, 오류가 발생한 도구 호출도 포함합니다.
+단계별 기록과 총 호출 수가 일치하지 않는 경우 도구별 횟수는 미기록으로 처리합니다.
+모델 Judge의 채점 효율은 별도로 기록합니다. grading run마다 채점 전체 경과 시간과 문항·평가
+항목별 HTTP 응답 시간 및 공급자가 제공한 토큰을 저장하고, Agreement·Repeatability 보고서의
+효율성 항목에서 볼 수 있습니다. 병렬 요청의 시간 합은 실제 전체 경과 시간과 구분합니다.
+새 측정 도입 전의 Judge 결과와 공급자가 보고하지 않은 값은 미기록으로 표시합니다.
+모델 Judge의 응답이 반환한 모델 ID는 grading run에 저장합니다. 응답에 모델 ID가 없거나
+Gateway endpoint 별칭만 반환되면 모델명을 미확인으로 표시합니다.
 planner와 최종 생성을 합산하고 Judge는 분리합니다. API가 제공한 캐시 입력은 input의 일부이므로
 중복 합산하지 않으며, 모든 호출이 보고한 항목만 질문 총량으로 기록합니다. 미제공 값을 0으로 간주하지 않습니다.
 평가 Run에는 성공 사례의 평균·중앙값·최댓값·측정 건수와 토큰/호출 합계를 기록하고, 실패 지연은 별도로 집계합니다.
@@ -741,8 +849,12 @@ MLflow에는 Gold·Iron Dataset을 각각 하나씩 두고 등록 CLI로 갱신�
 
 QA 프로필은 검색 인덱스·검색 및 문맥 한도와 Registry 프롬프트의 버전·해시·본문을 고정합니다.
 MLflow Run에는 Dataset·QA/scorer 프로필과 사례별 출력·점수·오류를 기록합니다.
+새 QA 프로필은 선택한 인덱스의 청킹 정책·임베딩 프로필·pgvector 구성과 BM25 설정·사용자 사전,
+agent 도구 계약·실행 한도·생성 설정·주요 라이브러리 버전도 고정합니다.
+평가 Run의 `experiment-conditions.json`에 상세 조건을, params에는 청크 크기·겹침·임베딩 모델·차원 등
+검색할 조건을 남깁니다. 보고서는 저장된 조건만 표시하며 과거 Run의 누락 정보를 현재 DB로 채우지 않습니다.
 초안 생성 당시 모델의 세부 버전·샘플링 설정·전체 프롬프트는 보관하지 않아 같은 초안의 재생성까지 보장하지 않습니다.
-확정된 입력으로 평가를 반복하는 것과 구분하며, 현재 생성 API의 Seed 지정과 모델 가중치 revision 통제도 미구현입니다.
+확정된 입력으로 평가를 반복하는 것과 구분합니다. 생성 요청의 Seed는 실행 옵션으로 지정해 기록할 수 있지만, 모델별 지원 여부와 동일 결과 보장은 제공자에 따릅니다. 모델 가중치 revision 통제는 미구현입니다.
 모델 별칭과 고정된 평가 조건만으로 비결정적 생성의 완전한 재현성을 보장하지 않습니다.
 
 Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. 두 데이터셋 모두
@@ -755,6 +867,12 @@ Run에는 기대 조건·실제 답변·최종 문맥·QA 프로필을 고정한
 기준 Run과 유형별 지표·개별 실패를 비교하고, 비용·실패율도 함께 확인하는 구성입니다.
 이 유료 회귀 평가와 품질 gate는 현재 CI에 연결하지 않았습니다.
 
+### Notebook 실험 보고서 초안
+
+[tools/reporting](tools/reporting/README.md)의 agreement·repeatability·comparison 템플릿을 복사해 MLflow 결과를 읽고,
+저장된 조건·지표·문항별 결과를 hvPlot/Bokeh 그래프와 HTML 표로 표현합니다. Knowledge와 독립된 환경을 사용하며,
+내보낸 HTML은 Jupyter·MLflow 연결 없이 열 수 있습니다. 합성 데모는 실제 실험 결과와 구분해 표시합니다.
+
 ## 5. 핵심 설계 결정과 Trade-off
 
 ## 6. 한계점, 알려진 이슈와 향후 개선 과제
@@ -765,7 +883,9 @@ Gold 22문항·Iron 8문항을 검수해 홈서버 MLflow에 등록하고 원본
 엘리스 Serverless 모델의 실제 연결·응답은 확인했지만, 답변 정확성·유보 성능에 대한 기준 평가는 아직 실행하지 않았습니다.
 기준 평가와 개선 실험·제출용 보고서, Judge 신뢰도와 클라우드 배포 검증은 남아 있습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
-임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
+Ollama 임베딩 프로필에는 모델 digest·모델 정보·차원·양자화·전처리와 truncation 정책을 기록합니다.
+Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록합니다. 공급자가 revision을 제공하지
+않으면 `provider-unavailable`로 남기므로, 모델이 같은 이름으로 변경되는 일까지 자동 감지할 수 없습니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
 
 ## 7. 개선 실험과 결과
@@ -777,3 +897,116 @@ Gold 22문항·Iron 8문항을 검수해 홈서버 MLflow에 등록하고 원본
 ### Analysis — 결과를 어떻게 해석했나요?
 
 ### Next Steps — 다음에는 무엇을 해볼까요?
+
+#### 모델 프로필 등록과 선택
+
+모델 정보는 저장소의 [models.json](models.json)에서 관리합니다. 모델의 Base URL과 식별자는 JSON에 두고 API 키는 환경 파일에서 읽습니다.
+인덱스는 현재 임베딩 프로필과 Corpus·청킹 정책에 따라 DB에서 찾습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
+현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/models/models.py list
+uv run --project apps/knowledge --locked python tools/models/models.py select answer terra
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --force-recreate knowledge worker
+```
+
+답변 모델은 OpenAI 호환 Chat Completions, 임베딩은 구현된 Ollama 또는 엘리스 Serverless
+어댑터를 사용합니다. 임베딩 모델 변경 시 해당 모델의 인덱스를 새로 만들어야 합니다.
+선택된 임베딩과 Corpus·청킹 정책에 맞는 인덱스를 자동으로 찾습니다.
+
+Judge 모델은 원하는 이름과 `model`, `base_url`을 JSON에 넣습니다. 공용 API 키는 환경 파일의 `ELICE_API_KEY`에 넣습니다. 아래 명령은
+선택한 여러 평가 주체를 설정하고 MLflow Gateway와 scorer에 등록합니다. 모델 추론은 호출하지
+않습니다. 기존 MLflow endpoint는 그대로 재사용하며 새 서버에서는 접속 정보를 사용해 생성합니다.
+기존 MLflow에 저장된 키는 다시 읽을 수 없으므로 새 서버에 등록하려면 키가 필요합니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/models/models.py select-judges luna haiku
+uv run --project apps/knowledge --locked --env-file .env.dev python tools/models/models.py register-judges
+uv run --project apps/knowledge --locked --env-file .env.dev python tools/evaluation/judges.py --enable-dev
+```
+
+선택을 바꾼 뒤 Knowledge와 worker를 재생성합니다. prod에서는 `--env-file .env --catalog
+models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
+필요합니다. 재채점 시 `--model-rater <이름>`을 반복 지정하면 선택된 Judge 중 일부만 사용할 수 있습니다.
+
+#### 운영 명령
+
+GitHub Actions의 `Full integration test`는 `release/* → main` PR에서 자동 실행하며 수동 실행도 가능합니다.
+저장소 Secret `ELICE_API_KEY`가 필요합니다. 일반 feature PR에서는 실행하지 않습니다.
+빈 PostgreSQL과 임시 MLflow에서 고정 문서 1개를 수집·임베딩하고 Gold 1문항과 세 Judge를
+실제로 호출한 뒤 Agreement HTML을 artifact로 저장합니다. 실행마다 API 비용이 발생하며,
+점수보다 설치·호출·저장 성공을 확인하는 검사입니다. MLflow 데이터는 job 종료 후 사라집니다.
+워크플로가 기본 브랜치에 존재해야 GitHub에서 수동 실행할 수 있습니다.
+
+`./tools/operations/rag`는 설치부터 Corpus 처리·평가·보고서까지 기존 기능을 한곳에서 실행합니다.
+실제 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 넣습니다. 모델명과 주소는
+[models.json](models.json)에서 관리하며, CLI의 `--env-file`로 dev·prod 환경을 선택합니다.
+
+새 개발 환경에서는 다음 순서로 준비합니다. 이미 환경 파일이 있으면 `init-env`는 생략합니다.
+
+```bash
+# 환경 파일과 로그인·DB용 비밀값을 생성합니다. 기존 파일은 덮어쓰지 않습니다.
+./tools/operations/rag init-env
+# .env.dev에 ELICE_API_KEY와 MLFLOW_TRACKING_URI를 입력합니다.
+# 로컬 MLflow가 필요하면 MLFLOW_CRYPTO_KEK_PASSPHRASE도 넣고 실행합니다.
+./tools/operations/rag mlflow-start --configure
+./tools/operations/rag setup                 # 모델과 실험 이름을 대화식 선택
+./tools/operations/rag serve init-db
+./tools/operations/rag serve start
+./tools/operations/rag doctor
+```
+
+환경 생성 시 관리자 로그인 코드·세션 비밀값·평가 API 토큰은 `.env.dev`에 생성하며 화면에
+출력하지 않습니다. 생성된 관리자 코드는 해당 파일에서 확인합니다. 기존 MLflow를 사용하면
+`mlflow-start`는 생략합니다. 로컬 MLflow는 SQLite·artifact를 `data/mlflow-local/`에 보존하고
+`mlflow-stop`으로 종료합니다. 제출 환경의 PostgreSQL 기반 MLflow와는 별도입니다.
+
+```bash
+# Corpus 수집·청킹·색인. 청킹 결과의 policy_key를 사용합니다.
+./tools/operations/rag corpus ingest
+./tools/operations/rag corpus chunk
+./tools/operations/rag corpus index --policy-key '<policy-key>'
+
+# Dataset과 Run을 찾고 평가·보고서를 만듭니다.
+./tools/operations/rag datasets
+./tools/operations/rag evaluate --dataset-id '<dataset-id>' --submit --wait
+./tools/operations/rag runs --kind answers
+./tools/operations/rag agreement --answers-run-id '<answers-run-id>' --output-dir artifacts/evaluation/agreement --log
+./tools/operations/rag runs --kind agreement
+./tools/operations/rag report agreement --run-id '<agreement-run-id>' --output artifacts/reports/agreement.html
+```
+
+평가 `--submit`과 색인은 유료 모델 호출이 발생할 수 있습니다. `agreement`는 완료된 채점
+전체를 기본으로 모으며 `--rater`, `--round`로 제한할 수 있습니다. 반복성·비교는 각각
+`repeatability`, `comparison` 명령을 사용하고, 기존 Agreement 단위 비교는
+`comparison-agreement`를 사용합니다. `report`는 Agreement·Repeatability·Comparison 중 하나를
+선택합니다. 자세한 옵션은 각 명령의 `--help`에서 확인합니다.
+
+설정 시 기존 MLflow endpoint의 모델과 주소를 비교합니다. 저장된 키는 다시 읽을 수 없어 일치
+여부를 확인하지 못합니다. 키를 교체한 뒤에는 `.env`의 `ELICE_API_KEY`를 바꾸고
+`./tools/operations/rag model rotate-judge-key`로 선택된 Judge 연결을 명시적으로 갱신합니다.
+다른 모델이 같은 MLflow 연결을 쓰면 덮어쓰지 않고 중단합니다. `serve stop`은 Knowledge와
+worker만 멈추고 DB와 공용 MLflow 데이터는 유지합니다. prod에서는
+`--env-file .env`와 `init-env --kind prod`를 사용합니다.
+
+#### 모델 실행 옵션
+
+모델의 추론 옵션은 `.env`나 `models.json`에 고정하지 않고 평가마다 JSON 객체로 전달합니다.
+예를 들어 답변 생성과 개별 Judge의 옵션을 각각 지정할 수 있습니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/operations/rag.py evaluate \
+  --dataset-id '<dataset-id>' --submit --wait \
+  --generation-options '{"temperature": 0.2, "seed": 42}' \
+  --judge-options '{"chatgpt": {"reasoning_effort": "none", "stream": true, "max_completion_tokens": 8192}}'
+```
+
+`--embedding-options`는 색인 명령과 평가 프로필에서 지정합니다. 임베딩 요청 옵션은 벡터
+생성 계약에 포함되므로 색인과 검색에 같은 옵션을 사용해야 합니다. `index`의 배치 크기와
+제한 시간은 각각 `--batch-size`, `--embedding-timeout`으로 전달합니다. `review judge`의
+`--judge-options`로 고정 답변의 재채점 옵션도 지정할 수 있습니다. 일반 대화의 MLflow 자동
+Judge는 질문마다 별도 인자를 받을 수 없으므로 `tools/evaluation/judges.py --enable-dev
+--judge-options '<JSON>'`으로 scorer 등록 시 옵션을 지정합니다. API의 QA 프로필은
+`generation_options`, `embedding_options`를, 평가 요청은 Judge 이름별 `judge_options`를
+받습니다. 지정한 옵션은 답변·채점 프로필과 MLflow 실험 조건에 저장됩니다. 모델명·입력·인증
+헤더 등은 실행 옵션으로 덮어쓸 수 없습니다.

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from elice_knowledge.agent import run_qa
 from elice_knowledge.database import check_database
-from elice_knowledge.embedding import OllamaEmbedder
+from elice_knowledge.embedding import create_embedder
 from elice_knowledge.generation import GenerationError, GenerationNotConfigured, GenerationTimeout
 from elice_knowledge.mcp_server import MCP_PATH, create_mcp_app
 from elice_knowledge.prompts import PromptError, resolve
@@ -68,7 +68,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def ready():
         def embedding_check():
             with httpx.Client() as http:
-                OllamaEmbedder(settings, http).profile()
+                create_embedder(settings, http).profile()
 
         checks = {"database": lambda: check_database(settings), "embedding": embedding_check}
         if settings.mlflow_enabled:
@@ -88,9 +88,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with ThreadPoolExecutor(max_workers=len(checks)) as executor:
             futures = [executor.submit(probe, name, check) for name, check in checks.items()]
             dependencies = dict(f.result() for f in futures)
+        if (
+            settings.embedding_backend == "elice-serverless"
+            and dependencies["embedding"].status == "ok"
+        ):
+            dependencies["embedding"] = DependencyStatus(
+                status="configured",
+                detail="Configuration only; embedding connectivity has not been probed",
+            )
         if not settings.mlflow_enabled:
             dependencies["mlflow"] = DependencyStatus(status="disabled")
-        ok = all(item.status in {"ok", "disabled"} for item in dependencies.values())
+        ok = all(item.status in {"ok", "configured", "disabled"} for item in dependencies.values())
         # Configuration-only: readiness must never trigger a paid generation call.
         dependencies["generation"] = DependencyStatus(
             status="configured" if settings.generation_configured else "not_configured",
@@ -112,7 +120,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def qa(request: QARequest):
         try:
             # Immediate admin path: no stored profile, so resolve the configured alias now.
-            return run_qa(settings, request, resolve(settings))
+            request_settings = settings.model_copy(
+                update={
+                    "generation_options": request.generation_options,
+                    "embedding_options": request.embedding_options,
+                }
+            )
+            return run_qa(request_settings, request, resolve(request_settings))
         except PromptError as exc:
             return JSONResponse(status_code=422, content={"error": exc.code})
         except GenerationNotConfigured as exc:
@@ -148,6 +162,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             candidate = (settings.web_dist_dir / path).resolve()
             if candidate.is_relative_to(settings.web_dist_dir.resolve()) and candidate.is_file():
                 return FileResponse(candidate)
+            if path in {"review", "review/"}:
+                try:
+                    ServiceStore(settings).session(request.cookies.get(COOKIE))
+                except ServiceError:
+                    return RedirectResponse("/", status_code=303)
+                response = FileResponse(settings.web_dist_dir / "index.html")
+                response.headers["Cache-Control"] = "no-store"
+                return response
             if not path or path.startswith("c/"):
                 return FileResponse(settings.web_dist_dir / "index.html")
             raise HTTPException(status_code=404)

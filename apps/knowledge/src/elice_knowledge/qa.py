@@ -22,6 +22,22 @@ class QARequest(BaseModel):
     index_key: str = Field(pattern=r"^[a-f0-9]{64}$")
     top_k: int = Field(default=5, ge=1, le=20)
     history: list["DialogueMessage"] = Field(default_factory=list, max_length=20)
+    generation_options: dict[str, Any] = Field(default_factory=dict)
+    embedding_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("generation_options")
+    @classmethod
+    def valid_generation_options(cls, value):
+        from elice_knowledge.model_options import validate_generation_options
+
+        return validate_generation_options(value)
+
+    @field_validator("embedding_options")
+    @classmethod
+    def valid_embedding_options(cls, value):
+        from elice_knowledge.model_options import validate_embedding_options
+
+        return validate_embedding_options(value)
 
     @field_validator("question")
     @classmethod

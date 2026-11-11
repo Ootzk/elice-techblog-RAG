@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 from elice_knowledge.chunk_store import ChunkStore
 from elice_knowledge.corpus import digest
 from elice_knowledge.database import connect, sqlalchemy_url
-from elice_knowledge.embedding import Embedder, EmbeddingError, OllamaEmbedder, profile_id
+from elice_knowledge.embedding import Embedder, EmbeddingError, create_embedder, profile_id
 from elice_knowledge.llama_embedding import KnowledgeEmbedding
 from elice_knowledge.settings import Settings
 
@@ -312,26 +312,55 @@ def search_output(index: OpenIndex, query: str, matches) -> dict:
     }
 
 
-def latest_index_key(settings: Settings) -> str | None:
-    """The configured pinned index, or the most recently published one."""
+class IndexSelectionError(ValueError):
+    """No unambiguous active index exists for the configured conditions."""
+
+
+def select_index(conn, settings: Settings, explicit_key: str | None = None) -> str | None:
+    """Resolve only indexes compatible with the configured embedding contract."""
+    if explicit_key:
+        row = conn.execute(
+            "SELECT key FROM corpus_vector_indexes WHERE key=%s", (explicit_key,)
+        ).fetchone()
+        if not row:
+            return None
+        return row["key"] if isinstance(row, dict) else row[0]
+    with httpx.Client() as client:
+        profile_key = profile_id(retrieval_profile(create_embedder(settings, client)))
+    filters = ["profile_key=%s"]
+    values = [profile_key]
+    for column, value in (
+        ("snapshot_id", settings.qa_corpus_snapshot_id),
+        ("policy_key", settings.qa_chunk_policy_key),
+    ):
+        if value:
+            filters.append(column + "=%s")
+            values.append(value)
+    rows = conn.execute(
+        "SELECT key FROM corpus_vector_indexes WHERE "
+        + " AND ".join(filters)
+        + " ORDER BY key LIMIT 2",
+        values,
+    ).fetchall()
+    if len(rows) > 1:
+        raise IndexSelectionError("ambiguous_qa_index")
+    if not rows:
+        return None
+    row = rows[0]
+    return row["key"] if isinstance(row, dict) else row[0]
+
+
+def active_index_key(settings: Settings) -> str | None:
+    """Resolve the active index without choosing an arbitrary latest index."""
     with connect(settings) as conn:
-        if settings.qa_active_index_key:
-            row = conn.execute(
-                "SELECT key FROM corpus_vector_indexes WHERE key=%s",
-                (settings.qa_active_index_key,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT key FROM corpus_vector_indexes ORDER BY created_at DESC,key LIMIT 1"
-            ).fetchone()
-    return row[0] if row else None
+        return select_index(conn, settings)
 
 
 def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = None):
     with httpx.Client() as client:
         return RetrievalStore(settings).index(
             policy_key,
-            OllamaEmbedder(settings, client),
+            create_embedder(settings, client),
             snapshot_id,
             progress=lambda event: print(json.dumps(event), file=sys.stderr),
         )
@@ -340,7 +369,7 @@ def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = Non
 def run_search(settings: Settings, index_key: str, query: str, top_k=5):
     with httpx.Client() as client:
         return RetrievalStore(settings).search(
-            index_key, query, OllamaEmbedder(settings, client), top_k
+            index_key, query, create_embedder(settings, client), top_k
         )
 
 

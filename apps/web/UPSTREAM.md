@@ -19,6 +19,8 @@ remain visible. This is a modified, independent frontend, not an official Open W
   editing and model actions are replaced by verified citations and terminal jobs.
 - Login, sidebar integration, API client, citations and evaluation integration are
   project code. No Open WebUI Python backend or API emulation layer is included.
+- The Human Review page is project code and reuses the extracted response renderer;
+  run assignments and blind scoring do not use an Open WebUI review template or backend.
 - Svelte/SvelteKit/Tailwind are retained. Build dependencies are patched separately
   from the pinned upstream UI source; `package-lock.json` fixes the build.
 

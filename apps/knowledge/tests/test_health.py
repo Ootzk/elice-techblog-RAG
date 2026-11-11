@@ -25,7 +25,7 @@ def test_live_works_without_configuration_and_ready_reports_each_dependency():
 
 def test_ready_is_read_only_and_allows_tracking_disabled(monkeypatch):
     monkeypatch.setattr("elice_knowledge.main.check_database", lambda _: None)
-    monkeypatch.setattr("elice_knowledge.main.OllamaEmbedder.profile", lambda _: {})
+    monkeypatch.setattr("elice_knowledge.embedding.OllamaEmbedder.profile", lambda _: {})
     client = TestClient(create_app(Settings(_env_file=None, mlflow_enabled=False)))
     response = client.get("/health/ready")
     assert response.status_code == 200
@@ -49,7 +49,7 @@ def test_generation_readiness_is_configuration_only_without_paid_calls(monkeypat
     from test_generation import generation_settings
 
     monkeypatch.setattr("elice_knowledge.main.check_database", lambda _: None)
-    monkeypatch.setattr("elice_knowledge.main.OllamaEmbedder.profile", lambda _: {})
+    monkeypatch.setattr("elice_knowledge.embedding.OllamaEmbedder.profile", lambda _: {})
     monkeypatch.setattr(
         "elice_knowledge.generation.EliceServerlessLLM.chat",
         lambda *args: (_ for _ in ()).throw(AssertionError("No generation on health")),
@@ -58,3 +58,25 @@ def test_generation_readiness_is_configuration_only_without_paid_calls(monkeypat
     response = client.get("/health/ready")
     assert response.status_code == 200
     assert response.json()["dependencies"]["generation"]["status"] == "configured"
+
+
+def test_serverless_readiness_is_configuration_only(monkeypatch):
+    monkeypatch.setattr("elice_knowledge.main.check_database", lambda _: None)
+    monkeypatch.setattr(
+        "httpx.Client.post",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("readiness must not call paid embedding endpoint")
+        ),
+    )
+    config = Settings(
+        _env_file=None,
+        mlflow_enabled=False,
+        embedding_backend="elice-serverless",
+        embedding_base_url="https://embedding.test/deployment/v1",
+        embedding_api_key="secret",
+        embedding_model="text-embedding-3-small",
+        embedding_dimensions=1536,
+    )
+    response = TestClient(create_app(config)).get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["dependencies"]["embedding"]["status"] == "configured"

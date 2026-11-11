@@ -1,0 +1,34 @@
+{
+  "answer": {
+    "terra": {
+      "model": "gpt-6.1-terra",
+      "base_url": "https://mlapi.run/20d6d6e1-7be6-4fa6-9234-c30ce2bb427d/v1"
+    },
+    "qwen": {
+      "model": "Qwen3.6-35B-A3B",
+      "base_url": "https://mlapi.run/78c24c6f-f7f7-445e-99de-d87529faa5e9/v1"
+    }
+  },
+  "embedding": {
+    "text-embedding-3-small": {
+      "backend": "elice-serverless",
+      "model": "text-embedding-3-small",
+      "dimensions": "1536",
+      "base_url": "https://mlapi.run/b54ff33e-6d14-42df-93f9-0f1132160ee8/v1"
+    }
+  },
+  "judge": {
+    "chatgpt": {
+      "model": "gpt-6-luna",
+      "base_url": "https://mlapi.run/2b112090-5609-4dde-87fb-161933470bde/v1"
+    },
+    "claude": {
+      "model": "claude-haiku-5-5",
+      "base_url": "https://mlapi.run/e488b98a-60f2-4db1-9931-49ba1a217dc4/v1"
+    },
+    "gemini": {
+      "model": "gemini-3.5-flash-lite",
+      "base_url": "https://mlapi.run/3fc54e02-bf9b-483e-b0d8-571ff86f04af/v1"
+    }
+  }
+}

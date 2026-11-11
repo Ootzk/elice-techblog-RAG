@@ -1,17 +1,20 @@
-"""Pairwise binary agreement on the same frozen answers, by quality dimension."""
+"""Pairwise and panel reliability on the same frozen answers, by quality dimension."""
 
 from collections import defaultdict
 from itertools import combinations
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import answer_digest, validate_bundle
-from elice_knowledge.judges import DIMENSIONS, evaluation_row, instructions
+from elice_knowledge.judges import DIMENSIONS, evaluation_row, inapplicable
+from elice_knowledge.reliability import cohen, multirater, protocol, purpose
+from elice_knowledge.rubrics import snapshot
 
-LABELS = {"pass", "fail", "not_applicable", "error"}
+STATUSES = {"scored", "not_applicable", "error", "pending"}
 
 
-def review_packet(bundle, rater):
+def review_packet(bundle, rater, rubric=None):
     validate_bundle(bundle)
+    rubric = snapshot(bundle, rubric)
     records = {row["id"]: row for row in bundle["records"]}
     packet, labels = [], []
     for case in bundle["cases"]:
@@ -28,7 +31,10 @@ def review_packet(bundle, rater):
             packet.append(
                 {
                     **identity,
-                    "rubric": instructions(dimension),
+                    "rubric": rubric["dimensions"][dimension],
+                    "scale": rubric["scale"],
+                    "scale_labels": rubric["scale_labels"],
+                    "forced_na": inapplicable(record, case, dimension),
                     **{key: value for key, value in data.items() if key != "tags"},
                 }
             )
@@ -37,85 +43,56 @@ def review_packet(bundle, rater):
                     **identity,
                     "rater": "human:" + rater,
                     "round": "1",
-                    "label": None,
-                    "protocol": digest(instructions(dimension)),
+                    "score": None,
+                    "status": "pending",
+                    "protocol": digest(rubric),
                     "rationale": "",
                 }
             )
     return packet, labels
 
 
-def machine_labels(bundle, judgments, round_id):
-    records = {row["id"]: row for row in bundle["records"]}
-    cases = {row["record_id"]: row for row in bundle["cases"]}
-    return [
-        dict(
-            record_id=row["record_id"],
-            answer_digest=answer_digest(records[row["record_id"]], cases[row["record_id"]]),
-            dimension=cell["dimension"],
-            rater=cell["rater"],
-            round=round_id,
-            label=cell["status"],
-            rationale=cell.get("rationale"),
-            protocol=digest({"name": name, "version": cell["version"]}),
-        )
-        for row in judgments
-        for name, cell in row["judges"].items()
+def pairwise(left, right, scale=(0, 1, 2)):
+    paired = [(left[key], right[key]) for key in sorted(left.keys() & right.keys())]
+    applicable = [
+        (a, b) for a, b in paired if type(a) is int and a in scale and type(b) is int and b in scale
     ]
-
-
-def pairwise(left, right):
-    paired = [(left[key], right[key]) for key in left.keys() & right.keys()]
-    applicable = [(a, b) for a, b in paired if a in {"pass", "fail"} and b in {"pass", "fail"}]
     count = len(applicable)
-    confusion = {
-        f"{a}_{b}": sum(x == a and y == b for x, y in applicable)
-        for a in ("pass", "fail")
-        for b in ("pass", "fail")
-    }
-    observed = sum(a == b for a, b in applicable) / count if count else None
-    expected = (
-        sum(
-            (sum(a == label for a, _ in applicable) / count)
-            * (sum(b == label for _, b in applicable) / count)
-            for label in ("pass", "fail")
-        )
-        if count
-        else None
-    )
-    kappa = (observed - expected) / (1 - expected) if count >= 2 and expected < 1 else None
-    scored_statuses = [
-        (a, b) for a, b in paired if a in LABELS - {"error"} and b in LABELS - {"error"}
-    ]
+    a_values, b_values = [a for a, _ in applicable], [b for _, b in applicable]
+    kappa, undefined_reason = cohen(a_values, b_values, scale=scale)
+    unweighted, _ = cohen(a_values, b_values, scale=scale, weights=None)
+    quadratic, _ = cohen(a_values, b_values, scale=scale, weights="quadratic")
+    statuses = [(a, b) for a, b in paired if a not in {"error", None} and b not in {"error", None}]
     return dict(
         paired_items=len(paired),
-        binary_pairs=count,
+        unpaired_items=len(left.keys() ^ right.keys()),
+        valid_pairs=count,
         excluded_pairs=len(paired) - count,
-        agreement=observed,
+        agreement=sum(a == b for a, b in applicable) / count if count else None,
+        mean_absolute_difference=sum(abs(a - b) for a, b in applicable) / count if count else None,
         cohen_kappa=kappa,
-        confusion=confusion,
-        kappa_undefined_reason=(
-            "insufficient_pairs"
-            if count < 2
-            else "constant_identical_labels"
-            if expected == 1
-            else None
-        ),
-        applicability_pairs=len(scored_statuses),
+        cohen_kappa_unweighted=unweighted,
+        cohen_kappa_quadratic=quadratic,
+        confusion={
+            f"{a}_{b}": sum(x == a and y == b for x, y in applicable) for a in scale for b in scale
+        },
+        kappa_undefined_reason=undefined_reason,
+        applicability_pairs=len(statuses),
         applicability_agreement=(
-            sum((a == "not_applicable") == (b == "not_applicable") for a, b in scored_statuses)
-            / len(scored_statuses)
-            if scored_statuses
+            sum((a == "not_applicable") == (b == "not_applicable") for a, b in statuses)
+            / len(statuses)
+            if statuses
             else None
         ),
     )
 
 
-def analyze(bundle, entries):
+def build_agreement(bundle, entries, rubric=None):
     validate_bundle(bundle)
     records = {row["id"]: row for row in bundle["records"]}
     cases = {row["record_id"]: row for row in bundle["cases"] if not row["error"]}
-    groups, seen, protocols = defaultdict(dict), set(), {}
+    rubric = snapshot(bundle, rubric)
+    groups, seen = defaultdict(dict), set()
     for entry in entries:
         case_id = entry["record_id"]
         if (
@@ -124,46 +101,114 @@ def analyze(bundle, entries):
             or entry["answer_digest"] != answer_digest(records[case_id], cases[case_id])
         ):
             raise ValueError("review_answer_binding_mismatch")
-        label = entry["label"]
-        if label is not None and label not in LABELS:
-            raise ValueError("invalid_review_label")
-        identity = (entry["dimension"], entry["rater"], str(entry["round"]), case_id)
+        if not isinstance(entry["rater"], str) or not entry["rater"].startswith(
+            ("human:", "model:")
+        ):
+            raise ValueError("invalid_review_rater")
+        from elice_knowledge.evaluation_schema import validate_rating
+
+        validate_rating(entry, rubric["scale"], draft=True)
+        label = (
+            entry["score"]
+            if entry["status"] == "scored"
+            else (None if entry["status"] == "pending" else entry["status"])
+        )
+        identity = (
+            entry["dimension"],
+            entry["rater"],
+            entry["protocol"],
+            str(entry["round"]),
+            case_id,
+        )
         if identity in seen:
             raise ValueError("duplicate_review_label")
         seen.add(identity)
-        protocol = entry["protocol"]
-        if identity[:3] in protocols and protocols[identity[:3]] != protocol:
-            raise ValueError("mixed_judge_protocols_in_round")
-        protocols[identity[:3]] = protocol
-        groups[identity[:3]][case_id] = label
-    comparisons = []
+        groups[identity[:4]][case_id] = label
+    distributions = []
+    grouped = defaultdict(list)
+    for entry in entries:
+        grouped[(entry["record_id"], entry["rater"], entry["protocol"], entry["dimension"])].append(
+            entry
+        )
+    for (record_id, rater, profile_digest, dimension), ratings in sorted(grouped.items()):
+        counts = {str(score): 0 for score in rubric["scale"]}
+        statuses = {status: 0 for status in ("not_applicable", "error", "pending")}
+        for rating in ratings:
+            if rating["status"] == "scored":
+                counts[str(rating["score"])] += 1
+            else:
+                statuses[rating["status"]] += 1
+        valid = sum(counts.values())
+        boundaries = (
+            {
+                "partial_or_better": sum(counts[str(s)] for s in rubric["scale"] if s >= 1),
+                "sufficient": counts["2"],
+            }
+            if bundle["kind"] == "gold"
+            else {"satisfied": counts["1"]}
+        )
+        distributions.append(
+            dict(
+                record_id=record_id,
+                rater=rater,
+                profile_digest=profile_digest,
+                dimension=dimension,
+                attempts=len(ratings),
+                score_counts=counts,
+                status_counts=statuses,
+                valid=valid,
+                boundaries={
+                    name: {
+                        "count": count,
+                        "denominator": valid,
+                        "rate": count / valid if valid else None,
+                    }
+                    for name, count in boundaries.items()
+                },
+            )
+        )
+    comparisons, panels = [], []
     for dimension in DIMENSIONS[bundle["kind"]]:
         selected = [(key, labels) for key, labels in groups.items() if key[0] == dimension]
+        selected.sort(key=lambda row: row[0])
+        panels.extend(
+            {"dimension": dimension, **row}
+            for row in multirater(selected, sorted(cases), rubric["scale"])
+        )
         for (a, left), (b, right) in combinations(selected, 2):
+            comparison = (
+                ("repeat_consistency" if a[2] == b[2] else "judge_revision")
+                if a[1] == b[1]
+                else "inter_rater"
+            )
             comparisons.append(
                 dict(
                     dimension=dimension,
-                    left=dict(rater=a[1], round=a[2]),
-                    right=dict(rater=b[1], round=b[2]),
-                    comparison=(
-                        "repeat_consistency" if protocols[a] == protocols[b] else "judge_revision"
-                    )
-                    if a[1] == b[1]
-                    else "inter_rater",
-                    left_protocol=protocols[a],
-                    right_protocol=protocols[b],
-                    **pairwise(left, right),
+                    left=dict(rater=a[1], round=a[3], profile_digest=a[2]),
+                    right=dict(rater=b[1], round=b[3], profile_digest=b[2]),
+                    comparison=comparison,
+                    purpose=purpose(a[1], b[1], comparison),
+                    left_protocol=a[2],
+                    right_protocol=b[2],
+                    **pairwise(left, right, rubric["scale"]),
                 )
             )
+    comparisons.sort(key=lambda row: row["purpose"] != "human_alignment")
     return dict(
         source_run_id=bundle["source_run_id"],
         source_digest=bundle["digest"],
         kind=bundle["kind"],
         qa_failed_cases=sum(bool(case["error"]) for case in bundle["cases"]),
         entries=len(entries),
-        pending=sum(e["label"] is None for e in entries),
+        pending=sum(e["status"] == "pending" for e in entries),
         human_labels=sum(
-            e["rater"].startswith("human:") and e["label"] in LABELS - {"error"} for e in entries
+            e["rater"].startswith("human:") and e["status"] in {"scored", "not_applicable"}
+            for e in entries
         ),
         comparisons=comparisons,
+        panels=panels,
+        distributions=distributions,
+        agreement_protocol=protocol(rubric["scale"]),
+        rubric=rubric,
+        rubric_digest=digest(rubric),
     )

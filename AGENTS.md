@@ -23,7 +23,8 @@
 - 위 구성 요소는 논리적인 책임이다. 각각을 반드시 별도 패키지나 컨테이너로 만들지 않는다.
   Knowledge와 RAG의 프로세스 경계는 구현 설계에서 결정한다.
 - Knowledge의 관계형 데이터와 벡터는 PostgreSQL + pgvector에 함께 저장한다.
-  개발 중 Embedding 추론은 홈서버 Ollama + BGE-M3를 사용한다.
+  개발 중 Embedding 추론은 엘리스 Serverless의 `text-embedding-3-small`을 사용한다.
+  홈서버 Ollama + BGE-M3 어댑터는 선택 가능한 백엔드로 유지한다.
 - Ingest의 문서 표현·직렬화·중복 등록은 LlamaIndex Core와 PostgreSQL Docstore를 사용한다.
   본문 HTML 전체를 한 Document로 `IngestionPipeline`의 `HTMLNodeParser`에 전달한다.
   DOM 평탄화·조각 분할·자체 블록 형식·제목 스택·셀 파서를 별도로 유지하지 않는다.
@@ -43,13 +44,37 @@
   검색 도구는 BM25(`bm25s`+Kiwi) `keyword_search`와 Dense `meaning_search`이고,
   같은 Pydantic 계약을 agent와 Bearer 인증 MCP 엔드포인트(`/mcp`, `mcp` SDK)가 공유한다.
   최종 답변은 기존 Citation 검증 단계를 거친다. LangChain 체인·LlamaIndex QueryEngine은 사용하지 않는다.
-- Judge는 MLflow Gateway의 GPT-6 Luna·Claude Haiku 5.5·Gemini 3.5 Flash Lite를 재사용한다. Gold·Iron은 expectations 기반 직접 평가, 일반 대화는 dev Trace의 100% 자동 평가로 구분한다. 스케줄러·서비스 분리·클라우드 배포 방식은 별도 결정한다.
+- Judge는 MLflow Gateway의 GPT-6 Luna·Claude Haiku 5.5·Gemini 3.5 Flash Lite를 재사용한다. Gold·Iron은 Ragas 기반 expectations 직접 평가, 일반 대화는 dev Trace의 100% 자동 평가로 구분한다. 스케줄러·서비스 분리·클라우드 배포 방식은 별도 결정한다.
 - 사용자 승인으로 대화 UI는 Open WebUI 프런트엔드를 추출·수정해 사용한다.
   관리자/방문자 코드로 로그인하고 대화는 코드별로 보존한다. 로그아웃은 세션만 종료한다.
   관리자 화면에서 방문자 코드 발급·연장·폐기를 지원하고, Dataset 평가는 별도 Bearer로 인증한다.
   설계는 `docs/chat-service-design.md`, 실행은 `docs/chat-service-operations.md`에 기록하며, 대화·평가는 동일한 QA 실행 로직을 사용한다.
   원본 커밋·수정 내역·라이선스·branding을 추적하고 Open WebUI 백엔드는 배포하지 않는다.
-- 활성 release는 `release/v0.1.0`이며, 구현 범위는 아래 milestone 기준을 따른다.
+- 활성 release는 `release/v0.2.0`이며, 구현 범위는 아래 milestone 기준을 따른다.
+
+## v0.2.0 — Human Review와 실험 인프라 고도화
+
+- 질의응답 서비스는 RAG 질의응답, 자동 평가 도구는 Eval Harness, 사람 채점 기능은 Human Review로 구분한다.
+- Human Review는 평가 시스템의 일부다. MLflow evaluation run의 고정 답변·근거에 검수자별 평가를 연결한다.
+  웹에서 질문별로 Judge와 같은 항목·척도로 판정·의견을 저장하고 다음 질문으로 이동한다.
+- 기존 코드 인증을 사용하고 현재 로그인한 코드로만 검수한다. 검수자 선택·대리 배정 기능은 두지 않는다.
+  각 사용자가 평가 실행을 조회해 자신의 회차를 시작하며, 본인의 완료 횟수와 진행 중인 회차를 표시한다.
+  검수 중 다른 사람·Judge의 점수와 의견은 API 응답에도 포함하지 않는다. 동일 코드는 동일 검수자다.
+- Gold는 정확성·완전성·근거 충실도·응답 적절성, Iron은 행동 준수를 평가한다.
+  제출은 질문 단위로 원자적·불변이며 답변·rubric 해시를 보존한다. 미제출 입력은 계정·회차별로 자동 저장한다.
+  같은 고정 답변의 새 검수 회차를 시작해 사람의 반복 일관성을 측정하며, 이전 판정은 새 회차에 채워 넣지 않는다.
+- 오프라인 품질 채점은 Ragas DiscreteMetric으로 공통 rubric 등급을 직접 받는다. Gold는 0·1·2, Iron은 0·1이며 사람도 같은 anchor를 사용한다. 비율 진단은 선택적으로 분리하고 임계값 변환하지 않는다.
+- 평가자 신뢰도는 선형 가중 Cohen κ를 주 지표로, 일반/제곱 가중 κ·명목형 Fleiss κ·순서형 Krippendorff α를 보조 사용한다. 종합 집단에는 한 주체의 여러 회차를 중복 투입하지 않는다.
+- 평가 저장 계약은 `docs/evaluation-schema.md`를 따른다. answers는 `evaluation-v1`, grading·agreement·comparison은 `evaluation-v2`·`rubric-v1`이다. rubric 원문·해시는 grading 프로필에 고정한다.
+  grading run 하나는 한 평가자가 고정 답변 전체를 한 번 채점한 단위이며 모델별·사람별·회차별로 분리한다.
+  사람·모델은 공통 grading 레지스트리·manifest·rubric metric을 쓰고 answers run에 parent/source로 연결한다.
+  사람 판정은 DB에 먼저 저장한 뒤 본인 grading run에 동기화한다. 원본에 점수를 덧붙이지 않는다.
+  이전 schema의 평가·검수 결과는 조회·분석에서 제외하고 변환·backfill·호환 마이그레이션을 추가하지 않는다.
+- comparison은 agreement A/B 한 쌍을 비교한다. system은 평가자/기준을, judge는 답변/사람 판정을 고정하며 원본 수정·모델 재호출을 하지 않는다. 관측 교집합·제외 사유·계산 조건을 기록한다.
+- 후속 실험 인프라는 조건 A/B/C, 답변 반복 A1/A2, 고정 답변의 Judge 반복 J1/J2를 구분해 묶고,
+  시행 간 일치도·변동과 사람 정합성을 분석한다. 현재 반복 CLI와 향후 실험 관리 UI의 구현 상태를 구분한다.
+- 완료 기준은 Gold·Iron 실행 결과를 웹에서 블라인드 검수하고 세 Judge와의 정합성 및
+  동일 조건 반복·설정 변경 실험을 비교할 수 있는 것이다. 실제 전수 평가·사람 채점은 별도 수행한다.
 
 ## v0.1.0 — 최소 서비스 골격과 문서 수집·검색
 
@@ -93,8 +118,13 @@
   루트를 프런트엔드나 Python 애플리케이션으로 사용하지 않는다.
 - 각 서비스 폴더가 소스, 패키지 메타데이터, 의존성 설정과 필요한 Dockerfile을 소유한다.
   언어와 프레임워크는 서비스별로 결정하고, 한 서비스의 선택을 저장소 전체에 강제하지 않는다.
-- 평가 실행과 보고서 생성 도구는 `tools/evaluation/`에 둔다.
+- 평가 실행 도구는 `tools/evaluation/`에 둔다.
   서비스와 평가가 사용하는 검색·생성 로직은 공유해 실제 서비스와 다른 파이프라인을 평가하지 않도록 한다.
+- Notebook 보고서 도구는 `tools/reporting/`의 독립 패키지·환경에 둔다.
+  템플릿을 복사해 입력·표시 범위를 설정하고 hvPlot/Bokeh·Panel로 HTML을 export한다.
+  보고서는 저장된 조건·지표·문항별 결과를 기계적으로 표현하며 해석·결론을 새로 작성하거나 생성하지 않는다.
+  MLflow SDK로 고정된 결과를 읽으며 Knowledge에 보고서 의존성을 추가하지 않는다.
+  Notebook 출력·widget 상태·생성 HTML·캐시는 커밋하지 않는다.
 - 루트에는 README·AGENTS·Compose 등 저장소 공통 실행·운영 설정을 둔다.
   PostgreSQL 등 공식 이미지를 사용하는 인프라는 Compose에 정의하고, 전용 설정이 필요할 때 파일을 추가한다.
 - 서비스나 도구를 구현할 때 필요한 폴더와 설정만 생성한다.
@@ -155,7 +185,8 @@
   문서 갱신과 오래된 벡터 정리는 일관된 단위로 반영한다.
 - RAG·Ingest는 공통 Embedding 인터페이스를 사용하고, 백엔드별 요청·인증·응답 변환은 어댑터가 맡는다.
   문서와 질의 임베딩을 모두 같은 프로필로 처리하며 응답 순서·개수·차원을 검증한다.
-- 우선 Ollama 어댑터를 구현하고, 제출 환경의 실제 API 계약이 정해지면 해당 어댑터를 추가한다.
+- Ollama와 개발용 엘리스 Serverless의 Embeddings API 어댑터를 제공한다. 제출 환경의 실제
+  서빙 계약이 다르면 해당 어댑터를 추가한다.
   엘리스 ML API가 Ollama 또는 OpenAI와 같은 프로토콜이라고 가정하지 않는다.
 - 백엔드 종류·접속 URL·모델 식별자·선택적 API 키·타임아웃·배치 크기를 환경별 설정으로 주입한다.
   정확한 변수명과 기본값은 구현 시 정하고 `.env.example`과 README에 반영한다.
@@ -263,9 +294,9 @@
   `pyproject.toml`과 `package.json` 및 대응 lockfile의 자체 패키지 버전이 일치하는지 확인한다.
 - PR CI는 feature → release, release → main 방향과 버전 정합성을 검사한다.
   release PR 제목은 `Release vX.Y.Z`로 한다.
-- feature PR은 의존성 설치·DB 기동 없는 기본 검사와 변경 경로에 해당하는 앱 검사만 수행한다.
-  문서·평가 데이터만 변경하면 앱 검사는 생략하며, 공통 설정·미분류 경로는 양쪽 앱을 검사한다.
-  release PR은 경로와 관계없이 전체 앱 검사와 서비스 이미지 빌드를 수행한다.
+- feature PR은 의존성 설치·DB 기동 없는 기본 검사와 변경 경로에 해당하는 앱·보고서 도구 검사만 수행한다.
+  문서·평가 데이터만 변경하면 앱 검사는 생략하며, 공통 설정·미분류 경로는 앱과 보고서 도구를 검사한다.
+  release PR은 경로와 관계없이 전체 앱·보고서 도구 검사와 서비스 이미지 빌드를 수행한다.
   앱의 테스트·lockfile 검사 등은 각 구현이 추가될 때 CI에 연결한다.
 - `.github/scripts/release.py`는 CI의 브랜치·패키지 버전 확인과 릴리스 발행을 담당한다.
   CI 도구에 쓰는 Python 3.12는 애플리케이션의 언어나 Python 버전을 결정하지 않는다.

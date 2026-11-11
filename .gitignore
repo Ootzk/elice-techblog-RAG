@@ -30,3 +30,6 @@ Thumbs.db
 node_modules/
 .svelte-kit/
 /apps/web/build/
+
+# Notebook checkpoint caches
+.ipynb_checkpoints/
