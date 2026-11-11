@@ -99,3 +99,42 @@ def test_rounds_compare_identical_answers_and_distinguish_rubric_changes():
         build_agreement(source, first + third)["comparisons"][0]["comparison"] == "judge_revision"
     )
     assert bundle()["cases"][0]["result"]["answer"] == "fact"
+
+
+def test_uniform_random_baseline_reproducible_and_respects_applicability():
+    import importlib.util
+    from pathlib import Path
+
+    from elice_knowledge.evaluation_schema import validate_grading
+    from elice_knowledge.rubrics import load_rubric
+
+    path = Path(__file__).resolve().parents[3] / "tools/evaluation/random_baseline.py"
+    spec = importlib.util.spec_from_file_location("random_baseline", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    source = bundle()
+    rubric = load_rubric("gold")
+    profile, result = module.make_result(source, rubric, 42, 1)
+    assert module.make_result(source, rubric, 42, 1) == (profile, result)
+    assert profile["type"] == "baseline" and profile["seed"] == 42
+    assert validate_grading(source, result) == result
+    assert all(r["score"] in (0, 1, 2) for r in result["ratings"])
+    first = result["ratings"]
+    second = module.make_result(source, rubric, 42, 2)[1]["ratings"]
+    report = build_agreement(source, first + second, rubric)
+    assert all(c["comparison"] == "repeat_consistency" for c in report["comparisons"])
+    assert all(not p["members"] for p in report["panels"])
+    source["records"][0]["expectations"]["answerable"] = False
+    from elice_knowledge.evaluation_bundle import create_bundle
+
+    source = create_bundle(
+        "run",
+        {"dataset_id": "d", "dataset_digest": "digest", "records": source["records"]},
+        {},
+        source["cases"],
+    )
+    _, result = module.make_result(source, rubric, 42, 1)
+    assert (
+        next(r for r in result["ratings"] if r["dimension"] == "correctness")["status"]
+        == "not_applicable"
+    )

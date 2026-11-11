@@ -15,6 +15,9 @@
 grading 한 run은 **answers 하나를 한 평가 주체가 한 번 채점한 결과**다.
 같은 모델·사람이 같은 answers를 여러 번 채점해도 매번 별도 grading run을 만든다.
 answers를 다시 실행한 것은 답변 변동이고, 같은 answers를 다시 채점한 것은 채점 변동이다.
+무작위 기준선은 `baseline:uniform-random` 주체의 별도 grading run이다. 모델·사람과
+구분하며 MLflow에 직접 저장한다. 동일 rubric의 N/A 규칙을 적용하고 유효 항목의 등급을
+균등 추출한다. seed와 회차를 기록하고 pairwise κ 비교에는 포함하되 다중 평가자 패널에서는 제외한다.
 
 ```mermaid
 flowchart TD

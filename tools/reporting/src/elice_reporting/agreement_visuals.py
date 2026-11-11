@@ -76,6 +76,8 @@ def _icon(rater, color, badge, model_names=()):
         root.set("width", "25")
         root.set("height", "25")
         glyph = ET.tostring(root, encoding="unicode")
+    elif rater.startswith("baseline:"):
+        glyph = '<text x="15" y="24" text-anchor="middle" font-size="24">🎲</text>'
     elif rater.startswith("human:"):
         glyph = (
             f'<g fill="{color}"><circle cx="15" cy="10" r="6"/>'
@@ -148,7 +150,10 @@ def agreement_subjects(data):
             if recorded_identity is not None
             else observed or [m for m in models if not m.startswith("gateway:/")]
         )
-        if rater.startswith("human:"):
+        if rater.startswith("baseline:"):
+            display = short = "무작위 기준선"
+            color = "#64748b"
+        elif rater.startswith("human:"):
             number = human_ids.index(rater) + 1
             display = f"모의 검수 {number}" if link.get("synthetic") else f"검수자 {number}"
             short = display
@@ -272,7 +277,9 @@ def rater_legend(subjects):
             else "연결 없음"
         )
         source = (
-            "개발용 임의 점수 · 실제 사람 정합성 해석에서 제외"
+            "균등 무작위 점수 · 비교 기준선"
+            if subject["rater"].startswith("baseline:")
+            else "개발용 임의 점수 · 실제 사람 정합성 해석에서 제외"
             if subject.get("synthetic")
             else "직접 검수"
             if subject["rater"].startswith("human:")

@@ -193,8 +193,17 @@ def main():
             try:
                 tracking.log_dict(run_id, report, "agreement.json")
                 tracking.log_dict(run_id, {"results": results}, "grading-inputs.json")
-                for name, value in report_metrics(report).items():
-                    tracking.log_metric(run_id, name, value)
+                from time import time
+
+                from mlflow.entities import Metric
+
+                timestamp = int(time() * 1000)
+                values = [
+                    Metric(name, value, timestamp, 0)
+                    for name, value in report_metrics(report).items()
+                ]
+                for offset in range(0, len(values), 1000):
+                    tracking.log_batch(run_id, metrics=values[offset : offset + 1000])
                 tracking.set_terminated(run_id, "FINISHED")
                 print(json.dumps({"agreement_run_id": run_id}))
             except Exception:
