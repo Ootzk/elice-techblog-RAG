@@ -854,7 +854,7 @@ agent 도구 계약·실행 한도·생성 설정·주요 라이브러리 버전
 평가 Run의 `experiment-conditions.json`에 상세 조건을, params에는 청크 크기·겹침·임베딩 모델·차원 등
 검색할 조건을 남깁니다. 보고서는 저장된 조건만 표시하며 과거 Run의 누락 정보를 현재 DB로 채우지 않습니다.
 초안 생성 당시 모델의 세부 버전·샘플링 설정·전체 프롬프트는 보관하지 않아 같은 초안의 재생성까지 보장하지 않습니다.
-확정된 입력으로 평가를 반복하는 것과 구분하며, 현재 생성 API의 Seed 지정과 모델 가중치 revision 통제도 미구현입니다.
+확정된 입력으로 평가를 반복하는 것과 구분합니다. 생성 요청의 Seed는 실행 옵션으로 지정해 기록할 수 있지만, 모델별 지원 여부와 동일 결과 보장은 제공자에 따릅니다. 모델 가중치 revision 통제는 미구현입니다.
 모델 별칭과 고정된 평가 조건만으로 비결정적 생성의 완전한 재현성을 보장하지 않습니다.
 
 Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. 두 데이터셋 모두
@@ -976,7 +976,9 @@ models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway�
 선택합니다. 자세한 옵션은 각 명령의 `--help`에서 확인합니다.
 
 설정 시 기존 MLflow endpoint의 모델과 주소를 비교합니다. 저장된 키는 다시 읽을 수 없어 일치
-여부를 확인하지 못하며, 키 변경은 MLflow에서 따로 처리해야 합니다. `serve stop`은 Knowledge와
+여부를 확인하지 못합니다. 키를 교체한 뒤에는 `.env`의 `ELICE_API_KEY`를 바꾸고
+`./tools/operations/rag model rotate-judge-key`로 선택된 Judge 연결을 명시적으로 갱신합니다.
+다른 모델이 같은 MLflow 연결을 쓰면 덮어쓰지 않고 중단합니다. `serve stop`은 Knowledge와
 worker만 멈추고 DB와 공용 MLflow 데이터는 유지합니다. prod에서는
 `--env-file .env`와 `init-env --kind prod`를 사용합니다.
 

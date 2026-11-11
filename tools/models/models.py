@@ -329,6 +329,71 @@ def register_judges(catalog, envfile):
         print(f"{role}: endpoint 등록 완료")
 
 
+def rotate_judge_key(catalog, envfile, names=None):
+    """Explicitly replace selected judge connections after checking shared use."""
+    from mlflow.tracking._tracking_service.utils import _get_store
+
+    env = dotenv_values(safe_path(envfile))
+    data = read_catalog(catalog)
+    key = env.get("ELICE_API_KEY")
+    if not key or not env.get("MLFLOW_TRACKING_URI"):
+        raise ValueError("ELICE_API_KEY와 MLFLOW_TRACKING_URI가 필요합니다")
+    selected = names or [
+        n.strip()
+        for n in (env.get("EVALUATION_JUDGE_RATERS") or "").split(",")
+        if n.strip()
+    ]
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("중복 없는 Judge를 선택하세요")
+    for name in selected:
+        validate_name(name)
+    for field in (
+        "MLFLOW_TRACKING_USERNAME",
+        "MLFLOW_TRACKING_PASSWORD",
+        "MLFLOW_TRACKING_TOKEN",
+    ):
+        if env.get(field):
+            os.environ[field] = env[field]
+    store = _get_store(
+        env.get("RAG_HOST_MLFLOW_TRACKING_URI") or env["MLFLOW_TRACKING_URI"]
+    )
+    endpoints = {x.name: x for x in store.list_gateway_endpoints()}
+    secrets = {x.secret_id: x for x in store.list_secret_infos()}
+    definitions = store.list_gateway_model_definitions()
+    chosen_definitions = set()
+    chosen_secrets = set()
+    for name in selected:
+        expected = resolve_profile(data, "judge", name, env)
+        endpoint = endpoints.get(f"elice-techblog-rag-judge-{name}")
+        if endpoint is None or len(endpoint.model_mappings) != 1:
+            raise ValueError(f"{name}: 단일 모델 endpoint를 찾을 수 없습니다")
+        definition = endpoint.model_mappings[0].model_definition
+        if definition is None or definition.secret_id not in secrets:
+            raise ValueError(f"{name}: 모델 연결을 찾을 수 없습니다")
+        secret = secrets[definition.secret_id]
+        if definition.model_name != expected.get("model") or (
+            secret.auth_config or {}
+        ).get("api_base", "").rstrip("/") != (expected.get("base_url") or "").rstrip(
+            "/"
+        ):
+            raise ValueError(f"{name}: 모델 또는 주소가 카탈로그와 다릅니다")
+        chosen_definitions.add(definition.model_definition_id)
+        chosen_secrets.add(definition.secret_id)
+    if any(
+        d.secret_id in chosen_secrets
+        and d.model_definition_id not in chosen_definitions
+        for d in definitions
+    ):
+        raise ValueError(
+            "선택하지 않은 모델이 같은 연결을 사용합니다. 함께 선택하거나 MLflow에서 확인하세요"
+        )
+    for secret_id in sorted(chosen_secrets):
+        store.update_gateway_secret(secret_id, secret_value={"api_key": key})
+    print(
+        f"Judge {len(selected)}개의 연결 {len(chosen_secrets)}개에 환경 파일의 공용 키를 적용했습니다."
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=".env.dev")
@@ -342,6 +407,10 @@ def main():
     p.add_argument("names", nargs="+")
     sub.add_parser("list")
     sub.add_parser("register-judges")
+    rotate = sub.add_parser("rotate-judge-key")
+    rotate.add_argument(
+        "--judge", action="append", help="갱신할 Judge 이름; 생략하면 선택된 전체"
+    )
     args = parser.parse_args()
     try:
         if args.command == "capture":
@@ -362,6 +431,8 @@ def main():
             for kind, entries in read_catalog(args.catalog).items():
                 for name in sorted(entries):
                     print(f"{kind}/{name}")
+        elif args.command == "rotate-judge-key":
+            rotate_judge_key(args.catalog, args.env_file, args.judge)
         else:
             register_judges(args.catalog, args.env_file)
     except (ValueError, TypeError, OSError) as exc:

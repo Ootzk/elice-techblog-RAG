@@ -141,3 +141,51 @@ def test_model_catalog_rejects_execution_parameters(repo):
             models.write_catalog(
                 repo / "models.json", {"answer": {"test": {"model": "m", **option}}}
             )
+
+
+def test_judge_key_rotation_preflights_shared_connections(monkeypatch, capsys):
+    from types import SimpleNamespace
+
+    from mlflow.tracking._tracking_service import utils
+
+    shared = SimpleNamespace(
+        secret_id="s", auth_config={"api_base": "https://example.test/v1"}
+    )
+    first = SimpleNamespace(model_definition_id="m1", secret_id="s", model_name="one")
+    second = SimpleNamespace(model_definition_id="m2", secret_id="s", model_name="two")
+    endpoint = SimpleNamespace(
+        name="elice-techblog-rag-judge-first",
+        model_mappings=[SimpleNamespace(model_definition=first)],
+    )
+    writes = []
+    store = SimpleNamespace(
+        list_gateway_endpoints=lambda: [endpoint],
+        list_secret_infos=lambda: [shared],
+        list_gateway_model_definitions=lambda: [first, second],
+        update_gateway_secret=lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
+    monkeypatch.setattr(utils, "_get_store", lambda _: store)
+    monkeypatch.setattr(models, "safe_path", lambda _: "ignored")
+    monkeypatch.setattr(
+        models,
+        "dotenv_values",
+        lambda _: {
+            "ELICE_API_KEY": "private-shared-key",
+            "MLFLOW_TRACKING_URI": "https://mlflow.test",
+            "EVALUATION_JUDGE_RATERS": "first",
+        },
+    )
+    monkeypatch.setattr(
+        models,
+        "read_catalog",
+        lambda _: {
+            "judge": {"first": {"model": "one", "base_url": "https://example.test/v1"}}
+        },
+    )
+    with pytest.raises(ValueError, match="선택하지 않은"):
+        models.rotate_judge_key("models.json", ".env.dev")
+    assert not writes
+    store.list_gateway_model_definitions = lambda: [first]
+    models.rotate_judge_key("models.json", ".env.dev")
+    assert writes == [(("s",), {"secret_value": {"api_key": "private-shared-key"}})]
+    assert "private-shared-key" not in capsys.readouterr().out
