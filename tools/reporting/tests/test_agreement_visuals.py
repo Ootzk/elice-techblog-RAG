@@ -266,6 +266,30 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
     assert [widget.label for widget in revised.select(pn.widgets.Select)] == ["Cohen κ 평가 항목"]
 
 
+def test_quality_summary_weights_rounds_equally_and_excludes_na():
+    from elice_reporting.agreement_visuals import quality_summary, quality_summary_cells
+
+    data = demo("agreement")
+    original = data.inputs["gradings"][1]
+    other = deepcopy(original)
+    other["round"] = 2
+    dimension = "correctness"
+    for grading, scores in ((original, [2, 2, 0, 0]), (other, [2, None, None, None])):
+        ratings = [r for r in grading["ratings"] if r["dimension"] == dimension]
+        for rating, score in zip(ratings, scores, strict=True):
+            rating.update(status="scored" if score is not None else "not_applicable", score=score)
+    data.inputs["gradings"].append(other)
+    subjects = agreement_subjects(data)
+    rows, cells = quality_summary_cells(data, subjects, (dimension,), 2)
+    index = next(i for i, row in enumerate(rows) if row["key"] == subject_key(original))
+    cell = cells.iloc[index]
+    assert cell["display"] == "75%"  # mean(2/4, 1/1), not pooled 3/5
+    assert cell["rounds"] == "2/2회"
+    assert "N/A 3" in cell["details"]
+    hv.extension("bokeh")
+    assert len(quality_summary(data, subjects)[1]) == 2
+
+
 def test_luna_and_terra_have_readable_names_and_distinct_icons_without_type_codes():
     data = demo("agreement")
     original = deepcopy(data.inputs["gradings"][1])

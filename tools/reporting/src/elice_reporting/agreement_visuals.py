@@ -759,6 +759,96 @@ def agreement_browser(data, subjects):
     )
 
 
+def quality_summary_cells(data, subjects, dimensions, threshold):
+    """Average valid question rates across rounds of each rater and profile."""
+    groups = {}
+    for subject in subjects:
+        groups.setdefault((subject["rater"], subject["profile"]), []).append(subject)
+    gradings = {subject_key(g): g for g in data.inputs["gradings"]}
+    record_ids = [str(record["id"]) for record in data.inputs["bundle"]["records"]]
+    rows, cells = [], []
+    palette = ("#f1eee6", "#d9e7df", "#b4d3c9", "#83b8b1", "#4b9699", "#23727e", "#174b62")
+    for group in groups.values():
+        first = group[0]
+        rows.append(
+            {**first, "icon": _icon(first["rater"], first["color"], None, first["actual_models"])}
+        )
+        for x, dimension in enumerate(dimensions):
+            rates, details = [], []
+            for subject in group:
+                grading = gradings.get(subject["key"], {})
+                ratings = {
+                    (str(r["record_id"]), r["dimension"]): r for r in grading.get("ratings", [])
+                }
+                statuses = [ratings.get((record_id, dimension), {}) for record_id in record_ids]
+                valid = [
+                    r["score"]
+                    for r in statuses
+                    if r.get("status") == "scored" and r.get("score") is not None
+                ]
+                na = sum(r.get("status") == "not_applicable" for r in statuses)
+                errors = sum(r.get("status") == "error" for r in statuses)
+                missing = len(statuses) - len(valid) - na - errors
+                if valid:
+                    rates.append(sum(score >= threshold for score in valid) / len(valid))
+                details.append(
+                    f"{subject['round']}회차: 유효 {len(valid)}, N/A {na}, "
+                    f"오류 {errors}, 미기록 {missing}"
+                )
+            rate = sum(rates) / len(rates) if rates else None
+            cells.append(
+                dict(
+                    x=x,
+                    y=len(groups) - len(rows),
+                    fill=palette[min(int(rate * len(palette)), len(palette) - 1)]
+                    if rate is not None
+                    else "#e2e8f0",
+                    ink="white" if rate is not None and rate >= 0.7 else "#18364a",
+                    display=f"{rate:.0%}" if rate is not None else "—",
+                    rater=first["display_name"],
+                    dimension=metric_label(dimension),
+                    rounds=f"{len(rates)}/{len(group)}회",
+                    details=" · ".join(details),
+                )
+            )
+    return rows, pd.DataFrame(cells)
+
+
+def quality_summary(data, subjects):
+    dimensions = DIMENSIONS if data.inputs["bundle"]["kind"] == "gold" else ("behavior",)
+    boundaries = (
+        [("부분 충족 이상 · 1점 또는 2점", 1), ("충분 · 2점", 2)]
+        if len(dimensions) > 1
+        else [("충족 · 1점", 1)]
+    )
+    plots = []
+    for title, threshold in boundaries:
+        rows, cells = quality_summary_cells(data, subjects, dimensions, threshold)
+        if not rows:
+            return pn.pane.Markdown("기록된 평가 주체가 없습니다.")
+        plot = _grid(
+            cells,
+            rows,
+            dimensions=dimensions,
+            title=title,
+            tooltips=[
+                ("평가 주체", "@rater"),
+                ("평가 항목", "@dimension"),
+                ("평균 충족률", "@display"),
+                ("유효 회차", "@rounds"),
+                ("회차별 문항", "@details"),
+            ],
+        )
+        plots.append(pn.pane.HoloViews(plot, styles=PLOT_STYLE, margin=8))
+    return pn.Column(
+        pn.pane.Markdown(
+            "각 회차의 유효 문항 충족률을 계산한 뒤 회차별로 같은 비중으로 평균합니다. "
+            "N/A·오류·미기록은 제외합니다."
+        ),
+        pn.Row(*plots, styles={"overflow-x": "auto"}, sizing_mode="stretch_width"),
+    )
+
+
 def grading_heatmap(data, subjects, record_id):
     if not subjects:
         return pn.pane.Markdown("기록된 평가 주체가 없습니다.")
