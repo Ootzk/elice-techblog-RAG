@@ -11,7 +11,7 @@ from test_evaluation_tools import load_tool
 from test_reliability import source_with_four_cases
 
 from elice_knowledge.agreement import build_agreement
-from elice_knowledge.comparison import compare, comparison_metrics, scalar
+from elice_knowledge.comparison import compare, comparison_metrics, scalar, validate_snapshot
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import answer_digest
 from elice_knowledge.evaluation_schema import SCHEMA
@@ -28,6 +28,13 @@ def refresh(snapshot):
     )
     snapshot["agreement"] = {**report, "schema": SCHEMA, "grading_run_ids": []}
     return snapshot
+
+
+def test_agreement_comparison_excludes_random_baseline():
+    snapshot = frozen(
+        "A", patterns={"human:alice": [2, 2, 0, 2], "baseline:uniform-random": [0, 1, 2, 0]}
+    )
+    assert set(validate_snapshot(snapshot)) == {"human:alice"}
 
 
 def frozen(name, *, patterns=None, source=None, failed=(), ids=None):

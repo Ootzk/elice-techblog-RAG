@@ -201,6 +201,12 @@ def _resources(left, right, record_ids):
 def build(baseline, candidate):
     """Use repeatability-level question rates and changes; never average raw grades."""
     a, b = baseline["report"], candidate["report"]
+    if any(
+        row.get("rater", "").startswith("baseline:")
+        for report in (a, b)
+        for row in report.get("summaries", [])
+    ):
+        raise ValueError("comparison_contains_baseline_rater_regenerate_repeatability")
     if not all(isinstance(report.get("resource_levels"), list) for report in (a, b)):
         raise ValueError("comparison_requires_repeatability_resources")
     if (

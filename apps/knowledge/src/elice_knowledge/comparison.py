@@ -35,6 +35,8 @@ def validate_snapshot(snapshot):
         validate_grading(bundle, grading)
         if not grading["complete"]:
             raise ValueError("comparison_requires_complete_grading")
+        if grading["rater_id"].startswith("baseline:"):
+            continue
         if grading["rater_id"] in subjects:
             raise ValueError("comparison_requires_one_grading_per_subject")
         subjects[grading["rater_id"]] = grading
@@ -45,6 +47,8 @@ def validate_snapshot(snapshot):
     )
     if any(agreement.get(key) != value for key, value in recomputed.items()):
         raise ValueError("comparison_agreement_inputs_or_protocol_mismatch")
+    if not subjects:
+        raise ValueError("comparison_requires_gradings")
     return subjects
 
 
