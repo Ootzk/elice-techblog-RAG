@@ -173,6 +173,7 @@ def test_heatmaps_are_fixed_hover_only_and_item_keeps_four_columns():
         assert all(isinstance(tool, HoverTool) for tool in figure.tools)
         assert {label for tool in figure.tools for label, _ in tool.tooltips} == {
             "선형 가중 Cohen κ",
+            "일치율",
             "유효",
             "제외",
             "사유",
@@ -246,8 +247,15 @@ def test_rounds_keep_individual_links_icons_labels_and_repeat_views():
     assert "https://mlflow.test/grade-two" in legend
     assert legend.count("ChatGPT 6 Luna") == 2
     view = agreement_browser(data, subjects)
-    assert isinstance(view.objects[0], pn.widgets.Select)
-    assert len(view.objects[0].options) == 2
+    selection, target = view.objects[0]
+    assert len(selection.options) == 2
+    assert len(target.options) >= 2  # A single human review can be compared with every round.
+    assert not target.visible
+    human = [s for s in subjects if s["rater"].startswith("human:")]
+    cells = kappa_cells(data, human, "correctness", column_subjects=rounds)
+    assert len(cells) == len(human) * len(rounds)
+    assert "동일 평가 회차" not in cells["reason"].values
+    assert not any("<table" in str(pane.object) for pane in view.select(pn.pane.HTML))
     assert len(grading_cells(data, subjects, "0")) == len(subjects) * 4
     # Profile changes are separate protocols, not repeated measurements of the same one.
     repeated["rater_profile_digest"] = "changed-protocol"

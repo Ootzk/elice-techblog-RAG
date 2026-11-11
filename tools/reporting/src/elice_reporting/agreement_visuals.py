@@ -377,7 +377,7 @@ def kappa_colorbar(height=680):
     )
 
 
-def kappa_cells(data, subjects, dimension):
+def kappa_cells(data, subjects, dimension, *, column_subjects=None):
     stored = {}
     for row in data.report["comparisons"]:
         if row["dimension"] != dimension:
@@ -389,9 +389,10 @@ def kappa_cells(data, subjects, dimension):
             stored[key] = row
     cells = []
     size = len(subjects)
+    columns = subjects if column_subjects is None else column_subjects
     for y, a in enumerate(subjects):
-        for x, b in enumerate(subjects):
-            if x <= y:
+        for x, b in enumerate(columns):
+            if column_subjects is None and x <= y:
                 continue
             row = stored.get((a["key"], b["key"]))
             value = row["cohen_kappa"] if row else None
@@ -415,10 +416,15 @@ def kappa_cells(data, subjects, dimension):
                     )
                     if row
                     else "동일 평가 회차"
-                    if x == y
+                    if a["key"] == b["key"]
                     else "미기록",
                     valid=row["valid_pairs"] if row else None,
                     excluded=row["excluded_pairs"] if row else None,
+                    agreement=(
+                        f"{row['agreement']:.1%}"
+                        if row and row.get("agreement") is not None
+                        else "—"
+                    ),
                 )
             )
     return pd.DataFrame(
@@ -435,6 +441,7 @@ def kappa_cells(data, subjects, dimension):
             "reason",
             "valid",
             "excluded",
+            "agreement",
         ],
     )
 
@@ -484,7 +491,7 @@ def _grid(
 ):
     """HoloViews creates fresh Bokeh models for notebook display and HTML export."""
     nrows = len(subjects)
-    ncols = len(subjects) if column_subjects is not None else len(dimensions)
+    ncols = len(column_subjects) if column_subjects is not None else len(dimensions)
     frame = cells.assign(x0=cells.x - 0.43, y0=cells.y - 0.43, x1=cells.x + 0.43, y1=cells.y + 0.43)
 
     def decorate(plot, element):
@@ -573,8 +580,9 @@ def _grid(
                 text_font_style="bold",
             )
 
-    width = matrix_size(subjects) if column_subjects is not None else GRADING_MATRIX_WIDTH
-    height = matrix_size(subjects)
+    larger = max((subjects, column_subjects or []), key=len)
+    width = matrix_size(larger) if column_subjects is not None else GRADING_MATRIX_WIDTH
+    height = matrix_size(larger) if column_subjects is not None else matrix_size(subjects)
     left = -1.5 if column_subjects is not None else -1.35
     bounds = dict(
         xlim=(left, ncols - 0.25),
@@ -609,21 +617,22 @@ def _grid(
     )
 
 
-def kappa_heatmaps(data, subjects):
+def kappa_heatmaps(data, subjects, *, column_subjects=None):
     if not subjects:
         return pn.pane.Markdown("기록된 평가 주체가 없습니다.")
     dimensions = DIMENSIONS if data.inputs["bundle"]["kind"] == "gold" else ("behavior",)
     heatmaps = []
     for dimension in dimensions:
-        cells = kappa_cells(data, subjects, dimension)
+        cells = kappa_cells(data, subjects, dimension, column_subjects=column_subjects)
         heatmap = _grid(
             cells,
             subjects,
-            column_subjects=subjects,
+            column_subjects=subjects if column_subjects is None else column_subjects,
             title=metric_label(dimension),
             color=METRICS[dimension][2],
             tooltips=[
                 ("선형 가중 Cohen κ", "@value"),
+                ("일치율", "@agreement"),
                 ("유효", "@valid"),
                 ("제외", "@excluded"),
                 ("사유", "@reason"),
@@ -631,7 +640,8 @@ def kappa_heatmaps(data, subjects):
         )
         heatmaps.append(heatmap)
 
-    size = matrix_size(subjects)
+    larger = max((subjects, column_subjects or []), key=len)
+    size = matrix_size(larger)
 
     def matrix(heatmap):
         return pn.Column(
@@ -642,7 +652,7 @@ def kappa_heatmaps(data, subjects):
             margin=MATRIX_MARGIN,
         )
 
-    group_width, group_height = matrix_group_size(subjects)
+    group_width, group_height = matrix_group_size(larger)
     views = [
         pn.Row(
             pn.GridBox(
@@ -683,7 +693,11 @@ def kappa_heatmaps(data, subjects):
         selector,
         *views,
         pn.pane.Markdown(
-            "— : 계산 불가·미기록 (마우스를 올려 사유 확인) · 대각선과 하삼각은 생략", margin=(4, 8)
+            (
+                "— : 계산 불가·미기록 (마우스를 올려 사유 확인)"
+                + (" · 대각선과 하삼각은 생략" if column_subjects is None else "")
+            ),
+            margin=(4, 8),
         ),
         sizing_mode="stretch_width",
         styles={"overflow-x": "auto"},
@@ -691,83 +705,56 @@ def kappa_heatmaps(data, subjects):
 
 
 def agreement_browser(data, subjects):
-    """Keep rounds separate and expose same-protocol repetitions without pooling votes."""
+    """Compare repeated rounds or a human reviewer without pooling votes."""
     grouped = {}
     for subject in subjects:
         grouped.setdefault((subject["rater"], subject["profile"]), []).append(subject)
     repeated = [group for group in grouped.values() if len(group) > 1]
     full = kappa_heatmaps(data, subjects)
     if not repeated:
-        return pn.Column(
-            full,
-            pn.pane.Markdown(
-                "회차별 판정과 κ는 평균내지 않습니다. 같은 평가자·같은 프로필의 여러 회차가 "
-                "포함되면 반복 일관성 뷰가 추가됩니다."
-            ),
-        )
+        return pn.Column(full)
+
+    humans = {}
+    for subject in subjects:
+        if subject["rater"].startswith("human:"):
+            humans.setdefault(subject["rater"], []).append(subject)
     options = {"전체 평가 주체 · 회차별 비교": "0"}
+    options.update(
+        {f"반복 일관성 · {group[0]['display_name']}": str(i) for i, group in enumerate(repeated, 1)}
+    )
+    selection = pn.widgets.Select(label="일치도 보기", options=options, value="0")
+    target_options = {"동일 평가 주체 회차": "0"}
+    target_options.update(
+        {group[0]["display_name"]: str(i) for i, group in enumerate(humans.values(), 1)}
+    )
+    target = pn.widgets.Select(label="비교 대상", options=target_options, value="0", visible=False)
     views = [pn.Column(full)]
-    for i, group in enumerate(repeated, 1):
-        options[f"반복 일관성 · {group[0]['display_name']}"] = str(i)
-        pairs = [
-            row
-            for row in data.report["comparisons"]
-            if subject_key(row["left"]) in {s["key"] for s in group}
-            and subject_key(row["right"]) in {s["key"] for s in group}
-        ]
-        rows = "".join(
-            "<tr>"
-            + "".join(
-                f"<td>{escape(str(value))}</td>"
-                for value in (
-                    metric_label(row["dimension"]),
-                    row["left"]["round"],
-                    row["right"]["round"],
-                    row["valid_pairs"],
-                    row["excluded_pairs"],
-                    row["agreement"] if row["agreement"] is not None else "미정의",
-                    row["cohen_kappa"] if row["cohen_kappa"] is not None else "미정의",
-                    row["kappa_undefined_reason"] or "—",
-                )
+    for group in repeated:
+        comparisons = [pn.Column(kappa_heatmaps(data, group))]
+        for human in humans.values():
+            comparisons.append(
+                pn.Column(kappa_heatmaps(data, human, column_subjects=group), visible=False)
             )
-            + "</tr>"
-            for row in pairs
+        target.jscallback(
+            args={f"comparison_{i}": view for i, view in enumerate(comparisons)},
+            value="const views=["
+            + ",".join(f"comparison_{i}" for i in range(len(comparisons)))
+            + "];views.forEach((view,i)=>{view.visible=i===Number(cb_obj.value);});",
         )
-        table = pn.pane.HTML(
-            '<table style="width:100%;font:13px system-ui"><thead><tr>'
-            + "".join(
-                f"<th>{name}</th>"
-                for name in (
-                    "항목",
-                    "회차 A",
-                    "회차 B",
-                    "유효",
-                    "제외",
-                    "일치율",
-                    "선형 가중 Cohen κ",
-                    "사유",
-                )
-            )
-            + "</tr></thead><tbody>"
-            + rows
-            + "</tbody></table>",
-            stylesheets=["th,td{text-align:left;padding:8px;border-bottom:1px solid #e4e9ef;}"],
-        )
-        views.append(pn.Column(kappa_heatmaps(data, group), table, visible=False))
-    selector = pn.widgets.Select(label="일치도 보기", options=options, value="0")
-    selector.jscallback(
-        args={f"view_{i}": view for i, view in enumerate(views)},
+        views.append(pn.Column(*comparisons, visible=False))
+    selection.jscallback(
+        args={**{f"view_{i}": view for i, view in enumerate(views)}, "target": target},
         value="const views=["
         + ",".join(f"view_{i}" for i in range(len(views)))
-        + "];views.forEach((view,i)=>{view.visible=i===Number(cb_obj.value);});",
+        + "];views.forEach((view,i)=>{view.visible=i===Number(cb_obj.value);});"
+        + "target.visible=Number(cb_obj.value)!==0;",
     )
     return pn.Column(
-        selector,
+        pn.Row(selection, target),
         *views,
         pn.pane.Markdown(
-            "반복 일관성은 동일 평가자·동일 프로필 회차끼리만 비교합니다. "
-            "프로필 변경은 평가 조건 변경이며 반복 실행으로 합치지 않습니다. "
-            "회차별 판정·κ를 평균내거나 회차를 독립 평가자로 세어 종합 일치도를 만들지 않습니다."
+            "반복 비교는 동일 평가자·동일 프로필 회차끼리 비교합니다. "
+            "사람을 비교 대상으로 선택하면 행은 사람 회차, 열은 선택한 평가자 회차입니다."
         ),
     )
 
