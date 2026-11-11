@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -10,14 +11,19 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
 
     app_env: Literal["dev", "prod"] = "prod"
+    answer_model_profile: str | None = None
+    embedding_model_profile: str | None = None
+    model_catalog_file: Path = Path("models.json")
     database_url: SecretStr | None = None
     embedding_backend: Literal["ollama", "elice-serverless"] = "ollama"
     embedding_base_url: SecretStr | None = None
     embedding_model: str = "bge-m3"
     embedding_model_revision: str | None = None
+    elice_api_key: SecretStr | None = None
     embedding_api_key: SecretStr | None = None
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
     embedding_batch_size: int = Field(default=16, gt=0, le=256)
+    embedding_options: dict = Field(default_factory=dict)
     embedding_dimensions: int = Field(default=1024, gt=0, le=16000)
     mlflow_enabled: bool = True
     mlflow_tracking_uri: SecretStr | None = None
@@ -32,16 +38,13 @@ class Settings(BaseSettings):
     generation_api_key: SecretStr | None = None
     generation_model: str | None = None
     generation_timeout_seconds: float = Field(default=90, gt=0, le=300)
-    generation_temperature: float | None = Field(default=None, ge=0, le=2)
-    generation_max_output_tokens: int | None = Field(default=None, gt=0, le=32768)
-    generation_token_limit_field: Literal["max_tokens", "max_completion_tokens"] = (
-        "max_completion_tokens"
-    )
+    generation_options: dict = Field(default_factory=dict)
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
     admin_access_code: SecretStr | None = None
     auth_session_secret: SecretStr | None = None
     evaluation_api_token: SecretStr | None = None
-    qa_active_index_key: str | None = None
+    qa_corpus_snapshot_id: str | None = None
+    qa_chunk_policy_key: str | None = None
     chat_session_hours: int = Field(default=168, ge=1, le=720)
     chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
     qa_history_pairs: int = Field(default=3, ge=0, le=10)
@@ -58,6 +61,47 @@ class Settings(BaseSettings):
     qa_mlflow_experiment_name: str = "elice-techblog-rag-evaluation"
     evaluation_judges_enabled: bool = False
     evaluation_judge_raters: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def selected_models(cls, value):
+        if not isinstance(value, dict):
+            return value
+        selected = (
+            ("answer", value.get("answer_model_profile"), "generation"),
+            ("embedding", value.get("embedding_model_profile"), "embedding"),
+        )
+        if not any(name for _, name, _ in selected):
+            return value
+        try:
+            catalog = json.loads(Path(value.get("model_catalog_file") or "models.json").read_text())
+        except (OSError, ValueError):
+            raise ValueError("Model catalog is missing or invalid") from None
+        fields = {
+            "answer": (
+                "model",
+                "base_url",
+            ),
+            "embedding": (
+                "backend",
+                "model",
+                "base_url",
+                "revision",
+                "dimensions",
+            ),
+        }
+        for kind, name, prefix in selected:
+            if not name:
+                continue
+            profile = catalog.get(kind, {}).get(name)
+            if not isinstance(profile, dict):
+                raise ValueError(f"Selected {kind} model profile is missing")
+            for field in fields[kind]:
+                key = f"{prefix}_{field}"
+                value.pop(key, None)
+                if field in profile:
+                    value[key] = profile[field]
+        return value
 
     @field_validator("generation_base_url", "generation_api_key", "generation_model", mode="before")
     @classmethod
@@ -86,6 +130,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_endpoints(self):
+        if self.elice_api_key and self.elice_api_key.get_secret_value():
+            self.generation_api_key = self.elice_api_key
+            if self.embedding_backend == "elice-serverless":
+                self.embedding_api_key = self.elice_api_key
         for field, schemes in (
             ("database_url", {"postgres", "postgresql"}),
             ("embedding_base_url", {"http", "https"}),

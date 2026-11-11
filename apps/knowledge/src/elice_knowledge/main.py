@@ -120,7 +120,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def qa(request: QARequest):
         try:
             # Immediate admin path: no stored profile, so resolve the configured alias now.
-            return run_qa(settings, request, resolve(settings))
+            request_settings = settings.model_copy(
+                update={
+                    "generation_options": request.generation_options,
+                    "embedding_options": request.embedding_options,
+                }
+            )
+            return run_qa(request_settings, request, resolve(request_settings))
         except PromptError as exc:
             return JSONResponse(status_code=422, content={"error": exc.code})
         except GenerationNotConfigured as exc:

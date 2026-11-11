@@ -75,6 +75,8 @@ def condition_categories(bundle, *, failed, rubric_id, answers_reference):
         ("qa_max_context_tokens", "참고 자료 예산", "토큰"),
         ("qa_history_pairs", "대화 이력", "쌍"),
         ("qa_history_tokens", "대화 이력 예산", "토큰"),
+        ("generation_options", "답변 모델 실행 옵션", ""),
+        ("embedding_options", "임베딩 모델 실행 옵션", ""),
         ("generation_max_output_tokens", "답변 출력 한도", "토큰"),
         ("generation_temperature", "생성 온도", ""),
     )

@@ -90,9 +90,8 @@ def initialize_service(conn):
 PROFILE_FIELDS = [
     "generation_model",
     "generation_timeout_seconds",
-    "generation_temperature",
-    "generation_max_output_tokens",
-    "generation_token_limit_field",
+    "generation_options",
+    "embedding_options",
     "qa_max_context_tokens",
     "qa_history_pairs",
     "qa_history_tokens",
@@ -115,6 +114,7 @@ def code_identity():
                     "sparse.py",
                     "data/bm25_user_words.tsv",
                     "generation.py",
+                    "model_options.py",
                     "retrieval.py",
                     "embedding.py",
                     "execution.py",
@@ -215,33 +215,47 @@ class ServiceStore:
         with self.connection() as conn:
             conn.execute("UPDATE chat_sessions SET expires_at=now() WHERE id=%s", (session_id,))
 
-    def active_profile(self, index_key=None, top_k=5, prompt_selectors=None):
+    def active_profile(
+        self,
+        index_key=None,
+        top_k=5,
+        prompt_selectors=None,
+        generation_options=None,
+        embedding_options=None,
+    ):
         """Freeze index, generation settings and resolved prompt content into a profile."""
-        s = self.settings
+        from elice_knowledge.model_options import (
+            validate_embedding_options,
+            validate_generation_options,
+        )
+
+        s = self.settings.model_copy(
+            update={
+                "generation_options": validate_generation_options(generation_options),
+                "embedding_options": validate_embedding_options(embedding_options),
+            }
+        )
         try:
             # Resolved before the DB transaction: the registry is a network call.
             prompts = resolve(s, prompt_selectors)
         except PromptError as exc:
             raise ServiceError(exc.code, 503 if exc.code == "prompt_unavailable" else 422) from None
         with self.connection() as conn:
-            if index_key or s.qa_active_index_key:
-                row = conn.execute(
-                    "SELECT key FROM corpus_vector_indexes WHERE key=%s",
-                    (index_key or s.qa_active_index_key,),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT key FROM corpus_vector_indexes ORDER BY created_at DESC,key LIMIT 1"
-                ).fetchone()
-            if not row:
+            from elice_knowledge.retrieval import IndexSelectionError, select_index
+
+            try:
+                resolved_index = select_index(conn, s, explicit_key=index_key)
+            except IndexSelectionError:
+                raise ServiceError("ambiguous_qa_index", 409) from None
+            if not resolved_index:
                 raise ServiceError("no_active_qa_index", 503)
             from elice_knowledge.experiment_conditions import freeze_conditions
 
-            conditions = freeze_conditions(conn, row["key"], s)
+            conditions = freeze_conditions(conn, resolved_index, s)
             config = {name: getattr(s, name) for name in PROFILE_FIELDS}
             config.update(
                 experiment_conditions=conditions,
-                index_key=row["key"],
+                index_key=resolved_index,
                 top_k=top_k,
                 prompts={name: prompt.model_dump() for name, prompt in prompts.items()},
                 code_identity=code_identity(),

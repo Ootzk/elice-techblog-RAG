@@ -212,6 +212,14 @@ def test_active_profile_freezes_resolved_prompt_content(retrieval, monkeypatch):
     experiment = store.active_profile(key, 3, {PLANNER: "7"})
     assert experiment != store.active_profile(key, 3)
     assert store.profile(experiment)["prompts"][PLANNER]["version"] == 7
+    with_options = store.active_profile(key, 3, {PLANNER: "7"}, {"temperature": 0.25, "seed": 4})
+    assert with_options != experiment
+    recorded = store.profile(with_options)
+    assert recorded["generation_options"] == {"temperature": 0.25, "seed": 4}
+    assert recorded["experiment_conditions"]["generation"]["request_options"] == {
+        "temperature": 0.25,
+        "seed": 4,
+    }
 
 
 def test_experiment_conditions_freeze_selected_index_not_current_defaults(retrieval):
@@ -247,3 +255,39 @@ def test_experiment_conditions_freeze_selected_index_not_current_defaults(retrie
     assert latest["chunking"]["policy"]["chunk_size"] == 96
     assert latest["embedding"]["profile"]["embedding"]["digest"] == "another-model"
     assert service.profile(original)["experiment_conditions"] == conditions
+
+
+def test_auto_index_selection_requires_matching_and_unambiguous_conditions(retrieval, monkeypatch):
+    from elice_knowledge.retrieval import IndexSelectionError, select_index
+
+    repo, corpus, chunks, snapshot, policy, connect = retrieval
+    backend = FakeEmbedder()
+    monkeypatch.setattr(
+        "elice_knowledge.retrieval.create_embedder", lambda settings, client: backend
+    )
+    first = repo.index(policy.key, backend, snapshot)
+    with connect(None) as conn:
+        assert select_index(conn, repo.settings) == first["index_key"]
+        assert (
+            select_index(conn, repo.settings.model_copy(update={"qa_chunk_policy_key": "missing"}))
+            is None
+        )
+    new = extract_article(article_html(prose=PROSE + "두 번째 버전"), URL)
+    corpus.save(new, {})
+    second_snapshot, _ = corpus.snapshot([URL])
+    chunks.prepare(new.to_document().id_, policy)
+    second = repo.index(policy.key, backend, second_snapshot)
+    with connect(None) as conn:
+        with pytest.raises(IndexSelectionError, match="ambiguous"):
+            select_index(conn, repo.settings)
+        assert (
+            select_index(
+                conn, repo.settings.model_copy(update={"qa_corpus_snapshot_id": second_snapshot})
+            )
+            == second["index_key"]
+        )
+        assert (
+            select_index(conn, repo.settings, explicit_key=first["index_key"]) == first["index_key"]
+        )
+        backend.digest = "different"
+        assert select_index(conn, repo.settings) is None

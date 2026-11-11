@@ -222,7 +222,13 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
 
     monkeypatch.setattr(httpx, "AsyncClient", MockClient)
     monkeypatch.setenv("MLFLOW_TRACKING_TOKEN", "fake-gateway-token")
-    request_options = contract()["rater_request_options"]["chatgpt"] if streaming else None
+    request_options = (
+        {"reasoning_effort": "none", "stream": True, "max_completion_tokens": 8192}
+        if streaming
+        else {"temperature": 0.1, "top_p": 0.9, "max_tokens": 300}
+        if wire_value == 2
+        else None
+    )
 
     def run():
         return asyncio.run(
@@ -250,10 +256,15 @@ def test_real_instructor_and_openai_sdk_use_gateway_structured_json(
     body = json.loads(requests[0].content)
     assert body["model"] == "configured-judge"
     assert body["response_format"]["type"] == ("json_schema" if streaming else "json_object")
-    assert "temperature" not in body and contract()["temperature"] is None
-    assert "top_p" not in body and contract()["top_p"] is None
-    assert "max_tokens" not in body
-    assert body["max_completion_tokens"] == (8192 if streaming else 2000)
+    assert contract()["temperature"] is None and contract()["top_p"] is None
+    if request_options and not streaming:
+        assert body["temperature"] == 0.1 and body["top_p"] == 0.9 and body["max_tokens"] == 300
+    else:
+        assert "temperature" not in body and "top_p" not in body and "max_tokens" not in body
+    if streaming:
+        assert body["max_completion_tokens"] == 8192
+    else:
+        assert "max_completion_tokens" not in body
     if streaming:
         assert body["stream"] and body["reasoning_effort"] == "none"
     assert requests[0].headers["authorization"] == "Bearer fake-gateway-token"

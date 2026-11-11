@@ -136,7 +136,7 @@ docker compose --env-file .env -f compose.yaml up -d --no-build knowledge worker
 6. 호스트의 저장소 checkout에서 Dataset과 Judge 등록 CLI를 실행한다. `tools/evaluation`은
    런타임 이미지에 포함하지 않으므로 운영자 실행 환경은 Python 3.12·uv와 해당 MLflow/API에 접근할 수 있어야 한다.
    Gateway의 세 모델 연결은 대상 MLflow에 별도로 구성한다. 홈서버 secret을 export하지 않는다.
-7. `QA_ACTIVE_INDEX_KEY`를 대상 서버의 완료 인덱스로 고정하고, 일반 질문·출처·로그인·worker 동작을 확인한다.
+7. 대상 서버의 임베딩과 Corpus·청킹 정책에 일치하는 완료 인덱스를 확인하고, 일반 질문·출처·로그인·worker 동작을 확인한다.
    의미적 Dataset 평가가 필요하면 API와 worker 모두 `EVALUATION_JUDGES_ENABLED=true`로 설정한다.
    prod 대화 자동 평가는 dev 필터와 별도 정책이므로 자동으로 켜지지 않는다.
 8. `/health/live`, `/health/ready`와 소규모 QA·평가를 확인한다.

@@ -53,22 +53,15 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
 | `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 로컬 DB 초기화 설정; `DATABASE_URL`과 일치시켜야 함 |
-| `EMBEDDING_BACKEND` | `ollama` 또는 `elice-serverless`; dev 예시는 Serverless |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | 임베딩 endpoint와 모델 이름; Serverless는 `/v1` Base URL과 `text-embedding-3-small` |
-| `EMBEDDING_MODEL_REVISION` | 공급자가 제공한 고정 revision; 알 수 없으면 비움 |
-| `EMBEDDING_API_KEY` | Serverless Bearer 인증에 필수; Ollama는 선택 |
-| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; dev Serverless 예시는 `1536`, Ollama BGE-M3는 `1024` |
-| `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
+| `MODEL_CATALOG_FILE` | 모델 목록 JSON 경로; 기본 `models.json` |
+| `ANSWER_MODEL_PROFILE`, `EMBEDDING_MODEL_PROFILE` | `models.json`에서 사용할 답변·임베딩 프로필 이름 |
+| `ELICE_API_KEY` | 생성·Serverless 임베딩·Judge 등록에 사용하는 공용 API 키 |
 | `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
 | `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT_NAME` | MLflow 서버와 이 프로젝트의 연결 검증용 실험명 |
 | `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_TRACKING_TOKEN` | 서버가 요구하는 방식의 선택적 인증 |
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
-| `GENERATION_BASE_URL` | 선택한 엘리스 Serverless 모델의 `/v1` Base URL; 미설정 시 QA 비활성 |
-| `GENERATION_API_KEY`, `GENERATION_MODEL` | Serverless API Key와 모델 API 패널에 표시된 모델 이름; 기본값 없음 |
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
-| `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
-| `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
 | `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192`. planner와 답변 단계에 각각 적용 |
 | `QA_AGENT_MAX_TOOL_CALLS` | 질문 하나에서 agent가 호출할 수 있는 검색 도구 횟수(1~8); 기본 `4` |
 | `PROMPT_ALIAS` | 새 QA 프로필이 MLflow Prompt Registry에서 읽을 alias; 기본 `production`, dev 예시는 `development` |
@@ -268,8 +261,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 완료한 배치는 유지하여 실패 후 재실행 시 재사용하고, 추론 전후 모델 프로필이 달라지면 중단합니다.
 모든 청크의 벡터를 확인한 뒤에만 `corpus_vector_indexes`에 검색 가능한 인덱스를 등록합니다.
 임베딩 모델이나 차원을 바꾸면 기존 벡터를 재사용하지 않고 같은 스냅샷·청킹 정책으로 새 인덱스를
-만듭니다. 완료된 새 인덱스 키를 `.env.dev`의 `QA_ACTIVE_INDEX_KEY`에 넣고 Knowledge와 worker를
-재시작하면 새 대화에 적용됩니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
+만듭니다. 현재 임베딩 프로필과 일치하는 인덱스가 하나면 자동으로 선택합니다. 후보가 여러 개면
+`QA_CORPUS_SNAPSHOT_ID`와 `QA_CHUNK_POLICY_KEY`로 조건을 지정하고 Knowledge와 worker를 재시작합니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
 
 Ollama의 BGE-M3 입력 한도는 [truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정합니다.
 Serverless `text-embedding-3-small`은 요청 전에 `cl100k_base` 기준 8,191 토큰 한도를 검사하며,
@@ -307,20 +300,20 @@ BM25 색인은 별도 테이블 없이 프로세스 메모리에 만들고, 청�
 수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
 
 과제 PDF 2쪽의 모델 호출 안내와 [엘리스 Serverless 가이드](https://help.elice.io/help/docs/elicecloud/ml-api/serverless)를 기준으로
-`GENERATION_BASE_URL`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
+선택한 모델의 `base_url`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
 [엘리스의 OpenAI 호환 호출 예시](https://elice.io/en/ax/model-library/043bad99-5529-4325-a293-1a0cfba17d94)처럼
 Bearer 인증과 `model`·`messages`·`stream=false`를 사용합니다. 모델 이름은 자동으로 선택하지 않습니다.
 이 어댑터는 OpenAI 호환 Chat Completions endpoint용이며, 다른 모델의 API 형식까지 가정하지 않습니다.
 
-모델을 선택한 뒤 `.env.dev` 또는 `.env`의 다음 세 항목을 입력합니다. 실제 키는 Git에 포함하지 않습니다.
+모델의 Base URL과 모델명은 `models.json`에, 선택한 프로필 이름과 공용 API 키는
+`.env.dev` 또는 `.env`에 설정합니다. 실제 키는 Git에 포함하지 않습니다.
 
 ```dotenv
-GENERATION_BASE_URL=https://mlapi.run/<endpoint-id>/v1
-GENERATION_API_KEY=<발급받은 Serverless API Key>
-GENERATION_MODEL=<모델 API 패널의 model 값>
+ANSWER_MODEL_PROFILE=<models.json의 답변 모델 이름>
+ELICE_API_KEY=<발급받은 Serverless API Key>
 ```
 
-모델마다 지원하는 매개변수가 다르므로 temperature와 출력 한도는 설정한 경우에만 전송합니다.
+모델마다 지원하는 매개변수가 다르므로 실행 요청에 전달한 옵션만 전송합니다.
 출력 한도를 설정하려면 API 패널에서 지원하는 `max_completion_tokens`·`max_tokens` 중 필드를 확인합니다.
 인증 실패·요청 거부·사용량 제한 등의 응답은 `generation_http_401`처럼 상태 코드만 전달하며,
 오류 본문·헤더·접속 URL은 노출하지 않습니다. 자동 재시도나 다른 모델로의 fallback은 없습니다.
@@ -418,7 +411,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ### MCP 검색 도구
 
 agent가 쓰는 두 검색 도구를 같은 Pydantic 계약으로 [MCP](https://modelcontextprotocol.io/) Streamable HTTP
-엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 `QA_ACTIVE_INDEX_KEY` 또는 가장 최근에 발행된 인덱스를 사용합니다.
+엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 현재 임베딩과 선택한 Corpus·청킹 정책에 맞는 인덱스를 사용합니다.
 `MCP_API_TOKEN`을 설정해야 열리고, 토큰이 다르면 401입니다. 응답은 JSON 텍스트와 `structuredContent`를 함께 담습니다.
 `meaning_search`는 임베딩 서버를 호출하고, 생성 모델은 호출하지 않습니다.
 
@@ -861,7 +854,7 @@ agent 도구 계약·실행 한도·생성 설정·주요 라이브러리 버전
 평가 Run의 `experiment-conditions.json`에 상세 조건을, params에는 청크 크기·겹침·임베딩 모델·차원 등
 검색할 조건을 남깁니다. 보고서는 저장된 조건만 표시하며 과거 Run의 누락 정보를 현재 DB로 채우지 않습니다.
 초안 생성 당시 모델의 세부 버전·샘플링 설정·전체 프롬프트는 보관하지 않아 같은 초안의 재생성까지 보장하지 않습니다.
-확정된 입력으로 평가를 반복하는 것과 구분하며, 현재 생성 API의 Seed 지정과 모델 가중치 revision 통제도 미구현입니다.
+확정된 입력으로 평가를 반복하는 것과 구분합니다. 생성 요청의 Seed는 실행 옵션으로 지정해 기록할 수 있지만, 모델별 지원 여부와 동일 결과 보장은 제공자에 따릅니다. 모델 가중치 revision 통제는 미구현입니다.
 모델 별칭과 고정된 평가 조건만으로 비결정적 생성의 완전한 재현성을 보장하지 않습니다.
 
 Gold·Iron의 로컬 형식 검증은 `register.py --dry-run`으로 수행합니다. 두 데이터셋 모두
@@ -907,13 +900,11 @@ Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록�
 
 #### 모델 프로필 등록과 선택
 
-모델 정보를 Git에서 제외된 `.env.models.dev.json`에 JSON으로 저장합니다. 예시 형식은
-[models.example.json](tools/models/models.example.json)에서 확인할 수 있습니다. 실제 키와 주소를
-예시 파일에 넣지 않습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
+모델 정보는 저장소의 [models.json](models.json)에서 관리합니다. 모델의 Base URL과 식별자는 JSON에 두고 API 키는 환경 파일에서 읽습니다.
+인덱스는 현재 임베딩 프로필과 Corpus·청킹 정책에 따라 DB에서 찾습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
 현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
 
 ```bash
-uv run --project apps/knowledge --locked python tools/models/models.py capture answer terra
 uv run --project apps/knowledge --locked python tools/models/models.py list
 uv run --project apps/knowledge --locked python tools/models/models.py select answer terra
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --force-recreate knowledge worker
@@ -921,9 +912,9 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --f
 
 답변 모델은 OpenAI 호환 Chat Completions, 임베딩은 구현된 Ollama 또는 엘리스 Serverless
 어댑터를 사용합니다. 임베딩 모델 변경 시 해당 모델의 인덱스를 새로 만들어야 합니다.
-프로필의 `index_key`에 해당 인덱스를 기록하면 전환할 때 함께 선택됩니다.
+선택된 임베딩과 Corpus·청킹 정책에 맞는 인덱스를 자동으로 찾습니다.
 
-Judge 모델은 원하는 이름과 `model`, `base_url`, `api_key`를 JSON에 넣습니다. 아래 명령은
+Judge 모델은 원하는 이름과 `model`, `base_url`을 JSON에 넣습니다. 공용 API 키는 환경 파일의 `ELICE_API_KEY`에 넣습니다. 아래 명령은
 선택한 여러 평가 주체를 설정하고 MLflow Gateway와 scorer에 등록합니다. 모델 추론은 호출하지
 않습니다. 기존 MLflow endpoint는 그대로 재사용하며 새 서버에서는 접속 정보를 사용해 생성합니다.
 기존 MLflow에 저장된 키는 다시 읽을 수 없으므로 새 서버에 등록하려면 키가 필요합니다.
@@ -935,5 +926,80 @@ uv run --project apps/knowledge --locked --env-file .env.dev python tools/evalua
 ```
 
 선택을 바꾼 뒤 Knowledge와 worker를 재생성합니다. prod에서는 `--env-file .env --catalog
-.env.models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
+models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
 필요합니다. 재채점 시 `--model-rater <이름>`을 반복 지정하면 선택된 Judge 중 일부만 사용할 수 있습니다.
+
+#### 운영 명령
+
+`./tools/operations/rag`는 설치부터 Corpus 처리·평가·보고서까지 기존 기능을 한곳에서 실행합니다.
+실제 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 넣습니다. 모델명과 주소는
+[models.json](models.json)에서 관리하며, CLI의 `--env-file`로 dev·prod 환경을 선택합니다.
+
+새 개발 환경에서는 다음 순서로 준비합니다. 이미 환경 파일이 있으면 `init-env`는 생략합니다.
+
+```bash
+# 환경 파일과 로그인·DB용 비밀값을 생성합니다. 기존 파일은 덮어쓰지 않습니다.
+./tools/operations/rag init-env
+# .env.dev에 ELICE_API_KEY와 MLFLOW_TRACKING_URI를 입력합니다.
+# 로컬 MLflow가 필요하면 MLFLOW_CRYPTO_KEK_PASSPHRASE도 넣고 실행합니다.
+./tools/operations/rag mlflow-start --configure
+./tools/operations/rag setup                 # 모델과 실험 이름을 대화식 선택
+./tools/operations/rag serve init-db
+./tools/operations/rag serve start
+./tools/operations/rag doctor
+```
+
+환경 생성 시 관리자 로그인 코드·세션 비밀값·평가 API 토큰은 `.env.dev`에 생성하며 화면에
+출력하지 않습니다. 생성된 관리자 코드는 해당 파일에서 확인합니다. 기존 MLflow를 사용하면
+`mlflow-start`는 생략합니다. 로컬 MLflow는 SQLite·artifact를 `data/mlflow-local/`에 보존하고
+`mlflow-stop`으로 종료합니다. 제출 환경의 PostgreSQL 기반 MLflow와는 별도입니다.
+
+```bash
+# Corpus 수집·청킹·색인. 청킹 결과의 policy_key를 사용합니다.
+./tools/operations/rag corpus ingest
+./tools/operations/rag corpus chunk
+./tools/operations/rag corpus index --policy-key '<policy-key>'
+
+# Dataset과 Run을 찾고 평가·보고서를 만듭니다.
+./tools/operations/rag datasets
+./tools/operations/rag evaluate --dataset-id '<dataset-id>' --submit --wait
+./tools/operations/rag runs --kind answers
+./tools/operations/rag agreement --answers-run-id '<answers-run-id>' --output-dir artifacts/evaluation/agreement --log
+./tools/operations/rag runs --kind agreement
+./tools/operations/rag report agreement --run-id '<agreement-run-id>' --output artifacts/reports/agreement.html
+```
+
+평가 `--submit`과 색인은 유료 모델 호출이 발생할 수 있습니다. `agreement`는 완료된 채점
+전체를 기본으로 모으며 `--rater`, `--round`로 제한할 수 있습니다. 반복성·비교는 각각
+`repeatability`, `comparison` 명령을 사용하고, 기존 Agreement 단위 비교는
+`comparison-agreement`를 사용합니다. `report`는 Agreement·Repeatability·Comparison 중 하나를
+선택합니다. 자세한 옵션은 각 명령의 `--help`에서 확인합니다.
+
+설정 시 기존 MLflow endpoint의 모델과 주소를 비교합니다. 저장된 키는 다시 읽을 수 없어 일치
+여부를 확인하지 못합니다. 키를 교체한 뒤에는 `.env`의 `ELICE_API_KEY`를 바꾸고
+`./tools/operations/rag model rotate-judge-key`로 선택된 Judge 연결을 명시적으로 갱신합니다.
+다른 모델이 같은 MLflow 연결을 쓰면 덮어쓰지 않고 중단합니다. `serve stop`은 Knowledge와
+worker만 멈추고 DB와 공용 MLflow 데이터는 유지합니다. prod에서는
+`--env-file .env`와 `init-env --kind prod`를 사용합니다.
+
+#### 모델 실행 옵션
+
+모델의 추론 옵션은 `.env`나 `models.json`에 고정하지 않고 평가마다 JSON 객체로 전달합니다.
+예를 들어 답변 생성과 개별 Judge의 옵션을 각각 지정할 수 있습니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/operations/rag.py evaluate \
+  --dataset-id '<dataset-id>' --submit --wait \
+  --generation-options '{"temperature": 0.2, "seed": 42}' \
+  --judge-options '{"chatgpt": {"reasoning_effort": "none", "stream": true, "max_completion_tokens": 8192}}'
+```
+
+`--embedding-options`는 색인 명령과 평가 프로필에서 지정합니다. 임베딩 요청 옵션은 벡터
+생성 계약에 포함되므로 색인과 검색에 같은 옵션을 사용해야 합니다. `index`의 배치 크기와
+제한 시간은 각각 `--batch-size`, `--embedding-timeout`으로 전달합니다. `review judge`의
+`--judge-options`로 고정 답변의 재채점 옵션도 지정할 수 있습니다. 일반 대화의 MLflow 자동
+Judge는 질문마다 별도 인자를 받을 수 없으므로 `tools/evaluation/judges.py --enable-dev
+--judge-options '<JSON>'`으로 scorer 등록 시 옵션을 지정합니다. API의 QA 프로필은
+`generation_options`, `embedding_options`를, 평가 요청은 Judge 이름별 `judge_options`를
+받습니다. 지정한 옵션은 답변·채점 프로필과 MLflow 실험 조건에 저장됩니다. 모델명·입력·인증
+헤더 등은 실행 옵션으로 덮어쓸 수 없습니다.

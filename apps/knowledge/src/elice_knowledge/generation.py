@@ -94,11 +94,9 @@ class EliceServerlessLLM(CustomLLM):
             "messages": [{"role": m.role.value, "content": m.content} for m in messages],
             "stream": False,
         }
-        # Model support differs. Do not send sampling or output limits implicitly.
-        if settings.generation_temperature is not None:
-            payload["temperature"] = settings.generation_temperature
-        if settings.generation_max_output_tokens is not None:
-            payload[settings.generation_token_limit_field] = settings.generation_max_output_tokens
+        from elice_knowledge.model_options import validate_generation_options
+
+        payload.update(validate_generation_options({**settings.generation_options, **kwargs}))
         try:
             response = self._client.post(
                 settings.generation_base_url.get_secret_value().rstrip("/") + "/chat/completions",
@@ -169,7 +167,7 @@ class EliceServerlessLLM(CustomLLM):
 
     @llm_completion_callback()
     def complete(self, prompt: str, formatted: bool = False, **kwargs) -> CompletionResponse:
-        response = self.chat([ChatMessage(role=MessageRole.USER, content=prompt)])
+        response = self.chat([ChatMessage(role=MessageRole.USER, content=prompt)], **kwargs)
         return CompletionResponse(
             text=response.message.content, additional_kwargs=response.additional_kwargs
         )

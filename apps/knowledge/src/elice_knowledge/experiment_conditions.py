@@ -106,8 +106,7 @@ def freeze_conditions(conn, index_key, settings):
             "provider": "elice-serverless",
             "api": "openai-chat-completions",
             "stream": False,
-            "seed": None,
-            "top_p": None,
+            "request_options": settings.generation_options,
         },
         "execution": {
             "worker_concurrency": settings.qa_worker_concurrency,

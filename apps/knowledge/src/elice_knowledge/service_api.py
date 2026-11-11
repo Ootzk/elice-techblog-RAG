@@ -2,7 +2,7 @@
 
 import secrets
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -44,6 +44,14 @@ class EvaluationRequest(BaseModel):
     scorer_profile_key: str = Field(pattern=r"^[a-f0-9]{64}$")
     record_ids: list[str] | None = Field(default=None, max_length=200)
     history_mode: str = Field(default="provided", pattern="^provided$")
+    judge_options: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("judge_options")
+    @classmethod
+    def valid_judge_options(cls, value):
+        from elice_knowledge.model_options import validate_judge_options
+
+        return {name: validate_judge_options(options) for name, options in value.items()}
 
 
 class ProfileRequest(BaseModel):
@@ -53,6 +61,22 @@ class ProfileRequest(BaseModel):
     index_key: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     top_k: int = Field(default=5, ge=1, le=20)
     prompts: dict[str, str] = Field(default_factory=dict, max_length=8)
+    generation_options: dict[str, Any] = Field(default_factory=dict)
+    embedding_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("embedding_options")
+    @classmethod
+    def valid_embedding_options(cls, value):
+        from elice_knowledge.model_options import validate_embedding_options
+
+        return validate_embedding_options(value)
+
+    @field_validator("generation_options")
+    @classmethod
+    def valid_generation_options(cls, value):
+        from elice_knowledge.model_options import validate_generation_options
+
+        return validate_generation_options(value)
 
 
 class IssueCode(BaseModel):
@@ -364,7 +388,13 @@ def mount_service(app, settings):
 
     @router.post("/qa-profiles", status_code=201, dependencies=[Depends(admin)])
     def create_profile(body: ProfileRequest):
-        key = store.active_profile(body.index_key, body.top_k, body.prompts)
+        key = store.active_profile(
+            body.index_key,
+            body.top_k,
+            body.prompts,
+            body.generation_options,
+            body.embedding_options,
+        )
         prompts = store.profile(key)["prompts"]
         return {
             "key": key,
