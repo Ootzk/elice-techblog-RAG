@@ -196,6 +196,7 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
         lambda **kw: SimpleNamespace(
             get_run=get_run,
             download_artifacts=download,
+            list_artifacts=lambda run_id: [],
             search_traces=lambda **kw: [SimpleNamespace(info=SimpleNamespace(trace_id="trace-1"))],
             get_trace=lambda trace_id: SimpleNamespace(
                 data=SimpleNamespace(
