@@ -7,7 +7,17 @@ from numbers import Real
 
 from elice_knowledge.rubrics import DIMENSIONS, load_rubric
 
-RATERS = ("chatgpt", "claude", "gemini")
+
+def selected_raters(settings):
+    import re
+
+    names = [name.strip() for name in settings.evaluation_judge_raters.split(",") if name.strip()]
+    if not names or len(set(names)) != len(names):
+        raise ValueError("Configure one or more distinct EVALUATION_JUDGE_RATERS")
+    if any(not re.fullmatch(r"[a-z][a-z0-9-]{0,40}", name) for name in names):
+        raise ValueError("Invalid judge name")
+    return names
+
 
 KINDS = tuple(DIMENSIONS)
 QUALITY_CONTRACT = "rubric-v1"
@@ -63,7 +73,7 @@ def frozen_judges(settings, kind, *, rubric=None):
             model=judge.model,
         )
         for dimension in DIMENSIONS[kind]
-        for rater in RATERS
+        for rater in selected_raters(settings)
         for judge in [
             get_scorer(
                 name=judge_name(kind, dimension, rater, rubric["id"]), experiment_id=experiment_id

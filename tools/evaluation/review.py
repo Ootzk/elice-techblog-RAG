@@ -9,7 +9,7 @@ from elice_knowledge.agreement import build_agreement, review_packet
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA, tags, validate_grading
 from elice_knowledge.judge_runs import evaluate_models
-from elice_knowledge.judges import RATERS, configure, frozen_judges
+from elice_knowledge.judges import configure, frozen_judges
 from elice_knowledge.reliability import report_metrics
 from elice_knowledge.rubrics import load_rubric
 from elice_knowledge.service_store import ServiceStore
@@ -39,7 +39,7 @@ def main():
         default=[],
         help="Select grading runs; use one round per subject for panel coefficients",
     )
-    parser.add_argument("--model-rater", action="append", choices=RATERS)
+    parser.add_argument("--model-rater", action="append")
     parser.add_argument("--grading-file", action="append", type=Path, default=[])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--submit", action="store_true")

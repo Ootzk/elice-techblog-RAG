@@ -1,0 +1,26 @@
+{
+  "answer": {
+    "example-answer": {
+      "model": "MODEL_ID",
+      "base_url": "https://example.invalid/v1",
+      "api_key": "REPLACE_ME"
+    }
+  },
+  "embedding": {
+    "example-embedding": {
+      "backend": "elice-serverless",
+      "model": "text-embedding-3-small",
+      "base_url": "https://example.invalid/v1",
+      "api_key": "REPLACE_ME",
+      "dimensions": 1536,
+      "index_key": ""
+    }
+  },
+  "judge": {
+    "example-judge": {
+      "model": "MODEL_ID",
+      "base_url": "https://example.invalid/v1",
+      "api_key": "REPLACE_ME"
+    }
+  }
+}

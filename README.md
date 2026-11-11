@@ -904,3 +904,36 @@ Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록�
 ### Analysis — 결과를 어떻게 해석했나요?
 
 ### Next Steps — 다음에는 무엇을 해볼까요?
+
+#### 모델 프로필 등록과 선택
+
+모델 정보를 Git에서 제외된 `.env.models.dev.json`에 JSON으로 저장합니다. 예시 형식은
+[models.example.json](tools/models/models.example.json)에서 확인할 수 있습니다. 실제 키와 주소를
+예시 파일에 넣지 않습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
+현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/models/models.py capture answer terra
+uv run --project apps/knowledge --locked python tools/models/models.py list
+uv run --project apps/knowledge --locked python tools/models/models.py select answer terra
+docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --force-recreate knowledge worker
+```
+
+답변 모델은 OpenAI 호환 Chat Completions, 임베딩은 구현된 Ollama 또는 엘리스 Serverless
+어댑터를 사용합니다. 임베딩 모델 변경 시 해당 모델의 인덱스를 새로 만들어야 합니다.
+프로필의 `index_key`에 해당 인덱스를 기록하면 전환할 때 함께 선택됩니다.
+
+Judge 모델은 원하는 이름과 `model`, `base_url`, `api_key`를 JSON에 넣습니다. 아래 명령은
+선택한 여러 평가 주체를 설정하고 MLflow Gateway와 scorer에 등록합니다. 모델 추론은 호출하지
+않습니다. 기존 MLflow endpoint는 그대로 재사용하며 새 서버에서는 접속 정보를 사용해 생성합니다.
+기존 MLflow에 저장된 키는 다시 읽을 수 없으므로 새 서버에 등록하려면 키가 필요합니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/models/models.py select-judges luna haiku
+uv run --project apps/knowledge --locked --env-file .env.dev python tools/models/models.py register-judges
+uv run --project apps/knowledge --locked --env-file .env.dev python tools/evaluation/judges.py --enable-dev
+```
+
+선택을 바꾼 뒤 Knowledge와 worker를 재생성합니다. prod에서는 `--env-file .env --catalog
+.env.models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
+필요합니다. 재채점 시 `--model-rater <이름>`을 반복 지정하면 선택된 Judge 중 일부만 사용할 수 있습니다.
