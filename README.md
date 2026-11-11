@@ -268,8 +268,8 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 완료한 배치는 유지하여 실패 후 재실행 시 재사용하고, 추론 전후 모델 프로필이 달라지면 중단합니다.
 모든 청크의 벡터를 확인한 뒤에만 `corpus_vector_indexes`에 검색 가능한 인덱스를 등록합니다.
 임베딩 모델이나 차원을 바꾸면 기존 벡터를 재사용하지 않고 같은 스냅샷·청킹 정책으로 새 인덱스를
-만듭니다. 완료된 새 인덱스 키를 `.env.dev`의 `QA_ACTIVE_INDEX_KEY`에 넣고 Knowledge와 worker를
-재시작하면 새 대화에 적용됩니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
+만듭니다. 현재 임베딩 프로필과 일치하는 인덱스가 하나면 자동으로 선택합니다. 후보가 여러 개면
+`QA_CORPUS_SNAPSHOT_ID`와 `QA_CHUNK_POLICY_KEY`로 조건을 지정하고 Knowledge와 worker를 재시작합니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
 
 Ollama의 BGE-M3 입력 한도는 [truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정합니다.
 Serverless `text-embedding-3-small`은 요청 전에 `cl100k_base` 기준 8,191 토큰 한도를 검사하며,
@@ -418,7 +418,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ### MCP 검색 도구
 
 agent가 쓰는 두 검색 도구를 같은 Pydantic 계약으로 [MCP](https://modelcontextprotocol.io/) Streamable HTTP
-엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 `QA_ACTIVE_INDEX_KEY` 또는 가장 최근에 발행된 인덱스를 사용합니다.
+엔드포인트 `/mcp`에 공개합니다. 읽기 전용이며 현재 임베딩과 선택한 Corpus·청킹 정책에 맞는 인덱스를 사용합니다.
 `MCP_API_TOKEN`을 설정해야 열리고, 토큰이 다르면 401입니다. 응답은 JSON 텍스트와 `structuredContent`를 함께 담습니다.
 `meaning_search`는 임베딩 서버를 호출하고, 생성 모델은 호출하지 않습니다.
 
@@ -908,7 +908,7 @@ Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록�
 #### 모델 프로필 등록과 선택
 
 모델 정보는 저장소의 [models.json](models.json)에서 관리합니다. 모델의 Base URL과 식별자는 JSON에 두고 API 키는 환경 파일에서 읽습니다.
-환경별 색인 키는 환경변수로 참조합니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
+인덱스는 현재 임베딩 프로필과 Corpus·청킹 정책에 따라 DB에서 찾습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
 현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
 
 ```bash

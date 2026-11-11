@@ -312,19 +312,48 @@ def search_output(index: OpenIndex, query: str, matches) -> dict:
     }
 
 
-def latest_index_key(settings: Settings) -> str | None:
-    """The configured pinned index, or the most recently published one."""
+class IndexSelectionError(ValueError):
+    """No unambiguous active index exists for the configured conditions."""
+
+
+def select_index(conn, settings: Settings, explicit_key: str | None = None) -> str | None:
+    """Resolve only indexes compatible with the configured embedding contract."""
+    if explicit_key:
+        row = conn.execute(
+            "SELECT key FROM corpus_vector_indexes WHERE key=%s", (explicit_key,)
+        ).fetchone()
+        if not row:
+            return None
+        return row["key"] if isinstance(row, dict) else row[0]
+    with httpx.Client() as client:
+        profile_key = profile_id(retrieval_profile(create_embedder(settings, client)))
+    filters = ["profile_key=%s"]
+    values = [profile_key]
+    for column, value in (
+        ("snapshot_id", settings.qa_corpus_snapshot_id),
+        ("policy_key", settings.qa_chunk_policy_key),
+    ):
+        if value:
+            filters.append(column + "=%s")
+            values.append(value)
+    rows = conn.execute(
+        "SELECT key FROM corpus_vector_indexes WHERE "
+        + " AND ".join(filters)
+        + " ORDER BY key LIMIT 2",
+        values,
+    ).fetchall()
+    if len(rows) > 1:
+        raise IndexSelectionError("ambiguous_qa_index")
+    if not rows:
+        return None
+    row = rows[0]
+    return row["key"] if isinstance(row, dict) else row[0]
+
+
+def active_index_key(settings: Settings) -> str | None:
+    """Resolve the active index without choosing an arbitrary latest index."""
     with connect(settings) as conn:
-        if settings.qa_active_index_key:
-            row = conn.execute(
-                "SELECT key FROM corpus_vector_indexes WHERE key=%s",
-                (settings.qa_active_index_key,),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT key FROM corpus_vector_indexes ORDER BY created_at DESC,key LIMIT 1"
-            ).fetchone()
-    return row[0] if row else None
+        return select_index(conn, settings)
 
 
 def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = None):

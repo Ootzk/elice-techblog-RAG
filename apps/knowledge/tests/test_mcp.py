@@ -25,7 +25,7 @@ INITIALIZE = rpc(
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr("elice_knowledge.mcp_server.latest_index_key", lambda s: "c" * 64)
+    monkeypatch.setattr("elice_knowledge.mcp_server.active_index_key", lambda s: "c" * 64)
     with TestClient(create_app(Settings(mcp_api_token=TOKEN))) as test_client:
         yield test_client
 

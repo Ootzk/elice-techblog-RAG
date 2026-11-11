@@ -29,7 +29,6 @@ FIELDS = {
         "EMBEDDING_DIMENSIONS",
         "EMBEDDING_TIMEOUT_SECONDS",
         "EMBEDDING_BATCH_SIZE",
-        "QA_ACTIVE_INDEX_KEY",
     ),
 }
 REQUIRED = {
@@ -108,7 +107,6 @@ def validate_catalog(data):
                 "max_output_tokens",
                 "token_limit_field",
                 "base_url",
-                "index_key_env",
             }
             if set(profile) - allowed:
                 raise ValueError(
@@ -131,12 +129,6 @@ def validate_catalog(data):
                     raise ValueError(
                         "모델 주소는 인증정보나 쿼리 없는 HTTP(S) URL이어야 합니다"
                     )
-            for field in ("index_key_env",):
-                if field in profile and (
-                    not isinstance(profile[field], str)
-                    or not re.fullmatch(r"[A-Z][A-Z0-9_]*", profile[field])
-                ):
-                    raise ValueError("환경변수 참조가 올바르지 않습니다")
 
 
 def read_catalog(path):
@@ -159,12 +151,6 @@ def resolve_profile(data, kind, name, env):
     profile = dict(value)
     if "api_key" in profile or "api_key_ref" in profile:
         raise ValueError("모델 JSON에 인증정보를 저장할 수 없습니다")
-    for field in ("index_key",):
-        variable = profile.pop(field + "_env", None)
-        if variable:
-            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", variable):
-                raise ValueError("환경변수 이름이 올바르지 않습니다")
-            profile[field] = env.get(variable) or ""
     profile["api_key"] = env.get("ELICE_API_KEY") or ""
     return profile
 
@@ -216,20 +202,8 @@ def capture(kind, name, source, catalog):
     values = {
         key.removeprefix(prefix).lower(): env.get(key)
         for key in FIELDS[kind]
-        if env.get(key)
-        and not key.endswith("_API_KEY")
-        and key != "QA_ACTIVE_INDEX_KEY"
+        if env.get(key) and not key.endswith("_API_KEY")
     }
-    env_prefix = f"MODEL_{kind.upper()}_{name.upper().replace('-', '_')}"
-    runtime = {}
-    for field, source_key in (("index_key", "QA_ACTIVE_INDEX_KEY"),):
-        values.pop(field, None)
-        if env.get(source_key):
-            var = env_prefix + "_" + field.upper()
-            values[field + "_env"] = var
-            runtime[var] = env[source_key]
-    if runtime:
-        save_env(source, runtime)
     data[kind][name] = values
     write_catalog(catalog, data)
 
@@ -244,8 +218,6 @@ def select(kind, name, catalog, target):
         key: str(profile.get(key.removeprefix(prefix).lower()) or "")
         for key in FIELDS[kind]
     }
-    if kind == "embedding":
-        values["QA_ACTIVE_INDEX_KEY"] = profile.get("index_key", "")
     if any(not values.get(key) for key in REQUIRED[kind]):
         raise ValueError("모델 프로필의 필수 설정이 빠졌습니다")
     if (
@@ -270,8 +242,6 @@ def select(kind, name, catalog, target):
     for key in unset:
         if key in remaining:
             unset_key(str(safe_path(target)), key)
-    if kind == "embedding" and not values.get("QA_ACTIVE_INDEX_KEY"):
-        print("이 임베딩의 인덱스를 생성하고 지정해야 합니다.")
 
 
 def register_judges(catalog, envfile):

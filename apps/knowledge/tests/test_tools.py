@@ -153,7 +153,7 @@ def test_warm_up_builds_active_index_cache_and_never_raises(index, monkeypatch, 
     import elice_knowledge.sparse as sparse
 
     sparse._cache.clear()
-    monkeypatch.setattr(sparse, "latest_index_key", lambda settings: INDEX)
+    monkeypatch.setattr(sparse, "active_index_key", lambda settings: INDEX)
     monkeypatch.setattr(sparse.RetrievalStore, "open_index", lambda self, key: index)
     assert sparse.warm_up(Settings()) == INDEX
     assert len(sparse._cache) == 1 and _bm25_index(index) is next(iter(sparse._cache.values()))
@@ -161,7 +161,7 @@ def test_warm_up_builds_active_index_cache_and_never_raises(index, monkeypatch, 
     def broken(settings):
         raise RuntimeError("postgresql://user:private-password@db")
 
-    monkeypatch.setattr(sparse, "latest_index_key", broken)
+    monkeypatch.setattr(sparse, "active_index_key", broken)
     assert sparse.warm_up(Settings()) is None
     assert "RuntimeError" in caplog.text and "private" not in caplog.text
 

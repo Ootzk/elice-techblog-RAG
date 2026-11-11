@@ -12,7 +12,7 @@ from pathlib import Path
 from llama_index.core.schema import MetadataMode
 
 from elice_knowledge.corpus import digest
-from elice_knowledge.retrieval import OpenIndex, RetrievalStore, latest_index_key, search_output
+from elice_knowledge.retrieval import OpenIndex, RetrievalStore, active_index_key, search_output
 
 BM25_VERSION = "elice-bm25-v1"
 BM25_PARAMETERS = {"method": "lucene", "k1": 1.5, "b": 0.75}
@@ -208,7 +208,7 @@ def warm_up(settings) -> str | None:
     """
     try:
         _analyzer()
-        key = latest_index_key(settings)
+        key = active_index_key(settings)
         if key is not None:
             _bm25_index(RetrievalStore(settings).open_index(key))
         return key

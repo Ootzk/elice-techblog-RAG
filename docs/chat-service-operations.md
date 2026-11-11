@@ -30,7 +30,9 @@ flowchart LR
 ADMIN_ACCESS_CODE=<최초 관리자 로그인 코드, 최소 20자>
 AUTH_SESSION_SECRET=<세션 CSRF 서명용 비밀값, 최소 32자>
 EVALUATION_API_TOKEN=<평가 API 전용 관리자 토큰>
-QA_ACTIVE_INDEX_KEY=<corpus-vector-indexes.sql에서 확인한 인덱스 키>
+# 여러 인덱스가 일치할 때만 지정
+QA_CORPUS_SNAPSHOT_ID=<Corpus 스냅샷 ID>
+QA_CHUNK_POLICY_KEY=<청킹 정책 키>
 CHAT_SESSION_HOURS=168
 QA_WORKER_CONCURRENCY=1
 ```

@@ -224,24 +224,21 @@ class ServiceStore:
         except PromptError as exc:
             raise ServiceError(exc.code, 503 if exc.code == "prompt_unavailable" else 422) from None
         with self.connection() as conn:
-            if index_key or s.qa_active_index_key:
-                row = conn.execute(
-                    "SELECT key FROM corpus_vector_indexes WHERE key=%s",
-                    (index_key or s.qa_active_index_key,),
-                ).fetchone()
-            else:
-                row = conn.execute(
-                    "SELECT key FROM corpus_vector_indexes ORDER BY created_at DESC,key LIMIT 1"
-                ).fetchone()
-            if not row:
+            from elice_knowledge.retrieval import IndexSelectionError, select_index
+
+            try:
+                resolved_index = select_index(conn, s, explicit_key=index_key)
+            except IndexSelectionError:
+                raise ServiceError("ambiguous_qa_index", 409) from None
+            if not resolved_index:
                 raise ServiceError("no_active_qa_index", 503)
             from elice_knowledge.experiment_conditions import freeze_conditions
 
-            conditions = freeze_conditions(conn, row["key"], s)
+            conditions = freeze_conditions(conn, resolved_index, s)
             config = {name: getattr(s, name) for name in PROFILE_FIELDS}
             config.update(
                 experiment_conditions=conditions,
-                index_key=row["key"],
+                index_key=resolved_index,
                 top_k=top_k,
                 prompts={name: prompt.model_dump() for name, prompt in prompts.items()},
                 code_identity=code_identity(),

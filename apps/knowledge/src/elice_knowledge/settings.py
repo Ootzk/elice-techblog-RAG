@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     admin_access_code: SecretStr | None = None
     auth_session_secret: SecretStr | None = None
     evaluation_api_token: SecretStr | None = None
-    qa_active_index_key: str | None = None
+    qa_corpus_snapshot_id: str | None = None
+    qa_chunk_policy_key: str | None = None
     chat_session_hours: int = Field(default=168, ge=1, le=720)
     chat_login_attempts_per_minute: int = Field(default=10, ge=1, le=100)
     qa_history_pairs: int = Field(default=3, ge=0, le=10)

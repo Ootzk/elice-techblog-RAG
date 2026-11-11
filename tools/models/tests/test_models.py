@@ -38,19 +38,16 @@ def test_capture_and_switch_preserves_secret_without_output(repo, capsys):
     assert (repo / ".env.models.dev").stat().st_mode & 0o077 == 0
 
 
-def test_embedding_switch_restores_its_index(repo):
+def test_embedding_profile_does_not_store_index(repo):
     env = repo / ".env.dev"
     env.write_text(
-        "EMBEDDING_BACKEND=ollama\nEMBEDDING_BASE_URL=http://localhost:11434\nEMBEDDING_MODEL=bge-m3\nEMBEDDING_DIMENSIONS=1024\nQA_ACTIVE_INDEX_KEY=old-index\n"
+        "EMBEDDING_BACKEND=ollama\nEMBEDDING_BASE_URL=http://localhost:11434\nEMBEDDING_MODEL=bge-m3\nEMBEDDING_DIMENSIONS=1024\nQA_CORPUS_SNAPSHOT_ID=old-index\n"
     )
-    models.capture("embedding", "old", env, repo / ".env.models.dev")
-    env.write_text(
-        env.read_text()
-        .replace("bge-m3", "other")
-        .replace("QA_ACTIVE_INDEX_KEY=old-index", "QA_ACTIVE_INDEX_KEY=new-index")
-    )
-    models.select("embedding", "old", repo / ".env.models.dev", env)
-    assert dotenv_values(env)["QA_ACTIVE_INDEX_KEY"] == "old-index"
+    catalog = repo / "models.json"
+    models.capture("embedding", "old", env, catalog)
+    profile = models.read_catalog(catalog)["embedding"]["old"]
+    assert "index_key_env" not in profile
+    assert "old-index" not in catalog.read_text()
 
 
 def test_tracked_env_is_rejected(repo):
