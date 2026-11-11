@@ -24,7 +24,7 @@ def main():
     parser.add_argument(
         "--judge-options",
         type=json.loads,
-        default={},
+        default=None,
         help="JSON object mapping online judge names to inference parameters",
     )
     args = parser.parse_args()
@@ -36,13 +36,14 @@ def main():
     raters = selected_raters(settings)
     from elice_knowledge.model_options import validate_judge_options
 
-    if not isinstance(args.judge_options, dict) or set(args.judge_options) - set(
-        raters
+    if args.judge_options is not None and (
+        not isinstance(args.judge_options, dict)
+        or set(args.judge_options) - set(raters)
     ):
         parser.error("--judge-options must map configured judges to option objects")
     options = {
         name: validate_judge_options(value)
-        for name, value in args.judge_options.items()
+        for name, value in (args.judge_options or {}).items()
     }
     if args.enable_dev:
         desired = {
@@ -76,7 +77,16 @@ def main():
                     else Literal["0", "1", "2", "not_applicable"]
                 )
                 judge = existing.get(name)
-                inference_params = options.get(rater, {}) if kind == "online" else {}
+                if (
+                    kind == "online"
+                    and args.judge_options is None
+                    and judge is not None
+                ):
+                    inference_params = getattr(judge, "inference_params", None) or {}
+                else:
+                    inference_params = (
+                        options.get(rater, {}) if kind == "online" else {}
+                    )
                 if (
                     judge is None
                     or judge.instructions != text
