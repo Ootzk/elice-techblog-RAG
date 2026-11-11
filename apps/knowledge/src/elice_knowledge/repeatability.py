@@ -1,12 +1,116 @@
 """Descriptive rubric-boundary stability across independent answers runs."""
 
 from collections import defaultdict
+from itertools import combinations
 
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA
 
 CONTRACT = "repeatability-v1"
+
+
+def boundary_changes(rows, run_ids, record_ids, rater_dimensions, boundary_names):
+    """Compare matching questions across answers runs, then macro-average each level."""
+    run_pairs = list(combinations(run_ids, 2))
+    by_question = []
+    by_dimension = []
+    by_rater = []
+    overall = []
+
+    def average(values):
+        return sum(values) / len(values) if values else None
+
+    for boundary in boundary_names:
+        for rater, dimension in rater_dimensions:
+            question_rows = []
+            for record_id in record_ids:
+                distributions = rows.get((record_id, rater, dimension), {})
+                differences = []
+                for left_id, right_id in run_pairs:
+                    left, right = distributions.get(left_id), distributions.get(right_id)
+                    if left is None or right is None or not left["valid"] or not right["valid"]:
+                        continue
+                    differences.append(
+                        abs(
+                            left["boundaries"][boundary]["rate"]
+                            - right["boundaries"][boundary]["rate"]
+                        )
+                    )
+                question_rows.append(
+                    dict(
+                        boundary=boundary,
+                        rater=rater,
+                        dimension=dimension,
+                        record_id=record_id,
+                        mean_absolute_change=average(differences),
+                        observed_pairs=len(differences),
+                        possible_pairs=len(run_pairs),
+                    )
+                )
+            by_question.extend(question_rows)
+            available = [
+                item["mean_absolute_change"]
+                for item in question_rows
+                if item["mean_absolute_change"] is not None
+            ]
+            by_dimension.append(
+                dict(
+                    boundary=boundary,
+                    rater=rater,
+                    dimension=dimension,
+                    mean_absolute_change=average(available),
+                    observed_questions=len(available),
+                    possible_questions=len(record_ids),
+                    observed_pairs=sum(item["observed_pairs"] for item in question_rows),
+                    possible_pairs=len(record_ids) * len(run_pairs),
+                )
+            )
+        for rater in sorted(
+            {item["rater"] for item in by_dimension if item["boundary"] == boundary}
+        ):
+            selected = [
+                item
+                for item in by_dimension
+                if item["boundary"] == boundary and item["rater"] == rater
+            ]
+            available = [
+                item["mean_absolute_change"]
+                for item in selected
+                if item["mean_absolute_change"] is not None
+            ]
+            by_rater.append(
+                dict(
+                    boundary=boundary,
+                    rater=rater,
+                    mean_absolute_change=average(available),
+                    observed_pairs=sum(item["observed_pairs"] for item in selected),
+                    possible_pairs=sum(item["possible_pairs"] for item in selected),
+                )
+            )
+        selected = [item for item in by_rater if item["boundary"] == boundary]
+        available = [
+            item["mean_absolute_change"]
+            for item in selected
+            if item["mean_absolute_change"] is not None
+        ]
+        overall.append(
+            dict(
+                boundary=boundary,
+                mean_absolute_change=average(available),
+                observed_pairs=sum(item["observed_pairs"] for item in selected),
+                possible_pairs=sum(item["possible_pairs"] for item in selected),
+            )
+        )
+    return dict(
+        method="question_paired_mean_absolute_boundary_rate_change",
+        unit="rate_fraction",
+        weighting="equal_answers_pairs_within_question_then_questions_dimensions_raters",
+        overall=overall,
+        by_rater=by_rater,
+        by_dimension=by_dimension,
+        by_question=by_question,
+    )
 
 
 def build(snapshots):
@@ -85,6 +189,10 @@ def build(snapshots):
         raise ValueError("repeatability_no_distributions")
     record_ids = [record["id"] for record in first["records"]]
     rater_dimensions = sorted({(rater, dimension) for _, rater, dimension in rows})
+    boundary_names = (
+        ("partial_or_better", "sufficient") if first["kind"] == "gold" else ("satisfied",)
+    )
+    changes = boundary_changes(rows, ids, record_ids, rater_dimensions, boundary_names)
     summaries = []
     for snapshot in snapshots:
         run_id = snapshot["analysis_run_id"]
@@ -159,6 +267,7 @@ def build(snapshots):
             round_pairing=False,
             significance_test=False,
         ),
+        boundary_changes=changes,
         summaries=summaries,
     )
     report["digest"] = digest(report)

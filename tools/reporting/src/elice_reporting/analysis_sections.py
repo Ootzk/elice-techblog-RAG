@@ -143,8 +143,8 @@ def _criterion_text(text):
     return text
 
 
-def metric_guide(data):
-    rubric = data.report["rubric"]
+def rubric_guide(rubric, *, repeatability=False):
+    """Display the shared rubric anchors for analysis and repeatability reports."""
     header = (
         "<tr><th>항목</th><th>평가 대상</th>"
         + "".join(
@@ -168,14 +168,21 @@ def metric_guide(data):
         + "</td></tr>"
         for name, d in rubric["dimensions"].items()
     )
+    status_notes = (
+        "- **원점수:** 저장된 등급과 한국어 사유를 사용합니다. "
+        "경계 충족 여부는 등급에서 별도로 계산합니다.\n"
+        "- **N/A·오류·미기록:** 0점이 아니며 유효 등급을 분모로 쓰는 지표에서 제외합니다.\n"
+        if repeatability
+        else "- **판정:** pass/fail 대신 저장된 등급과 한국어 사유를 표시합니다.\n"
+        "- **N/A·오류·미기록:** 0점이 아니며 유효 등급 일치도 계산에서 제외합니다.\n"
+    )
     return pn.Column(
         pn.pane.Markdown("### 답변별 채점 기준"),
         pn.pane.Markdown(
             "- **등급:** 사람과 모델 모두 아래 기준으로 직접 채점합니다. "
             "비율 점수를 등급으로 변환하지 않습니다.\n"
-            "- **판정:** pass/fail 대신 저장된 등급과 한국어 사유를 표시합니다.\n"
-            "- **N/A·오류·미기록:** 0점이 아니며 유효 등급 일치도 계산에서 제외합니다.\n"
-            "- **진단 지표:** 별도로 실행한 Ragas 비율 점수는 "
+            + status_notes
+            + "- **진단 지표:** 별도로 실행한 Ragas 비율 점수는 "
             "등급이나 사람 판정과 혼합하지 않습니다.\n"
             "- **모델 등급 채점:** [Ragas "
             "DiscreteMetric](https://docs.ragas.io/en/latest/references/metrics/)을 사용합니다.\n"
@@ -192,6 +199,13 @@ def metric_guide(data):
                 "border-bottom:1px solid #e4e9ef;}"
             ],
         ),
+        sizing_mode="stretch_width",
+    )
+
+
+def metric_guide(data):
+    return pn.Column(
+        *rubric_guide(data.report["rubric"]).objects,
         pn.pane.Markdown("### 평가자 간 일치도"),
         _table(
             [

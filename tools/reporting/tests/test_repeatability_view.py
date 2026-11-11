@@ -1,8 +1,12 @@
 import panel as pn
 from bokeh.models.glyphs import ImageURL
 
-from elice_reporting.data import ReportData
-from elice_reporting.repeatability_sections import grading_breakdown
+from elice_reporting.data import ReportData, demo
+from elice_reporting.repeatability_sections import (
+    boundary_change_summary,
+    grading_breakdown,
+    repeatability_metric_guide,
+)
 from elice_reporting.repeatability_view import question_summaries, summary_heatmaps
 
 
@@ -95,3 +99,79 @@ def test_grading_breakdown_distinguishes_runs_from_rating_observations():
     changed = grading_breakdown(snapshot, "model:chatgpt", rows)
     assert changed["run_count"] == 2
     assert "판정 건수와 실행 기록 불일치" in changed["headline"]
+
+
+def test_boundary_change_view_uses_saved_paired_metrics():
+    data = ReportData(
+        kind="repeatability",
+        report={
+            "summaries": [{"rater": "model:chatgpt"}],
+            "boundary_changes": {
+                "overall": [
+                    {
+                        "boundary": name,
+                        "mean_absolute_change": value,
+                        "observed_pairs": 4,
+                        "possible_pairs": 6,
+                    }
+                    for name, value in (("partial_or_better", 0.5), ("sufficient", 5 / 6))
+                ],
+                "by_rater": [
+                    {
+                        "rater": "model:chatgpt",
+                        "boundary": name,
+                        "mean_absolute_change": value,
+                        "observed_pairs": 4,
+                        "possible_pairs": 6,
+                    }
+                    for name, value in (("partial_or_better", 0.5), ("sufficient", 5 / 6))
+                ],
+                "by_dimension": [
+                    {
+                        "rater": "model:chatgpt",
+                        "dimension": "correctness",
+                        "boundary": name,
+                        "mean_absolute_change": value,
+                        "observed_pairs": 4,
+                        "possible_pairs": 6,
+                    }
+                    for name, value in (("partial_or_better", 0.5), ("sufficient", 5 / 6))
+                ],
+            },
+        },
+        inputs={},
+        source="local",
+    )
+    view = boundary_change_summary(data)
+    assert "50.0%p" in view.objects[0].object
+    assert "83.3%p" in view.objects[0].object
+    assert "4/6" in view.objects[0].object
+    assert "정확성" in view.objects[2].object
+
+
+def test_repeatability_guide_reuses_rubric_and_defines_both_boundaries():
+    rubric = demo("analysis").report["rubric"]
+    data = ReportData(
+        kind="repeatability",
+        report={
+            "boundary_changes": {
+                "overall": [{"boundary": "partial_or_better"}, {"boundary": "sufficient"}]
+            }
+        },
+        inputs={"analyses": [{"analysis": {"rubric": rubric}}]},
+        source="local",
+    )
+    guide = repeatability_metric_guide(data)
+    headings = [
+        item.object
+        for item in guide.objects
+        if isinstance(item, pn.pane.Markdown) and item.object.startswith("### ")
+    ]
+    assert headings == ["### 답변별 채점 기준", "### 시행별 경계 충족률", "### 시행 간 평균 변화폭"]
+    rubric_table = guide.objects[2].object
+    boundary_table = guide.objects[4].object
+    method = guide.objects[6].object
+    assert "정확성" in rubric_table and "N/A" in rubric_table
+    assert "부분 충족 이상" in boundary_table and "충분" in boundary_table
+    assert "Wasserstein" in method and "|pᵢ-pⱼ|" in method
+    assert "%p" in method and "합격 임계값은 설정하지 않았습니다" in method

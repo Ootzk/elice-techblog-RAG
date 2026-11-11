@@ -4,7 +4,64 @@ import pytest
 from test_comparison import frozen, refresh
 
 from elice_knowledge.corpus import digest
-from elice_knowledge.repeatability import build
+from elice_knowledge.repeatability import boundary_changes, build
+
+
+def test_boundary_changes_keep_question_pairs_and_equal_question_weight():
+    def scored(partial, sufficient):
+        return {
+            "valid": 3,
+            "boundaries": {
+                "partial_or_better": {"rate": partial},
+                "sufficient": {"rate": sufficient},
+            },
+        }
+
+    rows = {
+        ("q1", "model:chatgpt", "correctness"): {
+            "A1": scored(1, 1),
+            "A2": scored(1, 0),
+            "A3": scored(1, 1),
+        },
+        ("q2", "model:chatgpt", "correctness"): {
+            "A1": scored(0, 0),
+            "A2": scored(1, 1),
+            "A3": {"valid": 0},
+        },
+    }
+    result = boundary_changes(
+        rows,
+        ["A1", "A2", "A3"],
+        ["q1", "q2"],
+        [("model:chatgpt", "correctness")],
+        ("partial_or_better", "sufficient"),
+    )
+    by_boundary = {item["boundary"]: item for item in result["overall"]}
+    assert by_boundary["partial_or_better"]["mean_absolute_change"] == 0.5
+    assert by_boundary["sufficient"]["mean_absolute_change"] == pytest.approx(5 / 6)
+    assert (
+        by_boundary["sufficient"]["observed_pairs"],
+        by_boundary["sufficient"]["possible_pairs"],
+    ) == (4, 6)
+    # q1 contributes 2/3 and q2 contributes 1, despite q2 having fewer valid pairs.
+
+
+def test_boundary_changes_detect_swapped_question_outcomes():
+    def scored(rate):
+        return {"valid": 1, "boundaries": {"satisfied": {"rate": rate}}}
+
+    rows = {
+        ("q1", "model:chatgpt", "behavior"): {"A1": scored(1), "A2": scored(0)},
+        ("q2", "model:chatgpt", "behavior"): {"A1": scored(0), "A2": scored(1)},
+    }
+    result = boundary_changes(
+        rows,
+        ["A1", "A2"],
+        ["q1", "q2"],
+        [("model:chatgpt", "behavior")],
+        ("satisfied",),
+    )
+    assert result["overall"][0]["mean_absolute_change"] == 1
 
 
 def test_boundary_counts_preserve_all_judge_rounds_without_pairing():
@@ -30,6 +87,10 @@ def test_boundary_counts_preserve_all_judge_rounds_without_pairing():
     assert target["boundaries"]["sufficient"] == {"count": 2, "denominator": 2, "rate": 1.0}
     report = build([first, second])
     assert report["repeatability_contract"] == "repeatability-v1"
+    assert {row["boundary"] for row in report["boundary_changes"]["overall"]} == {
+        "partial_or_better",
+        "sufficient",
+    }
     assert "cases" not in report and "summary_ranges" not in report
     total = next(
         row

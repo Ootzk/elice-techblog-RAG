@@ -56,6 +56,8 @@ def _validate(kind, report, inputs, source, run_id=None):
             raise ValueError("Unsupported repeatability contract")
         if not isinstance(report.get("summaries"), list):
             raise ValueError("Repeatability summary is missing")
+        if not isinstance(report.get("boundary_changes"), dict):
+            raise ValueError("Repeatability boundary change metrics are missing")
         if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
             raise ValueError("Repeatability content digest mismatch")
         snapshots = inputs.get("analyses", [])

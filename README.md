@@ -779,11 +779,19 @@ answers는 `evaluation-v1`, 나머지는 `evaluation-v2`를 사용하며 등급 
 [관계도와 현재 구현 범위](docs/evaluation-schema.md#실험-단위와-관계)에 정리했습니다.
 repeatability는 같은 조건의 서로 다른 answers에 대한 analysis 두 개 이상을 입력받고,
 시행·주체·항목별로 전체 문항의 0·1·2 등급 건수와 rubric의 두 경계(부분 충족 이상·충분)
-충족 비율을 비교합니다. 문항별 판정은 원본 analysis에 남기고 반복성 보고서는 전체 결과를 보여줍니다.
+충족 비율을 비교합니다. 반복성 보고서는 전체 질문과 개별 질문의 분포를 선택해 보여주며,
+회차별 개별 판정은 원본 analysis에 남깁니다.
 Iron은 0·1 경계 하나를 씁니다. 이는 작은 반복 표본의 기술 통계이며 답변 변동과 Judge 변동을
 인과적으로 분리한 추정치는 아닙니다. 시행별 grading 횟수는 같지 않아도 되며, 보고서에서
 평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 현재 comparison CLI는 analysis 한 쌍과
 주체당 grading 하나만 받습니다.
+
+반복성 보고서의 `1점 이상`·`2점` 시행 간 평균 변화폭은 같은 질문의 answers 시행 쌍에서
+Judge 반복 채점의 경계 충족률 차이를 절댓값으로 계산합니다. 경계 충족 여부를 0/1로 보면
+이는 두 Bernoulli 분포의 1차 Wasserstein 거리 `W₁ = |p_i-p_j|`와 같으며, 닫힌식으로 계산합니다.
+시행 쌍을 질문 안에서 평균하고,
+질문·평가 항목·평가 주체를 동일 가중치로 집계합니다. 낮을수록 관측된 비율 변화가 작으며
+비교 가능한 단위 수를 함께 기록합니다. 답변 품질 수준은 시행별 경계 충족률로 따로 확인합니다.
 
 ```bash
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/repeatability.py \

@@ -129,6 +129,24 @@ def main():
             tracking.log_metric(
                 run_id, "repeatability.summary_rows", len(report["summaries"])
             )
+            for item in report["boundary_changes"]["overall"]:
+                boundary = item["boundary"]
+                if item["mean_absolute_change"] is not None:
+                    tracking.log_metric(
+                        run_id,
+                        f"repeatability.{boundary}.mean_absolute_change",
+                        item["mean_absolute_change"],
+                    )
+                tracking.log_metric(
+                    run_id,
+                    f"repeatability.{boundary}.observed_pairs",
+                    item["observed_pairs"],
+                )
+                tracking.log_metric(
+                    run_id,
+                    f"repeatability.{boundary}.possible_pairs",
+                    item["possible_pairs"],
+                )
             tracking.set_terminated(run_id, "FINISHED")
         except Exception:
             tracking.set_terminated(run_id, "FAILED")
