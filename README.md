@@ -742,7 +742,9 @@ Human Review는 `/review`에서 현재 로그인한 코드로 고정 답변을 �
 이전 판정은 새 회차에 채워 넣지 않습니다. 사람·모델 모두 한 주체의 한 회차를 별도 grading run으로
 저장하고 원본 answers run에 연결합니다. 원본 답변의 metric을 덮어쓰지 않습니다.
 모델은 MLflow SDK에서 질문·항목을 병렬 실행하고 기본 상한은 프로세스당 질문 2개 × 항목 4개입니다.
-모델·반복 회차는 순차 실행합니다. 저장·동기화·블라인드 범위는 [Human Review](docs/human-review.md)를 따릅니다.
+모델·반복 회차는 최대 32개 grading Run까지 동시에 실행합니다. 중첩 요청 수를 제한하며,
+`MLFLOW_GENAI_EVAL_MAX_WORKERS`와 `MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`로 조절할 수 있습니다.
+저장·동기화·블라인드 범위는 [Human Review](docs/human-review.md)를 따릅니다.
 
 평가자 정합성은 **사람–모델의 항목별 선형 가중 Cohen κ**를 주요 지표로 봅니다.
 0↔1의 불일치보다 0↔2를 더 크게 반영합니다. 일반 κ·제곱 가중 κ·정확 일치율·혼동행렬·평균 절대 등급 차이·
