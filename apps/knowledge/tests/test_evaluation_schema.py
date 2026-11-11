@@ -1,6 +1,7 @@
 """Shared ordinal grading manifests and isolated PostgreSQL/MLflow registry behavior."""
 
 from copy import deepcopy
+from threading import Barrier
 
 import pytest
 from test_chat_service import service as service  # noqa: F401
@@ -90,6 +91,27 @@ def test_three_models_and_repeats_are_separate_shared_rubric_runs(review, monkey
         assert all(r["score"] is None or r["score"] == 1 for r in result["ratings"])
     assert review.bundle == before
     assert all(run != RUN for run, _, _ in review.writes)
+
+
+def test_models_and_rounds_start_concurrently(review, monkeypatch):
+    barrier = Barrier(4, timeout=15)
+
+    def concurrent_judgments(*args, **kwargs):
+        barrier.wait()
+        return fake_judgments(*args, **kwargs)
+
+    monkeypatch.setattr("elice_knowledge.judge_runs.evaluate_answers", concurrent_judgments)
+    runs = evaluate_models(
+        review.service, review.bundle, specs(review.bundle, raters=("chatgpt", "claude")), repeat=2
+    )
+    assert len(runs) == 4
+    assert all(run["state"] == "FINISHED" for run in runs)
+    assert {(run["rater_id"], run["round"]) for run in runs} == {
+        ("model:chatgpt", 1),
+        ("model:chatgpt", 2),
+        ("model:claude", 1),
+        ("model:claude", 2),
+    }
 
 
 def test_diagnostics_are_separate_from_ordinal_scores(review, monkeypatch):

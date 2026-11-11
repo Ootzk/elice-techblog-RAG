@@ -58,6 +58,7 @@ def _icon(rater, color, badge, model_names=()):
                 for brand, words in (
                     ("claude-color", ("claude", "anthropic")),
                     ("gemini-color", ("gemini",)),
+                    ("qwen-color", ("qwen",)),
                     ("openai", ("openai", "chatgpt", "gpt")),
                 )
                 if any(word in name for word in words)
