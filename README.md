@@ -1010,3 +1010,5 @@ Judge는 질문마다 별도 인자를 받을 수 없으므로 `tools/evaluation
 `generation_options`, `embedding_options`를, 평가 요청은 Judge 이름별 `judge_options`를
 받습니다. 지정한 옵션은 답변·채점 프로필과 MLflow 실험 조건에 저장됩니다. 모델명·입력·인증
 헤더 등은 실행 옵션으로 덮어쓸 수 없습니다.
+
+<!-- Temporary CI trigger probe; this change is not intended for merge. -->
