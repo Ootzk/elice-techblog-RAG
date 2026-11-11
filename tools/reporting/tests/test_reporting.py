@@ -21,12 +21,22 @@ from elice_reporting import (
     from_files,
     from_mlflow,
     interactive_table,
+    report_purpose_callout,
     text_block,
 )
 from elice_reporting.export import TABLE_CALLBACK
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = Path(__file__).resolve().parents[1]
+
+
+def test_report_purpose_callouts_explain_each_report_scope():
+    analysis = report_purpose_callout("analysis").object
+    repeatability = report_purpose_callout("repeatability").object
+    comparison = report_purpose_callout("comparison").object
+    assert "ANALYSIS" in analysis and "같은 평가자가 다시 채점해도" in analysis
+    assert "REPEATABILITY" in repeatability and "채점 자체의 흔들림" in repeatability
+    assert "COMPARISON" in comparison and "차이의 원인까지 단정하지는" in comparison
 
 
 def test_demo_tables_preserve_unavailable_coefficients_and_rater_identity():
