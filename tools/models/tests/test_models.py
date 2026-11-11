@@ -24,12 +24,11 @@ def repo(tmp_path, monkeypatch):
 def test_capture_and_switch_preserves_secret_without_output(repo, capsys):
     env = repo / ".env.dev"
     env.write_text(
-        "GENERATION_MODEL=terra\nGENERATION_BASE_URL=https://example.com/v1\nGENERATION_API_KEY=private-key\n"
+        "GENERATION_MODEL=terra\nGENERATION_BASE_URL=https://example.com/v1\nGENERATION_API_KEY=private-key\nELICE_API_KEY=private-key\n"
     )
     models.capture("answer", "terra", env, repo / ".env.models.dev")
-    env.write_text(
-        env.read_text().replace("terra", "qwen").replace("private-key", "other-key")
-    )
+    assert "private-key" not in (repo / ".env.models.dev").read_text()
+    env.write_text(env.read_text().replace("terra", "qwen"))
     models.capture("answer", "qwen", env, repo / ".env.models.dev")
     models.select("answer", "terra", repo / ".env.models.dev", env)
     result = dotenv_values(env)
@@ -46,7 +45,9 @@ def test_embedding_switch_restores_its_index(repo):
     )
     models.capture("embedding", "old", env, repo / ".env.models.dev")
     env.write_text(
-        env.read_text().replace("bge-m3", "other").replace("old-index", "new-index")
+        env.read_text()
+        .replace("bge-m3", "other")
+        .replace("QA_ACTIVE_INDEX_KEY=old-index", "QA_ACTIVE_INDEX_KEY=new-index")
     )
     models.select("embedding", "old", repo / ".env.models.dev", env)
     assert dotenv_values(env)["QA_ACTIVE_INDEX_KEY"] == "old-index"
@@ -84,12 +85,10 @@ def test_json_profiles_can_contain_any_independent_judge_names(repo):
             "rater-a": {
                 "model": "vendor/model-a",
                 "base_url": "https://example.test/v1",
-                "api_key": "x",
             },
             "rater-b": {
                 "model": "vendor/model-b",
                 "base_url": "https://example.test/v1",
-                "api_key": "y",
             },
         },
     }
@@ -101,3 +100,33 @@ def test_json_profiles_can_contain_any_independent_judge_names(repo):
     ]
     with pytest.raises(ValueError):
         selected_raters(Settings(evaluation_judge_raters="rater-a,rater-a"))
+
+
+def test_shared_key_is_taken_from_environment(repo):
+    data = {
+        "answer": {"first": {"model": "m", "base_url": "https://example.test/v1"}},
+        "embedding": {},
+        "judge": {},
+    }
+    profile = models.resolve_profile(
+        data, "answer", "first", {"ELICE_API_KEY": "some-private-key"}
+    )
+    assert profile["api_key"] == "some-private-key"
+    data["answer"]["first"]["api_key"] = "not-allowed"
+    with pytest.raises(ValueError):
+        models.resolve_profile(data, "answer", "first", {})
+
+
+def test_public_catalog_rejects_credentials_and_direct_endpoints(repo):
+    for extra in (
+        {"api_key": "test-key"},
+        {"password": "test"},
+        {"base_url": "https://user:secret@example.test/v1"},
+    ):
+        data = {
+            "answer": {"one": {"model": "model", **extra}},
+            "embedding": {},
+            "judge": {},
+        }
+        with pytest.raises(ValueError):
+            models.write_catalog(repo / "models.json", data)

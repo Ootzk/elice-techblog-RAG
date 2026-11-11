@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     embedding_base_url: SecretStr | None = None
     embedding_model: str = "bge-m3"
     embedding_model_revision: str | None = None
+    elice_api_key: SecretStr | None = None
     embedding_api_key: SecretStr | None = None
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
     embedding_batch_size: int = Field(default=16, gt=0, le=256)
@@ -86,6 +87,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_endpoints(self):
+        if self.elice_api_key and self.elice_api_key.get_secret_value():
+            self.generation_api_key = self.elice_api_key
+            if self.embedding_backend == "elice-serverless":
+                self.embedding_api_key = self.elice_api_key
         for field, schemes in (
             ("database_url", {"postgres", "postgresql"}),
             ("embedding_base_url", {"http", "https"}),

@@ -24,3 +24,11 @@ def test_missing_prod_endpoints_have_no_dev_fallback():
     assert settings.database_url is None
     assert settings.embedding_base_url is None
     assert settings.mlflow_tracking_uri is None
+
+
+def test_common_elice_key_configures_generation_and_serverless_embedding():
+    from elice_knowledge.settings import Settings
+
+    settings = Settings(elice_api_key="shared-key", embedding_backend="elice-serverless")
+    assert settings.generation_api_key.get_secret_value() == "shared-key"
+    assert settings.embedding_api_key.get_secret_value() == "shared-key"

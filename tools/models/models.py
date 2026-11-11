@@ -77,11 +77,74 @@ def validate_name(name):
     return name
 
 
+def catalog_path(path):
+    path = Path(path).resolve()
+    try:
+        path.relative_to(ROOT)
+    except ValueError:
+        raise ValueError("모델 파일은 저장소 안에 있어야 합니다") from None
+    return path
+
+
+def validate_catalog(data):
+    if not isinstance(data, dict) or set(data) - {"answer", "embedding", "judge"}:
+        raise ValueError("모델 파일의 항목이 올바르지 않습니다")
+    for kind in ("answer", "embedding", "judge"):
+        profiles = data.get(kind, {})
+        if not isinstance(profiles, dict):
+            raise TypeError("모델 목록은 객체여야 합니다")
+        for name, profile in profiles.items():
+            validate_name(name)
+            if not isinstance(profile, dict):
+                raise TypeError("모델 프로필은 객체여야 합니다")
+            allowed = {
+                "model",
+                "backend",
+                "revision",
+                "dimensions",
+                "timeout_seconds",
+                "batch_size",
+                "temperature",
+                "max_output_tokens",
+                "token_limit_field",
+                "base_url",
+                "index_key_env",
+            }
+            if set(profile) - allowed:
+                raise ValueError(
+                    "모델 JSON에 지원하지 않는 항목이나 인증정보가 있습니다"
+                )
+            from urllib.parse import urlsplit
+
+            if "base_url" in profile:
+                value = profile["base_url"]
+                url = urlsplit(value) if isinstance(value, str) else None
+                if (
+                    not url
+                    or url.scheme not in {"http", "https"}
+                    or not url.hostname
+                    or url.username
+                    or url.password
+                    or url.query
+                    or url.fragment
+                ):
+                    raise ValueError(
+                        "모델 주소는 인증정보나 쿼리 없는 HTTP(S) URL이어야 합니다"
+                    )
+            for field in ("index_key_env",):
+                if field in profile and (
+                    not isinstance(profile[field], str)
+                    or not re.fullmatch(r"[A-Z][A-Z0-9_]*", profile[field])
+                ):
+                    raise ValueError("환경변수 참조가 올바르지 않습니다")
+
+
 def read_catalog(path):
-    path = safe_path(path)
+    path = catalog_path(path)
     if not path.exists():
         return {"answer": {}, "embedding": {}, "judge": {}}
     data = json.loads(path.read_text())
+    validate_catalog(data)
     if not isinstance(data, dict) or any(
         not isinstance(data.get(k, {}), dict) for k in ("answer", "embedding", "judge")
     ):
@@ -89,11 +152,30 @@ def read_catalog(path):
     return {k: data.get(k, {}) for k in ("answer", "embedding", "judge")}
 
 
+def resolve_profile(data, kind, name, env):
+    value = data[kind].get(name)
+    if not isinstance(value, dict):
+        raise TypeError("모델 프로필이 없습니다")
+    profile = dict(value)
+    if "api_key" in profile or "api_key_ref" in profile:
+        raise ValueError("모델 JSON에 인증정보를 저장할 수 없습니다")
+    for field in ("index_key",):
+        variable = profile.pop(field + "_env", None)
+        if variable:
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]*", variable):
+                raise ValueError("환경변수 이름이 올바르지 않습니다")
+            profile[field] = env.get(variable) or ""
+    profile["api_key"] = env.get("ELICE_API_KEY") or ""
+    return profile
+
+
 def write_catalog(path, data):
     import tempfile
 
-    path = safe_path(path)
-    fd, temp = tempfile.mkstemp(dir=path.parent, prefix=".model-catalog-")
+    validate_catalog(data)
+    path = catalog_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix=".env.model-catalog-")
     try:
         with os.fdopen(fd, "w") as out:
             json.dump(data, out, ensure_ascii=False, indent=2)
@@ -116,12 +198,15 @@ def save_env(path, values):
 def capture(kind, name, source, catalog):
     validate_name(name)
     env = dotenv_values(safe_path(source))
-    if any(not env.get(k) for k in REQUIRED[kind]):
+    if any(
+        not (env.get(k) or (k.endswith("_API_KEY") and env.get("ELICE_API_KEY")))
+        for k in REQUIRED[kind]
+    ):
         raise ValueError("필수 모델 설정이 빠졌습니다")
     if (
         kind == "embedding"
         and env.get("EMBEDDING_BACKEND") == "elice-serverless"
-        and not env.get("EMBEDDING_API_KEY")
+        and not (env.get("ELICE_API_KEY") or env.get("EMBEDDING_API_KEY"))
     ):
         raise ValueError("Serverless 임베딩 키가 없습니다")
     data = read_catalog(catalog)
@@ -132,18 +217,28 @@ def capture(kind, name, source, catalog):
         key.removeprefix(prefix).lower(): env.get(key)
         for key in FIELDS[kind]
         if env.get(key)
+        and not key.endswith("_API_KEY")
+        and key != "QA_ACTIVE_INDEX_KEY"
     }
-    if kind == "embedding" and env.get("QA_ACTIVE_INDEX_KEY"):
-        values["index_key"] = env["QA_ACTIVE_INDEX_KEY"]
+    env_prefix = f"MODEL_{kind.upper()}_{name.upper().replace('-', '_')}"
+    runtime = {}
+    for field, source_key in (("index_key", "QA_ACTIVE_INDEX_KEY"),):
+        values.pop(field, None)
+        if env.get(source_key):
+            var = env_prefix + "_" + field.upper()
+            values[field + "_env"] = var
+            runtime[var] = env[source_key]
+    if runtime:
+        save_env(source, runtime)
     data[kind][name] = values
     write_catalog(catalog, data)
 
 
 def select(kind, name, catalog, target):
     validate_name(name)
-    profile = read_catalog(catalog)[kind].get(name)
-    if not isinstance(profile, dict):
-        raise TypeError("모델 프로필이 없습니다")
+    profile = resolve_profile(
+        read_catalog(catalog), kind, name, dotenv_values(safe_path(target))
+    )
     prefix = "GENERATION_" if kind == "answer" else "EMBEDDING_"
     values = {
         key: str(profile.get(key.removeprefix(prefix).lower()) or "")
@@ -167,6 +262,9 @@ def select(kind, name, catalog, target):
     unset = [k for k in optional if kind == "answer" and not values.get(k)]
     for key in unset:
         values.pop(key, None)
+    values = {
+        key: value for key, value in values.items() if not key.endswith("_API_KEY")
+    }
     save_env(target, values)
     remaining = dotenv_values(safe_path(target))
     for key in unset:
@@ -194,7 +292,9 @@ def register_judges(catalog, envfile):
     ):
         if env.get(key):
             os.environ[key] = env[key]
-    store = _get_store(env["MLFLOW_TRACKING_URI"])
+    store = _get_store(
+        env.get("RAG_HOST_MLFLOW_TRACKING_URI") or env["MLFLOW_TRACKING_URI"]
+    )
     endpoints = {x.name: x for x in store.list_gateway_endpoints()}
     secrets = {x.secret_name: x for x in store.list_secret_infos()}
     definitions = {x.name: x for x in store.list_gateway_model_definitions()}
@@ -207,12 +307,31 @@ def register_judges(catalog, envfile):
         raise ValueError("먼저 중복 없는 Judge를 선택하세요")
     for role in names:
         validate_name(role)
-        values = data["judge"].get(role)
-        if not isinstance(values, dict):
-            raise TypeError(f"{role}: Judge 프로필이 올바르지 않습니다")
+        values = resolve_profile(data, "judge", role, env)
         endpoint = f"elice-techblog-rag-judge-{role}"
         if endpoint in endpoints:
-            print(f"{role}: 기존 endpoint 사용")
+            existing = endpoints[endpoint]
+            mappings = existing.model_mappings
+            if len(mappings) != 1 or mappings[0].model_definition is None:
+                raise ValueError(f"{role}: 기존 endpoint 구성이 단일 모델이 아닙니다")
+            definition = mappings[0].model_definition
+            secret = next(
+                (
+                    item
+                    for item in secrets.values()
+                    if item.secret_id == definition.secret_id
+                ),
+                None,
+            )
+            if values.get("model") and values["model"] != definition.model_name:
+                raise ValueError(f"{role}: 기존 endpoint의 모델이 프로필과 다릅니다")
+            if values.get("base_url") and (
+                secret is None
+                or (secret.auth_config or {}).get("api_base", "").rstrip("/")
+                != values["base_url"].rstrip("/")
+            ):
+                raise ValueError(f"{role}: 기존 endpoint의 주소가 프로필과 다릅니다")
+            print(f"{role}: 기존 endpoint 사용 (키 일치 여부는 확인할 수 없음)")
             continue
         if any(not values.get(k) for k in ("model", "base_url", "api_key")):
             raise ValueError(
@@ -248,7 +367,7 @@ def register_judges(catalog, envfile):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=".env.dev")
-    parser.add_argument("--catalog", default=".env.models.dev.json")
+    parser.add_argument("--catalog", default="models.json")
     sub = parser.add_subparsers(dest="command", required=True)
     for command in ("capture", "select"):
         p = sub.add_parser(command)

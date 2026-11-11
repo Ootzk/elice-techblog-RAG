@@ -56,7 +56,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `EMBEDDING_BACKEND` | `ollama` 또는 `elice-serverless`; dev 예시는 Serverless |
 | `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | 임베딩 endpoint와 모델 이름; Serverless는 `/v1` Base URL과 `text-embedding-3-small` |
 | `EMBEDDING_MODEL_REVISION` | 공급자가 제공한 고정 revision; 알 수 없으면 비움 |
-| `EMBEDDING_API_KEY` | Serverless Bearer 인증에 필수; Ollama는 선택 |
+| `ELICE_API_KEY` | 생성·Serverless 임베딩·Judge 등록에 사용하는 공용 API 키 |
 | `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; dev Serverless 예시는 `1536`, Ollama BGE-M3는 `1024` |
 | `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
 | `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
@@ -65,7 +65,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
 | `GENERATION_BASE_URL` | 선택한 엘리스 Serverless 모델의 `/v1` Base URL; 미설정 시 QA 비활성 |
-| `GENERATION_API_KEY`, `GENERATION_MODEL` | Serverless API Key와 모델 API 패널에 표시된 모델 이름; 기본값 없음 |
+| `GENERATION_MODEL` | 모델 API 패널에 표시된 생성 모델 이름; 기본값 없음 |
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
 | `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
 | `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
@@ -316,7 +316,7 @@ Bearer 인증과 `model`·`messages`·`stream=false`를 사용합니다. 모델 
 
 ```dotenv
 GENERATION_BASE_URL=https://mlapi.run/<endpoint-id>/v1
-GENERATION_API_KEY=<발급받은 Serverless API Key>
+ELICE_API_KEY=<발급받은 Serverless API Key>
 GENERATION_MODEL=<모델 API 패널의 model 값>
 ```
 
@@ -907,9 +907,8 @@ Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록�
 
 #### 모델 프로필 등록과 선택
 
-모델 정보를 Git에서 제외된 `.env.models.dev.json`에 JSON으로 저장합니다. 예시 형식은
-[models.example.json](tools/models/models.example.json)에서 확인할 수 있습니다. 실제 키와 주소를
-예시 파일에 넣지 않습니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
+모델 정보는 저장소의 [models.json](models.json)에서 관리합니다. 모델의 Base URL과 식별자는 JSON에 두고 API 키는 환경 파일에서 읽습니다.
+환경별 색인 키는 환경변수로 참조합니다. `answer`, `embedding`, `judge` 안에서 이름을 자유롭게 정합니다.
 현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
 
 ```bash
@@ -923,7 +922,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --f
 어댑터를 사용합니다. 임베딩 모델 변경 시 해당 모델의 인덱스를 새로 만들어야 합니다.
 프로필의 `index_key`에 해당 인덱스를 기록하면 전환할 때 함께 선택됩니다.
 
-Judge 모델은 원하는 이름과 `model`, `base_url`, `api_key`를 JSON에 넣습니다. 아래 명령은
+Judge 모델은 원하는 이름과 `model`, `base_url`을 JSON에 넣습니다. 공용 API 키는 환경 파일의 `ELICE_API_KEY`에 넣습니다. 아래 명령은
 선택한 여러 평가 주체를 설정하고 MLflow Gateway와 scorer에 등록합니다. 모델 추론은 호출하지
 않습니다. 기존 MLflow endpoint는 그대로 재사용하며 새 서버에서는 접속 정보를 사용해 생성합니다.
 기존 MLflow에 저장된 키는 다시 읽을 수 없으므로 새 서버에 등록하려면 키가 필요합니다.
@@ -935,5 +934,41 @@ uv run --project apps/knowledge --locked --env-file .env.dev python tools/evalua
 ```
 
 선택을 바꾼 뒤 Knowledge와 worker를 재생성합니다. prod에서는 `--env-file .env --catalog
-.env.models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
+models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway는 암호화 키 설정이
 필요합니다. 재채점 시 `--model-rater <이름>`을 반복 지정하면 선택된 Judge 중 일부만 사용할 수 있습니다.
+
+#### 운영 명령
+
+`tools/operations/rag.py`는 모델·Dataset·Prompt·평가의 기존 명령을 한곳에서 실행합니다.
+공용 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 한 번 적습니다. 모델 JSON에는
+모델명과 접속 주소 등만 적고 키는 넣지 않습니다.
+
+```bash
+# 모델 선택과 원하는 MLflow 실험 이름을 대화식으로 입력
+uv run --project apps/knowledge --locked python tools/operations/rag.py setup
+uv run --project apps/knowledge --locked python tools/operations/rag.py doctor
+
+# 기존 명령을 같은 진입점에서 사용
+uv run --project apps/knowledge --locked python tools/operations/rag.py model list
+uv run --project apps/knowledge --locked python tools/operations/rag.py corpus --help
+uv run --project apps/knowledge --locked python tools/operations/rag.py evaluate --help
+```
+
+설정된 MLflow 서버에 선택한 Judge endpoint와 scorer, Dataset, Prompt를 등록하며 설정 자체는
+유료 추론을 호출하지 않습니다. 설치 후 Compose로 Knowledge와 worker를 재생성해야 새 설정이
+반영됩니다. 같은 이름의 endpoint가 이미 있다면 모델과 주소를 비교합니다. 저장된 키는 다시
+읽을 수 없어 일치 여부를 검증하지 못합니다. 키 변경은 MLflow에서 따로 처리해야 합니다.
+
+개발용 MLflow가 없다면 `.env.dev`의 `MLFLOW_CRYPTO_KEK_PASSPHRASE`를 별도 비밀값으로 설정하고
+아래 명령으로 로컬 서버를 실행할 수 있습니다. 이 서버는 `data/mlflow-local/`의 SQLite와 artifact
+저장소를 사용하며, 종료해도 데이터가 남습니다. `--configure`를 지정하면 호스트용 `RAG_HOST_MLFLOW_TRACKING_URI`와 컨테이너용
+`MLFLOW_TRACKING_URI`를 각각 설정합니다. 컨테이너와 호스트가 같은 DB에 접근하려면 호스트 CLI용
+`RAG_HOST_DATABASE_URL`도 설정합니다. 이 로컬 구성은 제출용 클라우드의 PostgreSQL 기반
+MLflow와 구분합니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/operations/rag.py mlflow-start --port 5000 --configure
+uv run --project apps/knowledge --locked python tools/operations/rag.py mlflow-stop
+```
+
+`--env-file .env --catalog models.json`을 지정해 다른 환경을 선택할 수 있습니다.
