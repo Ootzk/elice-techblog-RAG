@@ -1,6 +1,6 @@
 [project]
 name = "elice-reporting"
-version = "0.2.0"
+version = "0.3.0"
 description = "Notebook-based reporting for Elice RAG evaluations"
 requires-python = ">=3.12,<3.13"
 dependencies = [
