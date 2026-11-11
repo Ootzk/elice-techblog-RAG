@@ -14,8 +14,6 @@
       "backend": "elice-serverless",
       "model": "text-embedding-3-small",
       "dimensions": "1536",
-      "timeout_seconds": "30",
-      "batch_size": "16",
       "base_url": "https://mlapi.run/b54ff33e-6d14-42df-93f9-0f1132160ee8/v1"
     }
   },

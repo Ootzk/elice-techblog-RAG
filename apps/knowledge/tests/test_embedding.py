@@ -192,3 +192,31 @@ def test_serverless_rejects_unexpected_model():
     ) as client:
         with pytest.raises(EmbeddingError, match="response model"):
             EliceServerlessEmbedder(serverless_settings(), client).embed(["input"])
+
+
+def test_embedding_execution_options_are_sent_and_identify_vector_contract():
+    import json
+
+    from elice_knowledge.embedding import EliceServerlessEmbedder, profile_id
+
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"model": "text-embedding-3-small", "data": [{"index": 0, "embedding": [1, 1]}]},
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        plain = EliceServerlessEmbedder(serverless_settings(), client)
+        selected = EliceServerlessEmbedder(
+            serverless_settings(embedding_options={"dimensions": 2}), client
+        )
+        assert selected.embed(["text"]) == [[1, 1]]
+        assert requests[0]["dimensions"] == 2
+        assert profile_id(plain.profile()) != profile_id(selected.profile())
+        with pytest.raises(EmbeddingError, match="dimensions"):
+            EliceServerlessEmbedder(
+                serverless_settings(embedding_options={"dimensions": 3}), client
+            ).profile()

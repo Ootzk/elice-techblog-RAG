@@ -16,9 +16,6 @@ FIELDS = {
         "GENERATION_BASE_URL",
         "GENERATION_API_KEY",
         "GENERATION_MODEL",
-        "GENERATION_TEMPERATURE",
-        "GENERATION_MAX_OUTPUT_TOKENS",
-        "GENERATION_TOKEN_LIMIT_FIELD",
     ),
     "embedding": (
         "EMBEDDING_BACKEND",
@@ -27,8 +24,6 @@ FIELDS = {
         "EMBEDDING_MODEL_REVISION",
         "EMBEDDING_API_KEY",
         "EMBEDDING_DIMENSIONS",
-        "EMBEDDING_TIMEOUT_SECONDS",
-        "EMBEDDING_BATCH_SIZE",
     ),
 }
 REQUIRED = {
@@ -101,11 +96,6 @@ def validate_catalog(data):
                 "backend",
                 "revision",
                 "dimensions",
-                "timeout_seconds",
-                "batch_size",
-                "temperature",
-                "max_output_tokens",
-                "token_limit_field",
                 "base_url",
             }
             if set(profile) - allowed:

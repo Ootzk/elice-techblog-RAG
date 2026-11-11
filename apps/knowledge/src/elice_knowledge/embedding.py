@@ -66,6 +66,8 @@ class OllamaEmbedder:
         return result
 
     def profile(self) -> dict:
+        if self.settings.embedding_options:
+            raise EmbeddingError("Ollama embedding request options are not supported")
         model = self.settings.embedding_model
         shown = self._request("/api/show", {"model": model})
         tags = self._request("/api/tags")
@@ -154,7 +156,13 @@ class EliceServerlessEmbedder:
             raise EmbeddingError("EMBEDDING_MODEL is required")
         if self.settings.embedding_model.removeprefix("openai/") != "text-embedding-3-small":
             raise EmbeddingError("Serverless embedding model token contract is not configured")
+        from elice_knowledge.model_options import validate_embedding_options
+
+        options = validate_embedding_options(self.settings.embedding_options)
+        if "dimensions" in options and options["dimensions"] != self.settings.embedding_dimensions:
+            raise EmbeddingError("Embedding dimensions option differs from configured dimensions")
         return {
+            **({"request_options": options} if options else {}),
             "backend": "elice-serverless",
             "api": "openai-embeddings-v1",
             "model": self.settings.embedding_model,
@@ -188,6 +196,7 @@ class EliceServerlessEmbedder:
                         "model": self.settings.embedding_model,
                         "input": batch,
                         "encoding_format": "float",
+                        **self.settings.embedding_options,
                     },
                     timeout=self.settings.embedding_timeout_seconds,
                 )

@@ -80,9 +80,7 @@ def test_optional_parameters_are_only_sent_when_explicitly_configured():
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         llm = EliceServerlessLLM(
             generation_settings(
-                generation_temperature=0,
-                generation_max_output_tokens=200,
-                generation_token_limit_field="max_tokens",
+                generation_options={"temperature": 0, "max_tokens": 200},
             ),
             client,
         )
@@ -207,3 +205,19 @@ def test_question_usage_omits_totals_with_incomplete_reporting():
     assert summary["usage"]["total_tokens"] == 61
     assert "cached_tokens" not in summary["usage"]
     assert summary["usage_reported_calls"]["cached_tokens"] == 1
+
+
+def test_call_kwargs_override_profile_options():
+    def handler(request):
+        payload = json.loads(request.content)
+        assert payload["temperature"] == 0.6
+        assert payload["seed"] == 7
+        return httpx.Response(200, json=completion())
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        llm = EliceServerlessLLM(
+            generation_settings(generation_options={"temperature": 0.2}), client
+        )
+        assert llm.complete("question", temperature=0.6, seed=7).text == "answer"
+        with pytest.raises(ValueError, match="forbidden"):
+            llm.complete("question", model="other")

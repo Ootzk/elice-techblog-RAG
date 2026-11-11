@@ -40,6 +40,12 @@ def main():
         help="Select grading runs; use one round per subject for panel coefficients",
     )
     parser.add_argument("--model-rater", action="append")
+    parser.add_argument(
+        "--judge-options",
+        type=json.loads,
+        default={},
+        help="JSON object mapping judge names to request options",
+    )
     parser.add_argument("--grading-file", action="append", type=Path, default=[])
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--submit", action="store_true")
@@ -90,6 +96,16 @@ def main():
     elif args.action == "judge":
         rubric = load_rubric(bundle["kind"], args.rubric_id)
         specs = frozen_judges(settings, bundle["kind"], rubric=rubric)
+        from elice_knowledge.model_options import validate_judge_options
+
+        if not isinstance(args.judge_options, dict) or set(args.judge_options) - {
+            s["rater"] for s in specs
+        }:
+            parser.error("--judge-options must map configured judges to option objects")
+        for spec in specs:
+            spec["request_options"] = validate_judge_options(
+                args.judge_options.get(spec["rater"], {})
+            )
         if args.model_rater:
             specs = [s for s in specs if s["rater"] in args.model_rater]
         if not args.submit:

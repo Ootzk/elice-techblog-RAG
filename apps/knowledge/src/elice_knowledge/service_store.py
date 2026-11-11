@@ -90,9 +90,8 @@ def initialize_service(conn):
 PROFILE_FIELDS = [
     "generation_model",
     "generation_timeout_seconds",
-    "generation_temperature",
-    "generation_max_output_tokens",
-    "generation_token_limit_field",
+    "generation_options",
+    "embedding_options",
     "qa_max_context_tokens",
     "qa_history_pairs",
     "qa_history_tokens",
@@ -115,6 +114,7 @@ def code_identity():
                     "sparse.py",
                     "data/bm25_user_words.tsv",
                     "generation.py",
+                    "model_options.py",
                     "retrieval.py",
                     "embedding.py",
                     "execution.py",
@@ -215,9 +215,26 @@ class ServiceStore:
         with self.connection() as conn:
             conn.execute("UPDATE chat_sessions SET expires_at=now() WHERE id=%s", (session_id,))
 
-    def active_profile(self, index_key=None, top_k=5, prompt_selectors=None):
+    def active_profile(
+        self,
+        index_key=None,
+        top_k=5,
+        prompt_selectors=None,
+        generation_options=None,
+        embedding_options=None,
+    ):
         """Freeze index, generation settings and resolved prompt content into a profile."""
-        s = self.settings
+        from elice_knowledge.model_options import (
+            validate_embedding_options,
+            validate_generation_options,
+        )
+
+        s = self.settings.model_copy(
+            update={
+                "generation_options": validate_generation_options(generation_options),
+                "embedding_options": validate_embedding_options(embedding_options),
+            }
+        )
         try:
             # Resolved before the DB transaction: the registry is a network call.
             prompts = resolve(s, prompt_selectors)

@@ -62,8 +62,6 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
-| `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
-| `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
 | `QA_MAX_CONTEXT_TOKENS` | 질문·출처·시스템 지시·출력 스키마를 포함한 프롬프트의 `cl100k_base` 기준 예산; 기본 `8192`. planner와 답변 단계에 각각 적용 |
 | `QA_AGENT_MAX_TOOL_CALLS` | 질문 하나에서 agent가 호출할 수 있는 검색 도구 횟수(1~8); 기본 `4` |
 | `PROMPT_ALIAS` | 새 QA 프로필이 MLflow Prompt Registry에서 읽을 alias; 기본 `production`, dev 예시는 `development` |
@@ -315,7 +313,7 @@ ANSWER_MODEL_PROFILE=<models.json의 답변 모델 이름>
 ELICE_API_KEY=<발급받은 Serverless API Key>
 ```
 
-모델마다 지원하는 매개변수가 다르므로 temperature와 출력 한도는 설정한 경우에만 전송합니다.
+모델마다 지원하는 매개변수가 다르므로 실행 요청에 전달한 옵션만 전송합니다.
 출력 한도를 설정하려면 API 패널에서 지원하는 `max_completion_tokens`·`max_tokens` 중 필드를 확인합니다.
 인증 실패·요청 거부·사용량 제한 등의 응답은 `generation_http_401`처럼 상태 코드만 전달하며,
 오류 본문·헤더·접속 URL은 노출하지 않습니다. 자동 재시도나 다른 모델로의 fallback은 없습니다.
@@ -966,3 +964,25 @@ uv run --project apps/knowledge --locked python tools/operations/rag.py mlflow-s
 ```
 
 `--env-file .env --catalog models.json`을 지정해 다른 환경을 선택할 수 있습니다.
+
+#### 모델 실행 옵션
+
+모델의 추론 옵션은 `.env`나 `models.json`에 고정하지 않고 평가마다 JSON 객체로 전달합니다.
+예를 들어 답변 생성과 개별 Judge의 옵션을 각각 지정할 수 있습니다.
+
+```bash
+uv run --project apps/knowledge --locked python tools/operations/rag.py evaluate \
+  --dataset-id '<dataset-id>' --submit --wait \
+  --generation-options '{"temperature": 0.2, "seed": 42}' \
+  --judge-options '{"chatgpt": {"reasoning_effort": "none", "stream": true, "max_completion_tokens": 8192}}'
+```
+
+`--embedding-options`는 색인 명령과 평가 프로필에서 지정합니다. 임베딩 요청 옵션은 벡터
+생성 계약에 포함되므로 색인과 검색에 같은 옵션을 사용해야 합니다. `index`의 배치 크기와
+제한 시간은 각각 `--batch-size`, `--embedding-timeout`으로 전달합니다. `review judge`의
+`--judge-options`로 고정 답변의 재채점 옵션도 지정할 수 있습니다. 일반 대화의 MLflow 자동
+Judge는 질문마다 별도 인자를 받을 수 없으므로 `tools/evaluation/judges.py --enable-dev
+--judge-options '<JSON>'`으로 scorer 등록 시 옵션을 지정합니다. API의 QA 프로필은
+`generation_options`, `embedding_options`를, 평가 요청은 Judge 이름별 `judge_options`를
+받습니다. 지정한 옵션은 답변·채점 프로필과 MLflow 실험 조건에 저장됩니다. 모델명·입력·인증
+헤더 등은 실행 옵션으로 덮어쓸 수 없습니다.

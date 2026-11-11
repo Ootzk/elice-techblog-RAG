@@ -99,6 +99,8 @@ def _settings(profile):
         ("generation_max_output_tokens", "답변 출력 한도 · 토큰"),
         ("generation_temperature", "생성 온도"),
         ("generation_timeout_seconds", "생성 제한 시간 · 초"),
+        ("generation_options", "답변 모델 실행 옵션"),
+        ("embedding_options", "임베딩 모델 실행 옵션"),
     )
     values = {
         title: model_name(profile[key])

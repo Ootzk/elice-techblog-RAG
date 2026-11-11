@@ -17,10 +17,6 @@ CONTEXT_METRICS = (
     "generation_context_precision",
 )
 DIAGNOSTICS = (*CONTEXT_METRICS, "factual_precision", "required_point_coverage", "faithfulness")
-MAX_OUTPUT_TOKENS = 2000
-RATER_REQUEST_OPTIONS = {
-    "chatgpt": {"reasoning_effort": "none", "stream": True, "max_completion_tokens": 8192}
-}
 
 
 @lru_cache(maxsize=1)
@@ -57,8 +53,6 @@ def contract():
         "internal_llm_concurrency": 1,
         "structured_output": "json",
         "temperature": None,
-        "max_completion_tokens": MAX_OUTPUT_TOKENS,
-        "rater_request_options": RATER_REQUEST_OPTIONS,
         "top_p": None,
         "max_retries": 1,
     }
@@ -154,21 +148,23 @@ async def metric_score(
             auth=auth, event_hooks=hooks(calls) if calls is not None else None
         ),
     ) as client:
-        options = {"max_completion_tokens": MAX_OUTPUT_TOKENS, **(request_options or {})}
+        from elice_knowledge.model_options import validate_judge_options
+
+        options = validate_judge_options(request_options)
         streaming = options.pop("stream", False)
+        if type(streaming) is not bool:
+            raise ValueError("judge_stream_must_be_boolean")
         inner = llm_factory(
             model.removeprefix("gateway:/"),
             client=client,
             max_retries=1,
             **options,
         )
-        # Gateway aliases hide model families from Ragas' parameter inference.
-        # Remove its default so only the explicit completion budget is sent.
-        inner.model_args.pop("max_tokens", None)
-        # Some Gateway models accept only their default sampling parameters.
-        # Record these as unspecified rather than claiming temperature=0.
-        inner.model_args.pop("temperature", None)
-        inner.model_args.pop("top_p", None)
+        # Gateway aliases hide model capabilities from Ragas. Suppress inferred
+        # defaults while preserving every option explicitly requested by the caller.
+        for field in ("max_tokens", "temperature", "top_p"):
+            if field not in options:
+                inner.model_args.pop(field, None)
         gate = asyncio.Semaphore(1)
         judgments = []
 
@@ -273,7 +269,7 @@ def scorer(settings, spec, dimension=None, *, rubric=None, collector=None):
             return Feedback(value="not_applicable", rationale="이 문항/응답에는 적용되지 않음")
         if "retrieved_contexts" in data and not any(c.strip() for c in data["retrieved_contexts"]):
             return Feedback(value=0.0, rationale="평가할 근거 문맥이 없음")
-        options = dict(request_options=RATER_REQUEST_OPTIONS.get(spec["rater"], {}))
+        options = dict(request_options=spec.get("request_options", {}))
         if collector is not None:
             options["calls"] = calls
         if not diagnostic:

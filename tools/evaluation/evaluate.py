@@ -40,6 +40,24 @@ def main():
         help="Create an experiment QA profile pinned to these registry prompts",
     )
     parser.add_argument("--record-id", action="append")
+    parser.add_argument(
+        "--generation-options",
+        type=json.loads,
+        default=None,
+        help="JSON object of generation request options",
+    )
+    parser.add_argument(
+        "--embedding-options",
+        type=json.loads,
+        default=None,
+        help="JSON object of embedding request options",
+    )
+    parser.add_argument(
+        "--judge-options",
+        type=json.loads,
+        default=None,
+        help="JSON object mapping judge names to request options",
+    )
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--timeout", type=float, default=3600)
@@ -49,8 +67,12 @@ def main():
         help="Enqueue generation calls (may incur cost)",
     )
     args = parser.parse_args()
-    if args.prompt and args.qa_profile_key:
-        parser.error("Use either --qa-profile-key or --prompt")
+    if args.qa_profile_key and (
+        args.prompt
+        or args.generation_options is not None
+        or args.embedding_options is not None
+    ):
+        parser.error("Use either --qa-profile-key or prompt/generation options")
     if (args.wait or args.report) and not args.submit:
         parser.error("--wait/--report requires --submit")
     if args.timeout <= 0:
@@ -75,9 +97,20 @@ def main():
 
     try:
         dataset = call("/evaluation-datasets/" + quote(args.dataset_id, safe=""))
-        if args.prompt:
-            selectors = dict(value.partition("=")[::2] for value in args.prompt)
-            created = call("/qa-profiles", {"prompts": selectors})
+        if (
+            args.prompt
+            or args.generation_options is not None
+            or args.embedding_options is not None
+        ):
+            selectors = dict(value.partition("=")[::2] for value in (args.prompt or []))
+            created = call(
+                "/qa-profiles",
+                {
+                    "prompts": selectors,
+                    "generation_options": args.generation_options or {},
+                    "embedding_options": args.embedding_options or {},
+                },
+            )
             profile = created["key"]
             print(json.dumps({"qa_profile": created}, ensure_ascii=False, indent=2))
         else:
@@ -91,6 +124,7 @@ def main():
             "scorer_profile_key": scorer,
             "record_ids": args.record_id,
             "history_mode": "provided",
+            "judge_options": args.judge_options or {},
         }
         output = (
             call("/evaluations", plan)

@@ -212,6 +212,14 @@ def test_active_profile_freezes_resolved_prompt_content(retrieval, monkeypatch):
     experiment = store.active_profile(key, 3, {PLANNER: "7"})
     assert experiment != store.active_profile(key, 3)
     assert store.profile(experiment)["prompts"][PLANNER]["version"] == 7
+    with_options = store.active_profile(key, 3, {PLANNER: "7"}, {"temperature": 0.25, "seed": 4})
+    assert with_options != experiment
+    recorded = store.profile(with_options)
+    assert recorded["generation_options"] == {"temperature": 0.25, "seed": 4}
+    assert recorded["experiment_conditions"]["generation"]["request_options"] == {
+        "temperature": 0.25,
+        "seed": 4,
+    }
 
 
 def test_experiment_conditions_freeze_selected_index_not_current_defaults(retrieval):

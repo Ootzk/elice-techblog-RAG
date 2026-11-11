@@ -133,3 +133,11 @@ def test_public_catalog_rejects_credentials_and_direct_endpoints(repo):
         }
         with pytest.raises(ValueError):
             models.write_catalog(repo / "models.json", data)
+
+
+def test_model_catalog_rejects_execution_parameters(repo):
+    for option in ({"temperature": 0.2}, {"batch_size": 8}, {"max_output_tokens": 100}):
+        with pytest.raises(ValueError):
+            models.write_catalog(
+                repo / "models.json", {"answer": {"test": {"model": "m", **option}}}
+            )

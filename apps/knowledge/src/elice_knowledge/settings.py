@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     embedding_api_key: SecretStr | None = None
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
     embedding_batch_size: int = Field(default=16, gt=0, le=256)
+    embedding_options: dict = Field(default_factory=dict)
     embedding_dimensions: int = Field(default=1024, gt=0, le=16000)
     mlflow_enabled: bool = True
     mlflow_tracking_uri: SecretStr | None = None
@@ -37,11 +38,7 @@ class Settings(BaseSettings):
     generation_api_key: SecretStr | None = None
     generation_model: str | None = None
     generation_timeout_seconds: float = Field(default=90, gt=0, le=300)
-    generation_temperature: float | None = Field(default=None, ge=0, le=2)
-    generation_max_output_tokens: int | None = Field(default=None, gt=0, le=32768)
-    generation_token_limit_field: Literal["max_tokens", "max_completion_tokens"] = (
-        "max_completion_tokens"
-    )
+    generation_options: dict = Field(default_factory=dict)
     qa_max_context_tokens: int = Field(default=8192, ge=512, le=65536)
     admin_access_code: SecretStr | None = None
     auth_session_secret: SecretStr | None = None
@@ -84,9 +81,6 @@ class Settings(BaseSettings):
             "answer": (
                 "model",
                 "base_url",
-                "temperature",
-                "max_output_tokens",
-                "token_limit_field",
             ),
             "embedding": (
                 "backend",
@@ -94,8 +88,6 @@ class Settings(BaseSettings):
                 "base_url",
                 "revision",
                 "dimensions",
-                "timeout_seconds",
-                "batch_size",
             ),
         }
         for kind, name, prefix in selected:

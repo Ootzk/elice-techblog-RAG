@@ -645,18 +645,30 @@ def test_evaluation_rejects_incomplete_experiment_profiles(service, missing):
 def test_experiment_profile_api_pins_prompt_selectors(service, monkeypatch):
     seen = []
 
-    def active(self, index_key=None, top_k=5, prompt_selectors=None):
-        seen.append((index_key, top_k, prompt_selectors))
+    def active(
+        self,
+        index_key=None,
+        top_k=5,
+        prompt_selectors=None,
+        generation_options=None,
+        embedding_options=None,
+    ):
+        seen.append((index_key, top_k, prompt_selectors, generation_options, embedding_options))
         return PROFILE
 
     monkeypatch.setattr(ServiceStore, "active_profile", active)
     client = TestClient(
         create_app(service.settings), headers={"Authorization": "Bearer test-admin"}
     )
-    body = {"top_k": 3, "prompts": {PROMPT_NAMES[0]: "7"}}
+    body = {
+        "top_k": 3,
+        "prompts": {PROMPT_NAMES[0]: "7"},
+        "generation_options": {"temperature": 0.1},
+        "embedding_options": {"dimensions": 2},
+    }
     response = client.post("/api/qa-profiles", json=body)
     assert response.status_code == 201 and response.json()["key"] == PROFILE
-    assert seen == [(None, 3, {PROMPT_NAMES[0]: "7"})]
+    assert seen == [(None, 3, {PROMPT_NAMES[0]: "7"}, {"temperature": 0.1}, {"dimensions": 2})]
     summary = response.json()["prompts"][PROMPT_NAMES[0]]
     assert summary["source"] == "registry" and "template" not in summary
     assert client.post("/api/qa-profiles", json={"unexpected": 1}).status_code == 422
@@ -677,7 +689,7 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
         "elice_knowledge.evaluation.dataset_snapshot",
         lambda *a: {"kind": "gold", "digest": "d" * 64, "records": [record]},
     )
-    specs = [{"name": "qa-gold-chatgpt", "version": 1}]
+    specs = [{"name": "qa-gold-chatgpt", "version": 1, "rater": "chatgpt"}]
     monkeypatch.setattr("elice_knowledge.evaluation.frozen_judges", lambda *a: specs)
 
     class Tracking:
@@ -715,11 +727,13 @@ def test_evaluation_pins_judge_versions_and_persists_verdicts(service, monkeypat
             dataset_digest="d" * 64,
             qa_profile_key=PROFILE,
             scorer_profile_key=SCORER_KEY,
+            judge_options={"chatgpt": {"temperature": 0.3}},
         ),
     )
     specs[0]["version"] = 2
     process_one(service)
     assert seen[0][0]["version"] == 1
+    assert seen[0][0]["request_options"] == {"temperature": 0.3}
     with service.connection() as conn:
         case = conn.execute(
             "SELECT scores FROM evaluation_cases WHERE evaluation_id=%s", (job_id,)

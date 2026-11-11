@@ -106,6 +106,11 @@ def enqueue_evaluation(store, request):
         raise ServiceError("evaluation_too_large", 422)
     kind = snapshot.get("kind", "gold")
     judges = frozen_judges(store.settings, kind) if store.settings.evaluation_judges_enabled else []
+    options = getattr(request, "judge_options", {})
+    if set(options) - {judge["rater"] for judge in judges}:
+        raise ServiceError("unknown_model_rater", 422)
+    for judge in judges:
+        judge["request_options"] = options.get(judge["rater"], {})
     if kind == "iron" and not judges:
         raise ServiceError("iron_requires_judges", 422)
     job_id = uuid4()
