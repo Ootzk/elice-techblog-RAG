@@ -1,0 +1,66 @@
+name: Full integration test
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-integration-test-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  full-test:
+    name: Fresh installation and live model calls
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       startsWith(github.head_ref, 'release/') &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: knowledge
+          POSTGRES_PASSWORD: test-only
+          POSTGRES_DB: knowledge_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowledge -d knowledge_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.11.2'
+      - name: Install dependencies
+        env:
+          UV_LINK_MODE: copy
+        run: |
+          uv sync --project apps/knowledge --locked
+          uv sync --project tools/reporting --locked
+      - name: Run full integration test (paid model calls)
+        env:
+          ELICE_API_KEY: ${{ secrets.ELICE_API_KEY }}
+          FULL_TEST_DATABASE_URL: postgresql://knowledge:test-only@127.0.0.1:5432/knowledge_test
+          UV_LINK_MODE: copy
+        run: uv run --project apps/knowledge --no-sync python .github/scripts/full_test.py
+      - name: Upload agreement report
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-test-agreement-report
+          path: artifacts/full-test/agreement.html
+          if-no-files-found: error
+          retention-days: 7
