@@ -58,7 +58,7 @@ def contract():
     }
 
 
-def payload(record, case, dimension):
+def payload(record, case, dimension, *, rubric=None):
     from elice_knowledge.judges import dimension_payload, inapplicable
 
     result, expected = case["result"], record["expectations"]
@@ -77,7 +77,7 @@ def payload(record, case, dimension):
         "required_point_coverage": "completeness",
         "faithfulness": "groundedness",
     }.get(dimension, dimension)
-    if inapplicable(record, case, mapped):
+    if inapplicable(record, case, mapped, rubric=rubric):
         return None
     if dimension == "factual_precision":
         return dict(response=result.get("answer") or "", reference=expected["answer"])
@@ -263,7 +263,10 @@ def scorer(settings, spec, dimension=None, *, rubric=None, collector=None):
 
     def evaluate_one(inputs, outputs, expectations, calls):
         data = payload(
-            {"inputs": inputs, "expectations": expectations}, {"result": outputs}, dimension
+            {"inputs": inputs, "expectations": expectations},
+            {"result": outputs},
+            dimension,
+            rubric=rubric,
         )
         if data is None:
             return Feedback(value="not_applicable", rationale="이 문항/응답에는 적용되지 않음")

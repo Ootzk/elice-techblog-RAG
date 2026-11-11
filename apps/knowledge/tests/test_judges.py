@@ -12,8 +12,10 @@ from elice_knowledge.judges import (
     evaluate_answers,
     evaluation_row,
     evaluation_workers,
+    inapplicable,
     instructions,
 )
+from elice_knowledge.rubrics import load_rubric
 from elice_knowledge.settings import Settings
 
 
@@ -266,6 +268,51 @@ def test_evaluation_workers_maximize_defaults_and_respect_overrides(monkeypatch)
         "MLFLOW_GENAI_EVAL_MAX_WORKERS": 3,
         "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS": 2,
     }
+
+
+def test_no_context_grounding_is_na_only_for_new_rubric():
+    record = {"inputs": {"question": "Q"}, "expectations": {"answerable": True}}
+    case = {"result": {"status": "answered", "answer": "구체적 주장", "generation_sources": []}}
+    rubric = load_rubric("gold")
+    assert inapplicable(record, case, "groundedness", rubric=rubric)
+    from elice_knowledge.ragas_metrics import payload
+
+    assert payload(record, case, "groundedness", rubric=rubric) is None
+    old_rubric = {key: value for key, value in rubric.items() if key != "applicability"}
+    assert not inapplicable(record, case, "groundedness", rubric=old_rubric)
+    case["result"]["generation_sources"] = [{"text": "문맥"}]
+    assert not inapplicable(record, case, "groundedness", rubric=rubric)
+    case["result"]["status"] = "insufficient_evidence"
+    assert inapplicable(record, case, "groundedness", rubric=rubric)
+    assert not inapplicable(record, case, "groundedness", rubric=old_rubric)
+    del case["result"]["generation_sources"]
+    with pytest.raises(ValueError, match="generation_sources_missing"):
+        inapplicable(record, case, "groundedness", rubric=rubric)
+
+
+def test_human_review_packet_forces_new_no_context_policy():
+    from elice_knowledge.agreement import review_packet
+    from elice_knowledge.evaluation_bundle import create_bundle
+
+    record = {
+        "id": "r1",
+        "inputs": {"question": "질문", "history": []},
+        "expectations": {"answerable": True, "required_points": ["핵심"]},
+    }
+    case = {
+        "record_id": "r1",
+        "error": None,
+        "result": {"status": "answered", "answer": "주장", "generation_sources": []},
+    }
+    bundle = create_bundle(
+        "run", {"records": [record], "dataset_id": "d", "dataset_digest": "h"}, {}, [case]
+    )
+    packet, _ = review_packet(bundle, "reviewer")
+    assert {p["dimension"] for p in packet if p["forced_na"]} == {"groundedness"}
+    old_rubric = load_rubric("gold")
+    old_rubric.pop("applicability")
+    old_packet, _ = review_packet(bundle, "reviewer", old_rubric)
+    assert not any(p["forced_na"] for p in old_packet)
 
 
 def test_concurrency_limits_fail_before_model_work(monkeypatch):
