@@ -132,8 +132,8 @@ def evaluation_workers():
     """Use MLflow's native pools rather than multiplying them with another pool."""
     limits = {}
     for variable, default, maximum in (
-        ("MLFLOW_GENAI_EVAL_MAX_WORKERS", 2, 32),
-        ("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", 4, 16),
+        ("MLFLOW_GENAI_EVAL_MAX_WORKERS", 32, 32),
+        ("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", 16, 16),
     ):
         value = int(os.environ.setdefault(variable, str(default)))
         if not 1 <= value <= maximum:

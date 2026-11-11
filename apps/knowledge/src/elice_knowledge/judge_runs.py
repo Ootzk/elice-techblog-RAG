@@ -1,6 +1,5 @@
 """Independent model rounds of shared-rubric ratings against frozen answers."""
 
-import os
 from concurrent.futures import ThreadPoolExecutor
 from itertools import groupby
 
@@ -147,18 +146,6 @@ def evaluate_models(store, bundle, specs, *, repeat=1, raters=None, rubric=None,
         )
 
     tasks = [(rater, group) for _ in range(repeat) for rater, group in groups.items()]
-    # Each grading has its own MLflow run; nested scorers must not multiply requests.
-    variables = ("MLFLOW_GENAI_EVAL_MAX_WORKERS", "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS")
-    added = []
-    if len(tasks) > 1:
-        for variable in variables:
-            if variable not in os.environ:
-                os.environ[variable] = "1"
-                added.append(variable)
-    try:
-        with ThreadPoolExecutor(max_workers=min(len(tasks), 32)) as executor:
-            futures = [executor.submit(grade_one, rater, group) for rater, group in tasks]
-            return [future.result() for future in futures]
-    finally:
-        for variable in added:
-            os.environ.pop(variable, None)
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 32)) as executor:
+        futures = [executor.submit(grade_one, rater, group) for rater, group in tasks]
+        return [future.result() for future in futures]

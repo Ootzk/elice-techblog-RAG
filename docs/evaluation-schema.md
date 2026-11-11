@@ -196,8 +196,8 @@ manifest는 schema·contract·source_run_id·source_bundle_digest·grading_id·�
 
 한 모델 run에 그 모델의 모든 문항·항목을 넣는다. MLflow SDK가 질문·항목을 병렬 실행하고 결과를
 모아 grading을 게시한다. 모델과 회차별 grading은 최대 32개까지 병렬 실행한다.
-여러 grading을 동시에 실행할 때 기본 내부 작업자 수는 질문·항목 각각 1개이며, 환경변수로 조절할 수 있다.
-단일 grading은 기존 질문 2개 × 항목 4개 기본값을 사용한다.
+각 grading의 기본 상한은 질문 32개 × 질문당 평가 항목 16개이며, 환경변수로 조절할 수 있다.
+실제 병렬 요청 수는 실행 중인 grading·질문·평가 항목 수에 따라 달라진다.
 모든 4항목이 별도의 고정 graph span인 것은 아니다. Judge 내부 모델 호출은 tracing 대상이다.
 
 Human Review는 현재 로그인한 코드로 채점하며 타인·모델의 점수와 사유를 UI/API에서 제외한다.

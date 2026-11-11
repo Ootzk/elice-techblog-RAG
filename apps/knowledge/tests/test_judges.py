@@ -7,7 +7,13 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from elice_knowledge.judges import DIMENSIONS, evaluate_answers, evaluation_row, instructions
+from elice_knowledge.judges import (
+    DIMENSIONS,
+    evaluate_answers,
+    evaluation_row,
+    evaluation_workers,
+    instructions,
+)
 from elice_knowledge.settings import Settings
 
 
@@ -245,6 +251,21 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
         assert mlflow.active_run() is None
     finally:
         mlflow.set_tracking_uri(previous_uri)
+
+
+def test_evaluation_workers_maximize_defaults_and_respect_overrides(monkeypatch):
+    monkeypatch.delenv("MLFLOW_GENAI_EVAL_MAX_WORKERS", raising=False)
+    monkeypatch.delenv("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", raising=False)
+    assert evaluation_workers() == {
+        "MLFLOW_GENAI_EVAL_MAX_WORKERS": 32,
+        "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS": 16,
+    }
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_MAX_WORKERS", "3")
+    monkeypatch.setenv("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", "2")
+    assert evaluation_workers() == {
+        "MLFLOW_GENAI_EVAL_MAX_WORKERS": 3,
+        "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS": 2,
+    }
 
 
 def test_concurrency_limits_fail_before_model_work(monkeypatch):
