@@ -92,3 +92,103 @@ def test_oversized_input_is_rejected_without_retrying_with_truncation():
         with pytest.raises(EmbeddingInputTooLong):
             OllamaEmbedder(settings(), client).embed(["long input"])
     assert len(requests) == 1
+
+
+def serverless_settings(**overrides):
+    values = dict(
+        embedding_backend="elice-serverless",
+        embedding_base_url="https://embedding.test/deployment/v1",
+        embedding_api_key="private-key",
+        embedding_model="text-embedding-3-small",
+        embedding_dimensions=2,
+        embedding_batch_size=2,
+    )
+    values.update(overrides)
+    return Settings(_env_file=None, **values)
+
+
+def test_serverless_batch_order_auth_and_profile():
+    import json
+
+    from elice_knowledge.embedding import create_embedder
+
+    requests = []
+
+    def handler(request):
+        assert request.url.path == "/deployment/v1/embeddings"
+        assert request.headers["authorization"] == "Bearer private-key"
+        payload = json.loads(request.content)
+        assert payload["model"] == "text-embedding-3-small"
+        assert payload["encoding_format"] == "float"
+        requests.append(payload)
+        return httpx.Response(
+            200,
+            json={
+                "model": "text-embedding-3-small",
+                "data": [
+                    {"index": i, "embedding": [int(text), 1]}
+                    for i, text in reversed(list(enumerate(payload["input"])))
+                ],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        backend = create_embedder(serverless_settings(), client)
+        profile = backend.profile()
+        assert backend.embed(["1", "2", "3"]) == [[1, 1], [2, 1], [3, 1]]
+    assert [r["input"] for r in requests] == [["1", "2"], ["3"]]
+    assert (
+        profile["backend"] == "elice-serverless" and profile["revision"] == "provider-unavailable"
+    )
+    assert "base_url" not in profile and "api_key" not in profile
+    assert profile_id(profile) != profile_id({**profile, "revision": "new-revision"})
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        [{"index": 0, "embedding": [0, 0]}],
+        [{"index": 0, "embedding": [1]}],
+        [{"index": 1, "embedding": [1, 2]}],
+        [{"index": True, "embedding": [1, 2]}],
+        [{"index": 0, "embedding": [float("nan"), 2]}],
+    ],
+)
+def test_serverless_rejects_bad_vectors(data):
+    import json
+
+    from elice_knowledge.embedding import EliceServerlessEmbedder
+
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, content=json.dumps({"data": data}))
+        )
+    ) as client:
+        with pytest.raises(EmbeddingError):
+            EliceServerlessEmbedder(serverless_settings(), client).embed(["input"])
+
+
+def test_serverless_blocks_oversized_input_locally():
+    from elice_knowledge.embedding import EliceServerlessEmbedder, EmbeddingInputTooLong
+
+    def handler(request):
+        pytest.fail("oversized text must not be sent")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(EmbeddingInputTooLong):
+            EliceServerlessEmbedder(serverless_settings(), client).embed([" test" * 8192])
+
+
+def test_serverless_rejects_unexpected_model():
+    from elice_knowledge.embedding import EliceServerlessEmbedder
+
+    with httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200, json={"model": "other", "data": [{"index": 0, "embedding": [1, 2]}]}
+            )
+        )
+    ) as client:
+        with pytest.raises(EmbeddingError, match="response model"):
+            EliceServerlessEmbedder(serverless_settings(), client).embed(["input"])

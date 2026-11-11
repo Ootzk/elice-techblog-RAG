@@ -28,6 +28,15 @@ def profile_id(profile: dict) -> str:
     ).hexdigest()
 
 
+def create_embedder(settings: Settings, client: httpx.Client) -> Embedder:
+    """Select the explicitly configured embedding backend."""
+    if settings.embedding_backend == "ollama":
+        return OllamaEmbedder(settings, client)
+    if settings.embedding_backend == "elice-serverless":
+        return EliceServerlessEmbedder(settings, client)
+    raise EmbeddingError("Unsupported embedding backend")
+
+
 class OllamaEmbedder:
     def __init__(self, settings: Settings, client: httpx.Client):
         self.settings = settings
@@ -123,4 +132,103 @@ class OllamaEmbedder:
                     raise EmbeddingError("Embedding must contain finite numbers and be non-zero")
             # Ollama /api/embed returns one vector per input in request order.
             vectors.extend(received)
+        return vectors
+
+
+class EliceServerlessEmbedder:
+    """OpenAI-compatible embedding endpoint, with explicit server-side error handling."""
+
+    def __init__(self, settings: Settings, client: httpx.Client):
+        self.settings = settings
+        self.client = client
+
+    def profile(self) -> dict:
+        if not self.settings.embedding_base_url:
+            raise EmbeddingError("EMBEDDING_BASE_URL is required")
+        if (
+            not self.settings.embedding_api_key
+            or not self.settings.embedding_api_key.get_secret_value()
+        ):
+            raise EmbeddingError("EMBEDDING_API_KEY is required")
+        if not self.settings.embedding_model.strip():
+            raise EmbeddingError("EMBEDDING_MODEL is required")
+        if self.settings.embedding_model.removeprefix("openai/") != "text-embedding-3-small":
+            raise EmbeddingError("Serverless embedding model token contract is not configured")
+        return {
+            "backend": "elice-serverless",
+            "api": "openai-embeddings-v1",
+            "model": self.settings.embedding_model,
+            "revision": self.settings.embedding_model_revision or "provider-unavailable",
+            "dimensions": self.settings.embedding_dimensions,
+            "preprocessing": "identity",
+            "truncate": False,
+            "normalization": "provider-defined",
+            "pooling": "provider-defined",
+            "length_limit": "8191 cl100k_base tokens; reject-overflow",
+        }
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts or any(not text.strip() for text in texts):
+            raise EmbeddingError("At least one non-empty input is required")
+        self.profile()
+        import tiktoken
+
+        encoding = tiktoken.get_encoding("cl100k_base")
+        if any(len(encoding.encode_ordinary(text)) > 8191 for text in texts):
+            raise EmbeddingInputTooLong("Input exceeds the embedding context window")
+        vectors = []
+        for start in range(0, len(texts), self.settings.embedding_batch_size):
+            batch = texts[start : start + self.settings.embedding_batch_size]
+            api_key = self.settings.embedding_api_key.get_secret_value()
+            try:
+                response = self.client.post(
+                    self.settings.embedding_base_url.get_secret_value().rstrip("/") + "/embeddings",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={
+                        "model": self.settings.embedding_model,
+                        "input": batch,
+                        "encoding_format": "float",
+                    },
+                    timeout=self.settings.embedding_timeout_seconds,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 400 and any(
+                    term in exc.response.text.lower()
+                    for term in ("maximum context length", "max tokens", "input is too long")
+                ):
+                    raise EmbeddingInputTooLong(
+                        "Input exceeds the embedding context window"
+                    ) from None
+                raise
+            result = response.json()
+            received = result.get("data") if isinstance(result, dict) else None
+            if not isinstance(received, list) or len(received) != len(batch):
+                raise EmbeddingError("Embedding count differs from input count")
+            indexed = {}
+            for item in received:
+                if not isinstance(item, dict) or type(item.get("index")) is not int:
+                    raise EmbeddingError("Embedding index is missing or invalid")
+                index, vector = item["index"], item.get("embedding")
+                if index not in range(len(batch)) or index in indexed:
+                    raise EmbeddingError("Embedding indices are invalid or duplicated")
+                if (
+                    not isinstance(vector, list)
+                    or len(vector) != self.settings.embedding_dimensions
+                ):
+                    raise EmbeddingError("Unexpected embedding dimensions")
+                if any(
+                    isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                    for v in vector
+                ) or not any(v != 0 for v in vector):
+                    raise EmbeddingError("Embedding must contain finite numbers and be non-zero")
+                indexed[index] = vector
+            returned_model = result.get("model")
+            if not isinstance(returned_model, str) or returned_model not in {
+                self.settings.embedding_model,
+                self.settings.embedding_model.removeprefix("openai/"),
+                "openai/" + self.settings.embedding_model.removeprefix("openai/"),
+            }:
+                raise EmbeddingError("Embedding response model differs from configured model")
+            vectors.extend(indexed[i] for i in range(len(batch)))
         return vectors

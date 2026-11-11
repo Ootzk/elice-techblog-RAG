@@ -7,7 +7,7 @@ import httpx
 from elice_knowledge.chunk_store import run_chunking
 from elice_knowledge.chunking import ChunkingPolicy
 from elice_knowledge.database import initialize_database, store_and_search
-from elice_knowledge.embedding import EmbeddingInputTooLong, OllamaEmbedder, profile_id
+from elice_knowledge.embedding import EmbeddingInputTooLong, create_embedder, profile_id
 from elice_knowledge.execution import execute
 from elice_knowledge.generation import GenerationError
 from elice_knowledge.ingest import run_ingest
@@ -53,7 +53,7 @@ def main():
         "--mode",
         choices=["meaning", "keyword"],
         default="meaning",
-        help="meaning: BGE-M3 dense search; keyword: Kiwi BM25 search (no embedding call)",
+        help="meaning: configured embedding dense search; keyword: Kiwi BM25 (no embedding call)",
     )
     ask = subparsers.add_parser(
         "ask", help="Answer with the agentic RAG workflow over a selected index"
@@ -159,7 +159,7 @@ def main():
         text = "엘리스 한국어 테크블로그 기반 RAG 연결 검증입니다."
         stage = "embedding"
         with httpx.Client() as http:
-            embedder = OllamaEmbedder(settings, http)
+            embedder = create_embedder(settings, http)
             before = embedder.profile()
             vector = embedder.embed([text])[0]
             after = embedder.profile()

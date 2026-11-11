@@ -11,9 +11,10 @@ class Settings(BaseSettings):
 
     app_env: Literal["dev", "prod"] = "prod"
     database_url: SecretStr | None = None
-    embedding_backend: Literal["ollama"] = "ollama"
+    embedding_backend: Literal["ollama", "elice-serverless"] = "ollama"
     embedding_base_url: SecretStr | None = None
     embedding_model: str = "bge-m3"
+    embedding_model_revision: str | None = None
     embedding_api_key: SecretStr | None = None
     embedding_timeout_seconds: float = Field(default=30, gt=0, le=300)
     embedding_batch_size: int = Field(default=16, gt=0, le=256)
@@ -106,4 +107,13 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "GENERATION_BASE_URL must be a /v1 API base URL without credentials or query"
                 )
+        if self.embedding_backend == "elice-serverless" and self.embedding_base_url:
+            parsed = urlsplit(self.embedding_base_url.get_secret_value())
+            if (
+                parsed.query
+                or parsed.fragment
+                or parsed.username
+                or not parsed.path.rstrip("/").endswith("/v1")
+            ):
+                raise ValueError("EMBEDDING_BASE_URL must be a /v1 API base URL")
         return self
