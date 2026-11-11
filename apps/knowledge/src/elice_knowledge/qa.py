@@ -13,7 +13,7 @@ from elice_knowledge.prompts import PromptRef, ResolvedPrompt
 from elice_knowledge.settings import Settings
 from elice_knowledge.tracing import child_span, documents, finish_span
 
-ABSTENTION = "제공된 문서에서 답변에 필요한 근거를 확인하지 못했습니다."
+ABSTENTION = "확인할 수 없습니다."
 
 
 class QARequest(BaseModel):
@@ -169,9 +169,6 @@ def answer_from_sources(
         if len(tokenizer("".join(m.content for m in messages))) <= settings.qa_max_context_tokens:
             sources = candidate
 
-    def abstain(reason, **metadata):
-        return _abstain(request, reason, **metadata)
-
     with child_span(
         "retrieval.final_context",
         "RETRIEVER",
@@ -180,19 +177,19 @@ def answer_from_sources(
     ) as span:
         finish_span(span, documents(sources))
 
-    if not sources:
-        return abstain("no_evidence" if not matches else "context_budget")
-    response = llm.chat(
-        _messages(
-            prompt, request.question, sources, parser, [m.model_dump() for m in request.history]
-        )
+    no_source_reason = "no_evidence" if not matches else "context_budget"
+    messages = _messages(
+        prompt, request.question, sources, parser, [m.model_dump() for m in request.history]
     )
+    if len(tokenizer("".join(m.content for m in messages))) > settings.qa_max_context_tokens:
+        return _abstain(request, "context_budget")
+    response = llm.chat(messages)
     with child_span(
         "answer.parse_and_validate",
         "PARSER",
         {"text": response.message.content, "sources": documents(sources)},
     ) as span:
-        result = _parse_and_validate(response, parser, request, sources)
+        result = _parse_and_validate(response, parser, request, sources, no_source_reason)
         result.generation_sources = sources
         finish_span(
             span,
@@ -210,17 +207,17 @@ def answer_from_sources(
         return result
 
 
-def _abstain(request, reason, **metadata):
+def _abstain(request, reason, answer=ABSTENTION, **metadata):
     return QAResponse(
         status="insufficient_evidence",
-        answer=ABSTENTION,
+        answer=answer,
         index_key=request.index_key,
         reason=reason,
         **metadata,
     )
 
 
-def _parse_and_validate(response, parser, request, sources):
+def _parse_and_validate(response, parser, request, sources, no_source_reason="no_evidence"):
     def abstain(reason, **metadata):
         return _abstain(request, reason, **metadata)
 
@@ -233,7 +230,17 @@ def _parse_and_validate(response, parser, request, sources):
         "usage": response.additional_kwargs.get("usage", {}),
     }
     if not generated.answerable:
-        return abstain("model_abstained", **metadata)
+        text = generated.answer.strip()
+        # Only return a natural uncertainty response without purported citations.
+        uncertainty = re.search(
+            r"모르|알\s*수\s*없|확인.{0,15}(?:없|어렵|못|불가)|"
+            r"(?:근거|정보|자료).{0,15}(?:부족합니다|부족하여|부족해|없습니다|없어|없으므로)|"
+            r"(?:판단|답변|파악).{0,15}(?:없|어렵|불가|못)",
+            text,
+        )
+        if not text or not uncertainty or generated.citations or re.search(r"\[\d+\]", text):
+            text = ABSTENTION
+        return abstain("model_abstained" if sources else no_source_reason, answer=text, **metadata)
     cited_ids = {citation.source_id for citation in generated.citations}
     markers = {int(number) for number in re.findall(r"\[(\d+)\]", generated.answer)}
     if not generated.answer.strip() or not cited_ids or markers != cited_ids:
