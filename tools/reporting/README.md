@@ -25,6 +25,14 @@ VS Code에서는 `tools/reporting/.venv/bin/python`을 커널로 선택하고 ML
 
 템플릿을 복사한 뒤 설정 셀을 바꿔 순서대로 실행한다.
 
+Agreement와 Repeatability의 마지막 효율성 항목은 답변 생성과 Judge 채점을 구분한다. 답변은
+성공 문항의 시간·토큰 평균을, Judge는 grading 회차별 전체 경과 시간·HTTP 호출 시간 합과
+제공된 토큰을 표시한다. 질문·평가 항목별 세부 기록을 선택할 수 있다. 병렬 호출 시간 합은
+전체 채점 경과 시간과 다르다. 해당 artifact가 없는 기존 채점과 공급자가 제공하지 않은 값은
+미기록으로 표시한다. 가로 막대는 평균이고 Repeatability의 점은 개별 시행이다. 여러 채점 회차는
+answers별 평균을 먼저 구한 뒤 answers 시행을 같은 비중으로 평균한다. 일부 호출의 토큰이 없거나
+채점 오류가 있는 합계는 미기록으로 표시한다. 사람 검수 시간은 측정하지 않는다.
+
 ```python
 SOURCE_MODE = "mlflow"
 RUN_ID = "완료된-run-id"

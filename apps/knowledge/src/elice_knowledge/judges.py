@@ -2,6 +2,7 @@
 
 import math
 import os
+import time
 from numbers import Real
 
 from elice_knowledge.rubrics import DIMENSIONS, load_rubric
@@ -136,6 +137,8 @@ def evaluate_answers(
 ):
     import mlflow
 
+    from elice_knowledge.judge_efficiency import Collector
+    from elice_knowledge.judge_efficiency import metrics as efficiency_metrics
     from elice_knowledge.ragas_metrics import DIAGNOSTICS, measurement_metrics, payload, scorer
 
     rubric = rubric or load_rubric(
@@ -155,7 +158,8 @@ def evaluate_answers(
     for spec in dimensions:
         for key, case in valid.items():
             payload(expected[key], case, spec["dimension"])
-    scorers = [scorer(settings, spec, rubric=rubric) for spec in dimensions]
+    collector = Collector(records, valid)
+    scorers = [scorer(settings, spec, rubric=rubric, collector=collector) for spec in dimensions]
     data = [
         dict(
             inputs=expected[key]["inputs"],
@@ -165,8 +169,18 @@ def evaluate_answers(
         )
         for key, case in valid.items()
     ]
-    with mlflow.start_run(run_id=run_id):
-        result = mlflow.genai.evaluate(data=data, scorers=scorers)
+    started = time.monotonic()
+    try:
+        with mlflow.start_run(run_id=run_id):
+            result = mlflow.genai.evaluate(data=data, scorers=scorers)
+    except Exception:
+        mlflow.MlflowClient().log_dict(
+            run_id,
+            collector.artifact(run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000),
+            "judge-efficiency.json",
+        )
+        raise
+    efficiency = collector.artifact(run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000)
     evaluated = result.tables["eval_results"].to_dict(orient="records")
     if {row["tags"]["record_id"] for row in evaluated} != set(valid) or len(evaluated) != len(
         valid
@@ -213,6 +227,9 @@ def evaluate_answers(
         {"cases": rows, "specs": specs, "rubric": rubric, "execution": limits},
         "judge-results.json",
     )
+    mlflow.MlflowClient().log_dict(run_id, efficiency, "judge-efficiency.json")
+    for name, value in efficiency_metrics(efficiency).items():
+        mlflow.MlflowClient().log_metric(run_id, name, value)
     if raise_on_error and any(
         cell["status"] == "error"
         for row in rows

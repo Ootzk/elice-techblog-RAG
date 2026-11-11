@@ -1,4 +1,6 @@
+import json
 from contextlib import nullcontext
+from pathlib import Path
 from threading import Barrier, Lock
 from types import SimpleNamespace
 
@@ -80,15 +82,23 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     from elice_knowledge.ragas_metrics import payload
 
     records, cases = examples()
-    calls, artifacts = [], []
+    observed, artifacts = [], []
     broken = [False]
     monkeypatch.setattr("elice_knowledge.judges.configure", lambda *a: "exp")
     monkeypatch.setattr("mlflow.start_run", lambda **kw: nullcontext())
 
     async def metric(
-        settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+        settings,
+        model,
+        dimension,
+        data,
+        rubric,
+        *,
+        request_options=None,
+        allowed_values=None,
+        calls=None,
     ):
-        calls.append((dimension, data))
+        observed.append((dimension, data))
         if dimension == "groundedness" and "insufficient_evidence" in str(data):
             return "not_applicable", "No factual assertions", None
         return (None if broken[0] else "1" if dimension == "completeness" else "2"), "reason", None
@@ -107,7 +117,10 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     monkeypatch.setattr("elice_knowledge.ragas_metrics.metric_score", metric)
     monkeypatch.setattr("mlflow.genai.evaluate", evaluate)
     monkeypatch.setattr(
-        "mlflow.MlflowClient", lambda: SimpleNamespace(log_dict=lambda *a: artifacts.append(a))
+        "mlflow.MlflowClient",
+        lambda: SimpleNamespace(
+            log_dict=lambda *a: artifacts.append(a), log_metric=lambda *a: None
+        ),
     )
     _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
     assert [r["record_id"] for r in rows] == ["r1", "r2"]
@@ -115,7 +128,7 @@ def test_ragas_inputs_numeric_scores_na_and_deterministic_order(monkeypatch):
     assert rows[0]["measurements"] == []
     assert rows[1]["judges"]["correctness"]["status"] == "not_applicable"
     assert rows[1]["judges"]["groundedness"]["status"] == "not_applicable"
-    for dimension, data in calls:
+    for dimension, data in observed:
         if dimension in {"groundedness", "relevance"}:
             assert "reference" not in data and "reference" not in str(data)
             assert "unseen secret" not in str(data)
@@ -149,11 +162,12 @@ def test_missing_judge_rationale_from_dataframe_is_serializable(monkeypatch):
             }
         ),
     )
-    monkeypatch.setattr("mlflow.MlflowClient", lambda: SimpleNamespace(log_dict=lambda *a: None))
-    _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
-    assert all(
-        cell["rationale"] == "" for row in rows for cell in row["judges"].values()
+    monkeypatch.setattr(
+        "mlflow.MlflowClient",
+        lambda: SimpleNamespace(log_dict=lambda *a: None, log_metric=lambda *a: None),
     )
+    _, rows = evaluate_answers(Settings(), "run", records, cases, model_specs())
+    assert all(cell["rationale"] == "" for row in rows for cell in row["judges"].values())
 
 
 @pytest.mark.parametrize(("record_workers", "scorer_workers"), [(1, 4), (2, 2)])
@@ -176,16 +190,24 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
     tracking = mlflow.MlflowClient()
     run = tracking.create_run(experiment)
     barrier, lock = Barrier(4), Lock()
-    active, peak, calls = 0, 0, []
+    active, peak, observed_dimensions = 0, 0, []
 
     async def metric(
-        settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+        settings,
+        model,
+        dimension,
+        data,
+        rubric,
+        *,
+        request_options=None,
+        allowed_values=None,
+        calls=None,
     ):
         nonlocal active, peak
         with lock:
             active += 1
             peak = max(peak, active)
-            calls.append(dimension)
+            observed_dimensions.append(dimension)
         try:
             barrier.wait(timeout=15)
             if dimension == "relevance":
@@ -208,10 +230,17 @@ def test_real_mlflow_pool_runs_ragas_metrics_in_one_run(
             model_specs(),
             raise_on_error=False,
         )
-        assert peak == 4 and active == 0 and len(calls) == 8
+        assert peak == 4 and active == 0 and len(observed_dimensions) == 8
         assert results[0]["judges"]["relevance"]["status"] == "error"
         assert results[0]["judges"]["correctness"]["score"] == 2
         assert results[0]["measurements"] == []
+        efficiency = json.loads(
+            Path(tracking.download_artifacts(run.info.run_id, "judge-efficiency.json")).read_text()
+        )
+        assert len(efficiency["rows"]) == 8
+        assert {row["record_id"] for row in efficiency["rows"]} == {"r1", "r3"}
+        assert sum(row["status"] == "error" for row in efficiency["rows"]) == 2
+        assert efficiency["evaluation_elapsed_ms"] > 0
         assert len(tracking.search_runs([experiment])) == 1
         assert mlflow.active_run() is None
     finally:

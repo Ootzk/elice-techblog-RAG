@@ -244,6 +244,15 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
                 }
             )
             if profile.get("type") == "model":
+                artifacts = {item.path for item in tracking.list_artifacts(grading_id)}
+                if "judge-efficiency.json" in artifacts:
+                    efficiency = read(grading_id, "judge-efficiency.json")
+                    if (
+                        efficiency.get("schema") != "judge-efficiency-v1"
+                        or efficiency.get("grading_run_id") != grading_id
+                    ):
+                        raise ValueError("Invalid judge efficiency artifact")
+                    links["gradings"][-1]["efficiency"] = efficiency
                 observations = []
                 # These are historical observations, never the Gateway's current config.
                 traces = tracking.search_traces(

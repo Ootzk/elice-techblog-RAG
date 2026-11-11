@@ -114,7 +114,8 @@ def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
         source="local",
     )
     view = quality_heatmaps(data)
-    assert len(view.objects) == 6  # selector, question, legend, heading, method, heatmaps
+    assert len(view.objects) == 5  # selector, selected question, heading, method, heatmaps
+    assert not view.objects[1].visible
     selector, rater_selector = view.objects[0].objects
     assert isinstance(selector, pn.widgets.Select)
     assert list(selector.options.values()) == ["all", "q1", "q2"]
@@ -124,7 +125,7 @@ def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
         "model:chatgpt",
         "model:claude",
     ]
-    quality_grid = view.objects[5].objects[0]
+    quality_grid = view.objects[4].objects[0]
     assert isinstance(quality_grid, pn.GridBox)
     assert quality_grid.ncols == 2
     assert len(quality_grid.objects) == 2

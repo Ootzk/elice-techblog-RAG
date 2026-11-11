@@ -94,6 +94,12 @@ source_run_id로 answers에 연결한다. agreement·comparison은 입력 run과
 원본을 수정하지 않는다. repeatability는 `evaluation-v2`·`repeatability-v1` 계약을 쓰고
 입력 agreement ID·artifact digest를 고정한다.
 
+모델 grading은 `judge-efficiency.json`에 채점 실행의 실제 경과 시간과 문항·평가 항목별
+scorer 경과 시간, 각 HTTP 응답의 상태·경과 시간·제공된 토큰 사용량을 저장한다. 재시도 응답은
+별도 호출로 기록하며 프롬프트와 응답 본문은 이 artifact에 저장하지 않는다. 병렬 호출의 경과 시간
+합은 전체 실행 경과 시간과 다르다. 공급자가 토큰을 제공하지 않거나 HTTP 응답 전에 실패하면 해당
+사용량은 미기록이다. 사람 검수에는 이 측정값을 생성하지 않는다.
+
 ## 고정 답변과 rubric
 
 answers bundle에는 Dataset ID·내용 해시·문항 records·실제 생성 cases·QA 프로필을 보존한다.

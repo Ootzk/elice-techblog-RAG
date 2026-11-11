@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import nbformat
 import pandas as pd
+import panel as pn
 import pytest
 from nbclient import NotebookClient
 
@@ -292,7 +293,7 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
             )
             + "headings = [p.object for p in report_view if isinstance(p, pn.pane.Markdown)]\n"
             'assert [h[3] for h in headings if h.startswith("## ") and h[3:4].isdigit()] '
-            + ('== ["1", "2", "3", "4"]' if kind == "agreement" else '== ["1", "2", "3", "4", "5"]')
+            + '== ["1", "2", "3", "4", "5"]'
         )
     )
     NotebookClient(
@@ -324,3 +325,72 @@ def test_agreement_rejects_mixed_rubric_snapshots(tmp_path):
     inputs.write_text(json.dumps(data.inputs))
     with pytest.raises(ValueError, match="same rubric"):
         from_files("agreement", report, inputs)
+
+
+def test_efficiency_view_shows_measured_judge_round_and_question(tmp_path):
+    from elice_reporting.agreement_visuals import agreement_subjects
+    from elice_reporting.efficiency_sections import efficiency_view
+
+    data = demo("agreement")
+    subject = next(s for s in agreement_subjects(data) if s["rater"].startswith("model:"))
+    record_id = data.inputs["bundle"]["records"][0]["id"]
+    data.links["gradings"] = [
+        {
+            "rater": subject["rater"],
+            "round": subject["round"],
+            "profile_digest": subject["profile"],
+            "efficiency": {
+                "evaluation_elapsed_ms": 3000,
+                "rows": [
+                    {
+                        "record_id": record_id,
+                        "dimension": "correctness",
+                        "status": "scored",
+                        "scorer_duration_ms": 2000,
+                        "calls": [
+                            {
+                                "duration_ms": 1500,
+                                "input_tokens": 10,
+                                "cached_input_tokens": 2,
+                                "output_tokens": 4,
+                                "total_tokens": 14,
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+    ]
+    view = efficiency_view(data)
+    charts = [pane.object for pane in view.select(pn.pane.Bokeh)]
+    sources = [
+        renderer.data_source.data
+        for chart in charts
+        for renderer in chart.renderers
+        if hasattr(renderer, "data_source")
+    ]
+    assert any("3.0초" in source.get("text", []) for source in sources)
+    assert any("1.5초" in source.get("text", []) for source in sources)
+    assert any("14 토큰" in source.get("text", []) for source in sources)
+    assert not view.select(pn.pane.HTML)
+    path = export_html(view, tmp_path / "efficiency.html", title="efficiency")
+    assert path.is_file()
+
+
+def test_efficiency_graph_weights_answers_equally_and_keeps_rounds():
+    from elice_reporting.efficiency_sections import _call_value, _chart
+
+    points = [
+        {"answer": 1, "attempt": "A1 · 1회차", "value": 0.0, "support": "관측"},
+        {"answer": 1, "attempt": "A1 · 2회차", "value": 1.0, "support": "관측"},
+        {"answer": 2, "attempt": "A2 · 1회차", "value": 1.0, "support": "관측"},
+    ]
+    pane = _chart([{"label": "Judge", "points": points}], "초", "시간", repeat=True)
+    sources = [r.data_source.data for r in pane.object.renderers if hasattr(r, "data_source")]
+    assert sources[0]["value"] == [0.75]
+    assert sources[1]["value"] == [0.0, 1.0, 1.0]
+    assert (
+        _call_value([{"input_tokens": 2}, {"input_tokens": None}], "input_tokens", "토큰")[0]
+        is None
+    )
+    assert _call_value([{"input_tokens": 0}], "input_tokens", "토큰")[0] == 0

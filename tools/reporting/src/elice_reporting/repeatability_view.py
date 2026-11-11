@@ -267,14 +267,9 @@ def quality_heatmaps(data):
     selector = pn.widgets.Select(
         label="질문 선택", options=options, value="all", sizing_mode="stretch_width"
     )
-    question_panel = pn.pane.HTML(
-        f'<div style="padding:12px 16px;border-radius:12px;background:#eef3f7;'
-        f'color:#385165;font:14px system-ui">'
-        f"전체 {len(records)}문항을 각각 표시합니다.</div>",
-        sizing_mode="stretch_width",
-    )
+    question_panel = pn.pane.HTML("", visible=False, sizing_mode="stretch_width")
     descriptions = {
-        "all": question_panel.object,
+        "all": "",
         **{
             record_id: (
                 '<div style="padding:12px 16px;border-radius:12px;background:#eef3f7;'
@@ -287,17 +282,6 @@ def quality_heatmaps(data):
     selections = ("all", *questions)
     names[MODEL_MEAN] = "모델 평균"
     icons[MODEL_MEAN] = _icon(MODEL_MEAN, "#64748b", None, ["모델 평균"])
-    legend = pn.pane.HTML(
-        '<div style="display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center">'
-        + "".join(
-            '<div style="display:flex;align-items:center;gap:7px;white-space:nowrap">'
-            f'<img src="{escape(icons[rater], quote=True)}" width="30" height="30" '
-            f'alt="평가 주체"><span>{escape(names[rater])}</span></div>'
-            for rater in raters
-        )
-        + "</div>",
-        sizing_mode="stretch_width",
-    )
     rater_options = {"전체 모델 평균": MODEL_MEAN}
     rater_options.update({names[rater]: rater for rater in raters})
     rater_selector = pn.widgets.Select(
@@ -361,7 +345,6 @@ def quality_heatmaps(data):
     view = [
         pn.Row(selector, rater_selector, sizing_mode="stretch_width"),
         question_panel,
-        legend,
         pn.pane.Markdown("### 문항별 품질 수준"),
         pn.pane.Markdown(
             "평가 주체·항목별로 각 answers 시행의 경계 충족률을 같은 비중으로 평균합니다. "
@@ -408,6 +391,7 @@ def quality_heatmaps(data):
         "const escaped = descriptions[question].replace(/[&<>\"']/g, character => "
         "({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[character]));\n"
         "question_panel.text = escaped;\n"
+        "question_panel.visible = question !== 'all';\n"
         "qualitySources.forEach((source, index) => {\n"
         "    source.data = quality_payloads[question][rater][index];\n"
         "    source.change.emit();\n"

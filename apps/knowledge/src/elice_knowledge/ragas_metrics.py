@@ -112,7 +112,15 @@ def question(record):
 
 
 async def metric_score(
-    settings, model, dimension, data, rubric, *, request_options=None, allowed_values=None
+    settings,
+    model,
+    dimension,
+    data,
+    rubric,
+    *,
+    request_options=None,
+    allowed_values=None,
+    calls=None,
 ):
     """One SDK scorer invocation. Each invocation permits one outbound request at a time."""
     import httpx
@@ -135,12 +143,16 @@ async def metric_score(
         os.environ.get("MLFLOW_TRACKING_PASSWORD"),
     )
     auth = httpx.BasicAuth(username, password or "") if username and not token else None
+    from elice_knowledge.judge_efficiency import hooks
+
     async with AsyncOpenAI(
         base_url=settings.mlflow_tracking_uri.get_secret_value().rstrip("/") + "/gateway/mlflow/v1",
         api_key=token or "unused",
         max_retries=0,
         timeout=settings.generation_timeout_seconds,
-        http_client=httpx.AsyncClient(auth=auth),
+        http_client=httpx.AsyncClient(
+            auth=auth, event_hooks=hooks(calls) if calls is not None else None
+        ),
     ) as client:
         options = {"max_completion_tokens": MAX_OUTPUT_TOKENS, **(request_options or {})}
         streaming = options.pop("stream", False)
@@ -228,7 +240,7 @@ async def metric_score(
         return value, result.reason or json.dumps(judgments, ensure_ascii=False), result.traces
 
 
-def scorer(settings, spec, dimension=None, *, rubric=None):
+def scorer(settings, spec, dimension=None, *, rubric=None, collector=None):
     from mlflow.entities import Feedback
     from mlflow.genai.scorers import scorer as mlflow_scorer
 
@@ -240,6 +252,20 @@ def scorer(settings, spec, dimension=None, *, rubric=None):
 
     @mlflow_scorer(name=name, timeout=0)
     def evaluate(inputs, outputs, expectations):
+        import time
+
+        started = time.monotonic()
+        calls = []
+        status = "error"
+        try:
+            result = evaluate_one(inputs, outputs, expectations, calls)
+            status = "not_applicable" if result.value == "not_applicable" else "scored"
+            return result
+        finally:
+            if collector is not None:
+                collector.record(inputs, outputs, expectations, dimension, started, calls, status)
+
+    def evaluate_one(inputs, outputs, expectations, calls):
         data = payload(
             {"inputs": inputs, "expectations": expectations}, {"result": outputs}, dimension
         )
@@ -248,6 +274,8 @@ def scorer(settings, spec, dimension=None, *, rubric=None):
         if "retrieved_contexts" in data and not any(c.strip() for c in data["retrieved_contexts"]):
             return Feedback(value=0.0, rationale="평가할 근거 문맥이 없음")
         options = dict(request_options=RATER_REQUEST_OPTIONS.get(spec["rater"], {}))
+        if collector is not None:
+            options["calls"] = calls
         if not diagnostic:
             options["allowed_values"] = [str(v) for v in rubric["scale"]] + ["not_applicable"]
         value, reason, _ = asyncio.run(
