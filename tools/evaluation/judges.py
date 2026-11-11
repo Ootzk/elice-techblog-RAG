@@ -7,11 +7,11 @@ from typing import Literal
 from elice_knowledge.judges import (
     DIMENSIONS,
     ONLINE_FILTER,
-    RATERS,
     configure,
     instructions,
     judge_name,
     offline_instructions,
+    selected_raters,
 )
 from elice_knowledge.settings import Settings
 from mlflow.genai.judges import make_judge
@@ -22,14 +22,29 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--enable-dev", action="store_true")
     args = parser.parse_args()
-    experiment_id = configure(Settings())
+    settings = Settings()
+    experiment_id = configure(settings)
     existing = {
         judge.name: judge for judge in list_scorers(experiment_id=experiment_id)
     }
+    raters = selected_raters(settings)
+    if args.enable_dev:
+        desired = {
+            judge_name("online", dimension, rater)
+            for dimension in DIMENSIONS["online"]
+            for rater in raters
+        }
+        for name, judge in existing.items():
+            if (
+                name.startswith("qa-online-")
+                and name not in desired
+                and judge.sample_rate
+            ):
+                judge.stop(experiment_id=experiment_id)
     results = []
     for kind, dimensions in DIMENSIONS.items():
         for dimension in dimensions:
-            for rater in RATERS:
+            for rater in raters:
                 name = judge_name(kind, dimension, rater)
                 model = f"gateway:/elice-techblog-rag-judge-{rater}"
                 text = (

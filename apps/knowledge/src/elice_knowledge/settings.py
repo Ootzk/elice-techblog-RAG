@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     web_dist_dir: Path = Path("/app/web")
     qa_mlflow_experiment_name: str = "elice-techblog-rag-evaluation"
     evaluation_judges_enabled: bool = False
+    evaluation_judge_raters: str = ""
 
     @field_validator("generation_base_url", "generation_api_key", "generation_model", mode="before")
     @classmethod
