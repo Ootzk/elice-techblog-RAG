@@ -137,7 +137,7 @@ def evaluate_answers(
 ):
     import mlflow
 
-    from elice_knowledge.judge_efficiency import Collector
+    from elice_knowledge.judge_efficiency import Collector, model_identity
     from elice_knowledge.judge_efficiency import metrics as efficiency_metrics
     from elice_knowledge.ragas_metrics import DIAGNOSTICS, measurement_metrics, payload, scorer
 
@@ -174,10 +174,12 @@ def evaluate_answers(
         with mlflow.start_run(run_id=run_id):
             result = mlflow.genai.evaluate(data=data, scorers=scorers)
     except Exception:
+        failure_efficiency = collector.artifact(
+            run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000
+        )
+        mlflow.MlflowClient().log_dict(run_id, failure_efficiency, "judge-efficiency.json")
         mlflow.MlflowClient().log_dict(
-            run_id,
-            collector.artifact(run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000),
-            "judge-efficiency.json",
+            run_id, model_identity(failure_efficiency, specs[0]["model"]), "judge-model.json"
         )
         raise
     efficiency = collector.artifact(run_id=run_id, elapsed_ms=(time.monotonic() - started) * 1000)
@@ -228,6 +230,9 @@ def evaluate_answers(
         "judge-results.json",
     )
     mlflow.MlflowClient().log_dict(run_id, efficiency, "judge-efficiency.json")
+    mlflow.MlflowClient().log_dict(
+        run_id, model_identity(efficiency, specs[0]["model"]), "judge-model.json"
+    )
     for name, value in efficiency_metrics(efficiency).items():
         mlflow.MlflowClient().log_metric(run_id, name, value)
     if raise_on_error and any(

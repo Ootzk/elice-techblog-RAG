@@ -315,3 +315,23 @@ def test_large_repeated_panel_has_stable_model_round_order_and_readable_size():
     assert kappa_heatmaps(data, subjects).styles["overflow-x"] == "auto"
     data.inputs["gradings"].reverse()
     assert [s["key"] for s in agreement_subjects(data)] == [s["key"] for s in subjects]
+
+
+def test_saved_response_model_takes_priority_and_missing_is_not_guessed():
+    data = deepcopy(demo("agreement"))
+    subject = next(s for s in agreement_subjects(data) if s["rater"].startswith("model:"))
+    link = {
+        "rater": subject["rater"],
+        "round": subject["round"],
+        "profile_digest": subject["profile"],
+        "model_observations": [{"models": ["old-model"]}],
+        "model_identity": {"identified_models": ["gpt-6-luna"]},
+    }
+    data.links["gradings"] = [link]
+    selected = next(s for s in agreement_subjects(data) if s["key"] == subject["key"])
+    assert selected["actual_models"] == ["gpt-6-luna"]
+    assert selected["model_source"] == "채점 응답에 기록됨"
+    link["model_identity"]["identified_models"] = []
+    selected = next(s for s in agreement_subjects(data) if s["key"] == subject["key"])
+    assert selected["actual_models"] == []
+    assert "모델명 미확인" in selected["display_name"]

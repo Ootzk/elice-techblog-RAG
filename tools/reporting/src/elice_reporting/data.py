@@ -253,12 +253,27 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
                     ):
                         raise ValueError("Invalid judge efficiency artifact")
                     links["gradings"][-1]["efficiency"] = efficiency
+                if "judge-model.json" in artifacts:
+                    identity = read(grading_id, "judge-model.json")
+                    endpoints = {spec.get("model") for spec in profile.get("scorers", [])}
+                    if (
+                        identity.get("schema") != "judge-model-v1"
+                        or identity.get("grading_run_id") != grading_id
+                        or identity.get("requested_endpoint") not in endpoints
+                        or not isinstance(identity.get("identified_models"), list)
+                    ):
+                        raise ValueError("Invalid judge model identity artifact")
+                    links["gradings"][-1]["model_identity"] = identity
                 observations = []
-                # These are historical observations, never the Gateway's current config.
-                traces = tracking.search_traces(
-                    locations=[grade.info.experiment_id],
-                    filter_string=f"attributes.run_id = '{grading_id}'",
-                    max_results=3,
+                # Only older gradings need trace observations to identify the model.
+                traces = (
+                    []
+                    if "judge-model.json" in artifacts
+                    else tracking.search_traces(
+                        locations=[grade.info.experiment_id],
+                        filter_string=f"attributes.run_id = '{grading_id}'",
+                        max_results=3,
+                    )
                 )
                 for item in traces:
                     try:

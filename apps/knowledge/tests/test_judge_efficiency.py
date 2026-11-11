@@ -3,7 +3,13 @@ import json
 
 import httpx
 
-from elice_knowledge.judge_efficiency import Collector, hooks, response_usage
+from elice_knowledge.judge_efficiency import (
+    Collector,
+    hooks,
+    model_identity,
+    response_models,
+    response_usage,
+)
 
 
 def test_usage_for_json_stream_and_missing():
@@ -26,6 +32,27 @@ def test_usage_for_json_stream_and_missing():
         == 3
     )
     assert response_usage(b"data: [DONE]\n")["input_tokens"] is None
+
+
+def test_model_identity_preserves_response_and_does_not_guess_alias():
+    body = b'data: {"model":"gpt-6-luna"}\n\ndata: {"usage":{"prompt_tokens":3}}\n\n'
+    assert response_models(body) == ["gpt-6-luna"]
+    artifact = {
+        "grading_run_id": "run",
+        "rows": [
+            {
+                "calls": [
+                    {"http_status": 200, "response_models": ["gpt-6-luna"]},
+                    {"http_status": 500, "response_models": ["wrong"]},
+                ]
+            }
+        ],
+    }
+    identity = model_identity(artifact, "gateway:/judge-chatgpt")
+    assert identity["identified_models"] == ["gpt-6-luna"]
+    assert identity["responses_with_model"] == 1
+    identity = model_identity(artifact, "gateway:/gpt-6-luna")
+    assert identity["identified_models"] == []
 
 
 def test_response_hooks_keep_stream_readable_and_do_not_store_content():

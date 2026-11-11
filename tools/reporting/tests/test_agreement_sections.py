@@ -180,12 +180,22 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
             data=SimpleNamespace(tags=tags),
         )
 
+    has_identity = [False]
+
     def download(run_id, name, directory):
         value = {
             "agreement.json": data.report,
             "evaluation-bundle.json": data.inputs["bundle"],
             "grading-inputs.json": {"results": data.inputs["gradings"]},
             "rater-profile.json": profile,
+            "judge-model.json": {
+                "schema": "judge-model-v1",
+                "grading_run_id": "grading-1",
+                "requested_endpoint": "gateway:/judge-claude",
+                "identified_models": ["gpt-6-luna"],
+                "responses": 1,
+                "identified_responses": 1,
+            },
         }[name]
         path = tmp_path / name
         path.write_text(json.dumps(value))
@@ -196,7 +206,9 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
         lambda **kw: SimpleNamespace(
             get_run=get_run,
             download_artifacts=download,
-            list_artifacts=lambda run_id: [],
+            list_artifacts=lambda run_id: (
+                [SimpleNamespace(path="judge-model.json")] if has_identity[0] else []
+            ),
             search_traces=lambda **kw: [SimpleNamespace(info=SimpleNamespace(trace_id="trace-1"))],
             get_trace=lambda trace_id: SimpleNamespace(
                 data=SimpleNamespace(
@@ -226,6 +238,13 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
     markup = "".join(p.object for p in conditions.select(pn.pane.HTML))
     assert 'href="https://mlflow.example/team/#/experiments/42/runs/grading-1"' in markup
     assert "secret" not in markup and "private" not in markup
+    has_identity[0] = True
+    loaded = from_mlflow(
+        "agreement", "agreement-1", tmp_path, tracking_uri="https://mlflow.example"
+    )
+    selected = next(s for s in agreement_subjects(loaded) if s["rater"] == grading["rater_id"])
+    assert selected["actual_models"] == ["gpt-6-luna"]
+    assert selected["model_source"] == "채점 응답에 기록됨"
     profile["scorers"][0]["model"] = "changed"
     with pytest.raises(ValueError, match="profile binding"):
         from_mlflow("agreement", "agreement-1", tmp_path)

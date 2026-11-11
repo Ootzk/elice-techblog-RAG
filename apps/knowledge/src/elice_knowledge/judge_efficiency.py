@@ -12,10 +12,10 @@ def row_key(inputs, outputs, expectations):
     return digest({"inputs": inputs, "outputs": outputs, "expectations": expectations})
 
 
-def response_usage(body):
-    """Read OpenAI-compatible JSON or SSE usage; absent values stay absent."""
+def response_payloads(body):
+    """Read JSON or SSE events without retaining prompts or responses."""
     try:
-        candidates = [json.loads(body)]
+        return [json.loads(body)]
     except (ValueError, UnicodeDecodeError):
         candidates = []
         for line in body.splitlines():
@@ -25,7 +25,12 @@ def response_usage(body):
                 candidates.append(json.loads(line[5:].strip()))
             except (ValueError, UnicodeDecodeError):
                 continue
-    for payload in reversed(candidates):
+        return candidates
+
+
+def response_usage(body):
+    """Read OpenAI-compatible usage; absent values stay absent."""
+    for payload in reversed(response_payloads(body)):
         usage = payload.get("usage") if isinstance(payload, dict) else None
         if isinstance(usage, dict):
             details = usage.get("prompt_tokens_details")
@@ -44,6 +49,39 @@ def response_usage(body):
     return {
         key: None
         for key in ("input_tokens", "cached_input_tokens", "output_tokens", "total_tokens")
+    }
+
+
+def response_models(body):
+    return sorted(
+        {
+            payload["model"]
+            for payload in response_payloads(body)
+            if isinstance(payload, dict)
+            and isinstance(payload.get("model"), str)
+            and payload["model"].strip()
+        }
+    )
+
+
+def model_identity(artifact, endpoint):
+    calls = [call for row in artifact["rows"] for call in row["calls"]]
+    successful = [call for call in calls if 200 <= call.get("http_status", 0) < 300]
+    alias = endpoint.removeprefix("gateway:/")
+    responses = sorted({model for call in successful for model in call.get("response_models", [])})
+    identified = [name for name in responses if name != alias and not name.startswith("gateway:/")]
+    return {
+        "schema": "judge-model-v1",
+        "grading_run_id": artifact["grading_run_id"],
+        "requested_endpoint": endpoint,
+        "response_models": responses,
+        "identified_models": identified,
+        "responses": len(successful),
+        "responses_with_model": sum(bool(call.get("response_models")) for call in successful),
+        "identified_responses": sum(
+            any(name in identified for name in call.get("response_models", []))
+            for call in successful
+        ),
     }
 
 
@@ -117,11 +155,20 @@ def hooks(calls):
     async def on_response(response):
         start = response.request.extensions.get("judge_efficiency_start")
         usage = response_usage(b"")
+        models = []
         try:
             body = await response.aread()
             usage = response_usage(body)
+            models = response_models(body)
         finally:
             elapsed = (time.monotonic() - start) * 1000 if start is not None else None
-            calls.append({"duration_ms": elapsed, "http_status": response.status_code, **usage})
+            calls.append(
+                {
+                    "duration_ms": elapsed,
+                    "http_status": response.status_code,
+                    "response_models": models,
+                    **usage,
+                }
+            )
 
     return {"request": [on_request], "response": [on_response]}

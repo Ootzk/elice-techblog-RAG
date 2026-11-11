@@ -141,18 +141,31 @@ def agreement_subjects(data):
         observed = sorted(
             {model for entry in link.get("model_observations", []) for model in entry["models"]}
         )
-        actual = observed or [m for m in models if not m.startswith("gateway:/")]
+        recorded_identity = link.get("model_identity")
+        actual = (
+            recorded_identity["identified_models"]
+            if recorded_identity is not None
+            else observed or [m for m in models if not m.startswith("gateway:/")]
+        )
         if rater.startswith("human:"):
             number = human_ids.index(rater) + 1
             display = f"모의 검수 {number}" if link.get("synthetic") else f"검수자 {number}"
             short = display
         else:
             family = rater.removeprefix("model:")
-            display = " / ".join(model_name(m) for m in actual) or {
+            family_label = {
                 "chatgpt": "ChatGPT",
                 "claude": "Claude",
                 "gemini": "Gemini",
             }.get(family, family)
+            display = " / ".join(model_name(m) for m in actual) or f"{family_label} · 모델명 미확인"
+            if (
+                actual
+                and recorded_identity is not None
+                and recorded_identity.get("identified_responses", 0)
+                < recorded_identity.get("responses", 0)
+            ):
+                display += " · 일부 미확인"
             identity = " ".join(actual or models or [rater]).lower()
             short = next(
                 (
@@ -193,6 +206,10 @@ def agreement_subjects(data):
                 grading_options=saved_profile.get("ragas", {}),
                 model_source="직접 검수"
                 if rater.startswith("human:")
+                else "채점 응답에 기록됨"
+                if recorded_identity is not None and actual
+                else "응답 모델명 미확인"
+                if recorded_identity is not None
                 else "실행 trace 관측 (최대 3개)"
                 if observed
                 else "채점 프로필"
