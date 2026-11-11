@@ -7,7 +7,7 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from elice_knowledge.embedding import OllamaEmbedder
+from elice_knowledge.embedding import create_embedder
 from elice_knowledge.retrieval import OpenIndex, RetrievalStore
 from elice_knowledge.settings import Settings
 from elice_knowledge.sparse import keyword_search
@@ -156,7 +156,7 @@ class KnowledgeTools:
                 if name == "keyword_search":
                     result = keyword_search(index, request.query, top_k)
                 else:
-                    backend = OllamaEmbedder(self.settings, self.client)
+                    backend = create_embedder(self.settings, self.client)
                     result = self.store.dense_search(index, request.query, backend, top_k)
                 finish_span(span, documents(result["results"]))
         except Exception:

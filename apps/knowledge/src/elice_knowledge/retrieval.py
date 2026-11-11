@@ -18,7 +18,7 @@ from psycopg.types.json import Jsonb
 from elice_knowledge.chunk_store import ChunkStore
 from elice_knowledge.corpus import digest
 from elice_knowledge.database import connect, sqlalchemy_url
-from elice_knowledge.embedding import Embedder, EmbeddingError, OllamaEmbedder, profile_id
+from elice_knowledge.embedding import Embedder, EmbeddingError, create_embedder, profile_id
 from elice_knowledge.llama_embedding import KnowledgeEmbedding
 from elice_knowledge.settings import Settings
 
@@ -331,7 +331,7 @@ def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = Non
     with httpx.Client() as client:
         return RetrievalStore(settings).index(
             policy_key,
-            OllamaEmbedder(settings, client),
+            create_embedder(settings, client),
             snapshot_id,
             progress=lambda event: print(json.dumps(event), file=sys.stderr),
         )
@@ -340,7 +340,7 @@ def run_index(settings: Settings, policy_key: str, snapshot_id: str | None = Non
 def run_search(settings: Settings, index_key: str, query: str, top_k=5):
     with httpx.Client() as client:
         return RetrievalStore(settings).search(
-            index_key, query, OllamaEmbedder(settings, client), top_k
+            index_key, query, create_embedder(settings, client), top_k
         )
 
 

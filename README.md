@@ -53,10 +53,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
 | `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 로컬 DB 초기화 설정; `DATABASE_URL`과 일치시켜야 함 |
-| `EMBEDDING_BACKEND` | 현재 `ollama` 지원 |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | Ollama 주소와 설치된 모델 이름; 기본 모델 `bge-m3` |
-| `EMBEDDING_API_KEY` | 필요할 때만 Bearer 인증에 사용 |
-| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; 기본 `1024` |
+| `EMBEDDING_BACKEND` | `ollama` 또는 `elice-serverless`; dev 예시는 Serverless |
+| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | 임베딩 endpoint와 모델 이름; Serverless는 `/v1` Base URL과 `text-embedding-3-small` |
+| `EMBEDDING_MODEL_REVISION` | 공급자가 제공한 고정 revision; 알 수 없으면 비움 |
+| `EMBEDDING_API_KEY` | Serverless Bearer 인증에 필수; Ollama는 선택 |
+| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; dev Serverless 예시는 `1536`, Ollama BGE-M3는 `1024` |
 | `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
 | `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
 | `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT_NAME` | MLflow 서버와 이 프로젝트의 연결 검증용 실험명 |
@@ -81,7 +82,8 @@ DB 생성 후 `.env.dev`의 비밀번호만 바꾸면 기존 DB 비밀번호는 
 prod(엘리스클라우드 배포용)는 `compose.yaml`과 `.env`를 사용하며 파일명에 `prod`를 붙이지 않습니다.
 dev는 `compose.dev.yaml`을 덧씌우고 `.env.dev`를 사용합니다.
 prod 설정은 `.env.example`에서 별도로 복사합니다.
-임베딩 예시는 Ollama 프로토콜용이며, 다른 엘리스 ML API의 임베딩 어댑터와 실제 클라우드 배포는 아직 검증하지 않았습니다. 생성 모델은 별도의 Serverless 어댑터로 연결합니다.
+dev 임베딩 예시는 엘리스 Serverless의 OpenAI 호환 Embeddings API를 사용합니다. prod 예시는
+Ollama 연결을 유지하며, 엘리스클라우드 배포는 별도 검증이 필요합니다. 생성 모델은 별도 설정으로 연결합니다.
 
 ```bash
 cp .env.example .env
@@ -240,11 +242,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 `corpus-chunk-sets.sql`과 `corpus-chunks.sql`로 정책별 결과와 실제 본문을 조회할 수 있습니다.
 청킹은 Embedding·MLflow를 호출하지 않습니다. Docker 이미지는 빌드 때 토크나이저 데이터를 포함합니다.
 
-검색용 임베딩은 기존 Ollama 어댑터를 LlamaIndex `BaseEmbedding`으로 연결하고,
+검색용 임베딩은 설정한 Ollama 또는 엘리스 Serverless 어댑터를 LlamaIndex `BaseEmbedding`으로 연결하고,
 벡터 저장·검색은 `PGVectorStore`와 `VectorStoreIndex`를 사용합니다.
 벡터는 임베딩 프로필별 PostgreSQL 테이블에 저장하며 같은 프로필 안에서는
 청크 ID로 재사용합니다. 다른 청킹 정책·문서 버전의 청크는 별도 ID로 유지합니다.
-프로필에는 모델 digest·차원·양자화·정규화 등의 백엔드 정보와 문서/질의 입력 계약을 포함하며,
+프로필에는 모델·차원과 확인 가능한 revision·정규화 등의 백엔드 정보 및 문서/질의 입력 계약을 포함하며,
 서버 접속 주소는 포함하지 않습니다. 주소가 같아도 모델 프로필이 달라지면 다른 테이블을 사용합니다.
 문서는 제목·제목 경로와 청크 본문, 질의는 앞뒤 공백을 제거한 질문을 임베딩하고 별도 접두사는 붙이지 않습니다.
 
@@ -265,9 +267,12 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 같은 임베딩 프로필의 색인은 DB 세션 잠금으로 직렬화하고, 추론 중에는 DB 트랜잭션을 유지하지 않습니다.
 완료한 배치는 유지하여 실패 후 재실행 시 재사용하고, 추론 전후 모델 프로필이 달라지면 중단합니다.
 모든 청크의 벡터를 확인한 뒤에만 `corpus_vector_indexes`에 검색 가능한 인덱스를 등록합니다.
+임베딩 모델이나 차원을 바꾸면 기존 벡터를 재사용하지 않고 같은 스냅샷·청킹 정책으로 새 인덱스를
+만듭니다. 완료된 새 인덱스 키를 `.env.dev`의 `QA_ACTIVE_INDEX_KEY`에 넣고 Knowledge와 worker를
+재시작하면 새 대화에 적용됩니다. 기존 인덱스는 이전 실험의 출처 확인을 위해 남습니다.
 
-청크 본문의 `cl100k_base` 토큰 수는 BGE-M3의 입력 한도가 아닙니다.
-허용 길이 여부는 [Ollama의 truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정하며,
+Ollama의 BGE-M3 입력 한도는 [truncate=false 응답](https://docs.ollama.com/api/embed)으로 판정합니다.
+Serverless `text-embedding-3-small`은 요청 전에 `cl100k_base` 기준 8,191 토큰 한도를 검사하며,
 초과 시 CLI는 `EmbeddingInputTooLong`과 안전한 이유 코드를 출력합니다. 표·코드를 자동으로 잘라 재시도하지 않습니다.
 더 작은 정책을 적용하거나 큰 구조화 블록의 처리 방식을 별도로 정한 뒤 다시 실행해야 합니다.
 
@@ -431,10 +436,11 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml exec know
 ```
 
 - `GET /health/live`: 프로세스 응답 여부를 확인하고 HTTP 200을 반환합니다. Docker healthcheck도 이 경로를 사용합니다.
-- `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest, MLflow API 접근을
+- `GET /health/ready`: PostgreSQL의 vector 확장, Ollama 모델·digest 또는 Serverless 설정, MLflow API 접근을
   각각 검사합니다. 준비되면 HTTP 200, 실패하면 HTTP 503이며 의존성별 상태를 반환합니다.
   DB 쓰기·임베딩 생성·Run 생성은 하지 않습니다. MLflow를 끄면 `disabled`로 표시합니다.
   `generation`은 설정 여부만 `configured`·`not_configured`로 표시하며 유료 연결 검사는 하지 않습니다.
+  Serverless `embedding`도 설정만 검사해 `configured`로 표시하고 유료 요청은 보내지 않습니다.
   전체 ready 상태는 기존 인프라 기준입니다. 생성 미설정이어도 수집·검색은 ready일 수 있고 QA는 503을 반환합니다.
 - `python -m elice_knowledge smoke`: 고정 한국어 문장의 임베딩을 생성하고 pgvector에
   저장·유사도 조회한 뒤 MLflow Run에 연결 검증 지표를 기록합니다. 실패 시 종료 코드는 1입니다.
@@ -884,7 +890,9 @@ Gold 22문항·Iron 8문항을 검수해 홈서버 MLflow에 등록하고 원본
 엘리스 Serverless 모델의 실제 연결·응답은 확인했지만, 답변 정확성·유보 성능에 대한 기준 평가는 아직 실행하지 않았습니다.
 기준 평가와 개선 실험·제출용 보고서, Judge 신뢰도와 클라우드 배포 검증은 남아 있습니다.
 연결 검증 테이블은 실제 문서·문서 버전·청크 스키마와 별개이며 검색 인덱스 성능을 평가하지 않습니다.
-임베딩 프로필에는 Ollama의 모델 digest·모델 정보·차원·양자화 정보·전처리와 truncation 정책을 기록합니다.
+Ollama 임베딩 프로필에는 모델 digest·모델 정보·차원·양자화·전처리와 truncation 정책을 기록합니다.
+Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록합니다. 공급자가 revision을 제공하지
+않으면 `provider-unavailable`로 남기므로, 모델이 같은 이름으로 변경되는 일까지 자동 감지할 수 없습니다.
 주소 변경만으로 프로필이 바뀌지는 않지만, 다른 서빙 구현과의 벡터 호환성은 아직 검증하지 않았습니다.
 
 ## 7. 개선 실험과 결과

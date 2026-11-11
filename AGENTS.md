@@ -23,7 +23,8 @@
 - 위 구성 요소는 논리적인 책임이다. 각각을 반드시 별도 패키지나 컨테이너로 만들지 않는다.
   Knowledge와 RAG의 프로세스 경계는 구현 설계에서 결정한다.
 - Knowledge의 관계형 데이터와 벡터는 PostgreSQL + pgvector에 함께 저장한다.
-  개발 중 Embedding 추론은 홈서버 Ollama + BGE-M3를 사용한다.
+  개발 중 Embedding 추론은 엘리스 Serverless의 `text-embedding-3-small`을 사용한다.
+  홈서버 Ollama + BGE-M3 어댑터는 선택 가능한 백엔드로 유지한다.
 - Ingest의 문서 표현·직렬화·중복 등록은 LlamaIndex Core와 PostgreSQL Docstore를 사용한다.
   본문 HTML 전체를 한 Document로 `IngestionPipeline`의 `HTMLNodeParser`에 전달한다.
   DOM 평탄화·조각 분할·자체 블록 형식·제목 스택·셀 파서를 별도로 유지하지 않는다.
@@ -184,7 +185,8 @@
   문서 갱신과 오래된 벡터 정리는 일관된 단위로 반영한다.
 - RAG·Ingest는 공통 Embedding 인터페이스를 사용하고, 백엔드별 요청·인증·응답 변환은 어댑터가 맡는다.
   문서와 질의 임베딩을 모두 같은 프로필로 처리하며 응답 순서·개수·차원을 검증한다.
-- 우선 Ollama 어댑터를 구현하고, 제출 환경의 실제 API 계약이 정해지면 해당 어댑터를 추가한다.
+- Ollama와 개발용 엘리스 Serverless의 Embeddings API 어댑터를 제공한다. 제출 환경의 실제
+  서빙 계약이 다르면 해당 어댑터를 추가한다.
   엘리스 ML API가 Ollama 또는 OpenAI와 같은 프로토콜이라고 가정하지 않는다.
 - 백엔드 종류·접속 URL·모델 식별자·선택적 API 키·타임아웃·배치 크기를 환경별 설정으로 주입한다.
   정확한 변수명과 기본값은 구현 시 정하고 `.env.example`과 README에 반영한다.
