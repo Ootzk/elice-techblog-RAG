@@ -53,19 +53,14 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml down
 | `KNOWLEDGE_PORT` | 맥북의 `127.0.0.1`에 공개할 포트; 기본 `8080` |
 | `DATABASE_URL` | 컨테이너에서 접근 가능한 전용 Knowledge PostgreSQL 연결 문자열 |
 | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | 로컬 DB 초기화 설정; `DATABASE_URL`과 일치시켜야 함 |
-| `EMBEDDING_BACKEND` | `ollama` 또는 `elice-serverless`; dev 예시는 Serverless |
-| `EMBEDDING_BASE_URL`, `EMBEDDING_MODEL` | 임베딩 endpoint와 모델 이름; Serverless는 `/v1` Base URL과 `text-embedding-3-small` |
-| `EMBEDDING_MODEL_REVISION` | 공급자가 제공한 고정 revision; 알 수 없으면 비움 |
+| `MODEL_CATALOG_FILE` | 모델 목록 JSON 경로; 기본 `models.json` |
+| `ANSWER_MODEL_PROFILE`, `EMBEDDING_MODEL_PROFILE` | `models.json`에서 사용할 답변·임베딩 프로필 이름 |
 | `ELICE_API_KEY` | 생성·Serverless 임베딩·Judge 등록에 사용하는 공용 API 키 |
-| `EMBEDDING_DIMENSIONS` | 기대 벡터 차원; dev Serverless 예시는 `1536`, Ollama BGE-M3는 `1024` |
-| `EMBEDDING_TIMEOUT_SECONDS`, `EMBEDDING_BATCH_SIZE` | 요청 제한 시간과 배치 크기; 기본 `30`, `16` |
 | `MLFLOW_ENABLED` | `false`이면 MLflow 연결·기록을 생략 |
 | `MLFLOW_TRACKING_URI`, `MLFLOW_EXPERIMENT_NAME` | MLflow 서버와 이 프로젝트의 연결 검증용 실험명 |
 | `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`, `MLFLOW_TRACKING_TOKEN` | 서버가 요구하는 방식의 선택적 인증 |
 | `MLFLOW_HTTP_REQUEST_TIMEOUT`, `MLFLOW_HTTP_REQUEST_MAX_RETRIES` | MLflow SDK 제한 시간·재시도; 예시는 `10`초·`0`회 |
 | `MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT` | SDK가 내부 Run URL을 표준 출력에 자동으로 출력하지 않도록 설정; 예시는 `true` |
-| `GENERATION_BASE_URL` | 선택한 엘리스 Serverless 모델의 `/v1` Base URL; 미설정 시 QA 비활성 |
-| `GENERATION_MODEL` | 모델 API 패널에 표시된 생성 모델 이름; 기본값 없음 |
 | `GENERATION_TIMEOUT_SECONDS` | 생성 요청 제한 시간; 기본 `90`초 |
 | `GENERATION_TEMPERATURE` | 선택적 샘플링 설정; 미설정이면 요청에서 생략 |
 | `GENERATION_MAX_OUTPUT_TOKENS`, `GENERATION_TOKEN_LIMIT_FIELD` | 선택적 출력 한도와 요청 필드 이름; 기본 필드 `max_completion_tokens`, 모델에 따라 `max_tokens` 선택 |
@@ -307,17 +302,17 @@ BM25 색인은 별도 테이블 없이 프로세스 메모리에 만들고, 청�
 수집·청킹·색인·검색 기능은 생성 모델 설정 없이 계속 사용할 수 있습니다.
 
 과제 PDF 2쪽의 모델 호출 안내와 [엘리스 Serverless 가이드](https://help.elice.io/help/docs/elicecloud/ml-api/serverless)를 기준으로
-`GENERATION_BASE_URL`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
+선택한 모델의 `base_url`에 `/v1`까지 지정하고 뒤에 `/chat/completions`를 붙여 호출합니다.
 [엘리스의 OpenAI 호환 호출 예시](https://elice.io/en/ax/model-library/043bad99-5529-4325-a293-1a0cfba17d94)처럼
 Bearer 인증과 `model`·`messages`·`stream=false`를 사용합니다. 모델 이름은 자동으로 선택하지 않습니다.
 이 어댑터는 OpenAI 호환 Chat Completions endpoint용이며, 다른 모델의 API 형식까지 가정하지 않습니다.
 
-모델을 선택한 뒤 `.env.dev` 또는 `.env`의 다음 세 항목을 입력합니다. 실제 키는 Git에 포함하지 않습니다.
+모델의 Base URL과 모델명은 `models.json`에, 선택한 프로필 이름과 공용 API 키는
+`.env.dev` 또는 `.env`에 설정합니다. 실제 키는 Git에 포함하지 않습니다.
 
 ```dotenv
-GENERATION_BASE_URL=https://mlapi.run/<endpoint-id>/v1
+ANSWER_MODEL_PROFILE=<models.json의 답변 모델 이름>
 ELICE_API_KEY=<발급받은 Serverless API Key>
-GENERATION_MODEL=<모델 API 패널의 model 값>
 ```
 
 모델마다 지원하는 매개변수가 다르므로 temperature와 출력 한도는 설정한 경우에만 전송합니다.
@@ -912,7 +907,6 @@ Serverless는 모델명·차원·입력 계약과 제공된 revision을 기록�
 현재 서비스 환경의 모델을 프로필로 가져오거나 JSON에 직접 추가할 수 있습니다.
 
 ```bash
-uv run --project apps/knowledge --locked python tools/models/models.py capture answer terra
 uv run --project apps/knowledge --locked python tools/models/models.py list
 uv run --project apps/knowledge --locked python tools/models/models.py select answer terra
 docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --force-recreate knowledge worker
@@ -920,7 +914,7 @@ docker compose --env-file .env.dev -f compose.yaml -f compose.dev.yaml up -d --f
 
 답변 모델은 OpenAI 호환 Chat Completions, 임베딩은 구현된 Ollama 또는 엘리스 Serverless
 어댑터를 사용합니다. 임베딩 모델 변경 시 해당 모델의 인덱스를 새로 만들어야 합니다.
-프로필의 `index_key`에 해당 인덱스를 기록하면 전환할 때 함께 선택됩니다.
+선택된 임베딩과 Corpus·청킹 정책에 맞는 인덱스를 자동으로 찾습니다.
 
 Judge 모델은 원하는 이름과 `model`, `base_url`을 JSON에 넣습니다. 공용 API 키는 환경 파일의 `ELICE_API_KEY`에 넣습니다. 아래 명령은
 선택한 여러 평가 주체를 설정하고 MLflow Gateway와 scorer에 등록합니다. 모델 추론은 호출하지

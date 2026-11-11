@@ -32,8 +32,14 @@ def test_capture_and_switch_preserves_secret_without_output(repo, capsys):
     models.capture("answer", "qwen", env, repo / ".env.models.dev")
     models.select("answer", "terra", repo / ".env.models.dev", env)
     result = dotenv_values(env)
-    assert result["GENERATION_MODEL"] == "terra"
-    assert result["GENERATION_API_KEY"] == "private-key"
+    assert result["ANSWER_MODEL_PROFILE"] == "terra"
+    assert "GENERATION_MODEL" not in result
+    assert "GENERATION_API_KEY" not in result
+    from elice_knowledge.settings import Settings
+
+    selected = Settings(_env_file=env)
+    assert selected.generation_model == "terra"
+    assert selected.generation_api_key.get_secret_value() == "private-key"
     assert "private-key" not in capsys.readouterr().out
     assert (repo / ".env.models.dev").stat().st_mode & 0o077 == 0
 

@@ -184,6 +184,20 @@ def save_env(path, values):
 def capture(kind, name, source, catalog):
     validate_name(name)
     env = dotenv_values(safe_path(source))
+    selected = env.get(
+        "ANSWER_MODEL_PROFILE" if kind == "answer" else "EMBEDDING_MODEL_PROFILE"
+    )
+    if selected:
+        source_catalog = read_catalog(env.get("MODEL_CATALOG_FILE") or "models.json")
+        existing = source_catalog[kind].get(selected)
+        if not isinstance(existing, dict):
+            raise ValueError("선택된 모델 프로필이 없습니다")
+        data = read_catalog(catalog)
+        if name in data[kind]:
+            raise ValueError("이미 등록된 이름입니다")
+        data[kind][name] = dict(existing)
+        write_catalog(catalog, data)
+        return
     if any(
         not (env.get(k) or (k.endswith("_API_KEY") and env.get("ELICE_API_KEY")))
         for k in REQUIRED[kind]
@@ -226,20 +240,11 @@ def select(kind, name, catalog, target):
         and not values.get("EMBEDDING_API_KEY")
     ):
         raise ValueError("Serverless 임베딩 키가 필요합니다")
-    optional = (
-        "GENERATION_TEMPERATURE",
-        "GENERATION_MAX_OUTPUT_TOKENS",
-        "GENERATION_TOKEN_LIMIT_FIELD",
-    )
-    unset = [k for k in optional if kind == "answer" and not values.get(k)]
-    for key in unset:
-        values.pop(key, None)
-    values = {
-        key: value for key, value in values.items() if not key.endswith("_API_KEY")
-    }
-    save_env(target, values)
+    selected = "ANSWER_MODEL_PROFILE" if kind == "answer" else "EMBEDDING_MODEL_PROFILE"
+    catalog_file = str(catalog_path(catalog).relative_to(ROOT))
+    save_env(target, {selected: name, "MODEL_CATALOG_FILE": catalog_file})
     remaining = dotenv_values(safe_path(target))
-    for key in unset:
+    for key in FIELDS[kind]:
         if key in remaining:
             unset_key(str(safe_path(target)), key)
 

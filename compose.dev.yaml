@@ -5,15 +5,21 @@ services:
     build:
       context: .
       dockerfile: apps/knowledge/Dockerfile
+    volumes:
+      - ./${MODEL_CATALOG_FILE:-models.json}:/app/models.json:ro
     environment:
       APP_ENV: dev
+      MODEL_CATALOG_FILE: /app/models.json
       EVALUATION_JUDGES_ENABLED: "true"
     depends_on:
       postgres:
         condition: service_healthy
   worker:
+    volumes:
+      - ./${MODEL_CATALOG_FILE:-models.json}:/app/models.json:ro
     environment:
       APP_ENV: dev
+      MODEL_CATALOG_FILE: /app/models.json
       EVALUATION_JUDGES_ENABLED: "true"
     depends_on:
       postgres:

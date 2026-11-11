@@ -32,3 +32,38 @@ def test_common_elice_key_configures_generation_and_serverless_embedding():
     settings = Settings(elice_api_key="shared-key", embedding_backend="elice-serverless")
     assert settings.generation_api_key.get_secret_value() == "shared-key"
     assert settings.embedding_api_key.get_secret_value() == "shared-key"
+
+
+def test_selected_models_override_environment_values(tmp_path):
+    import json
+
+    from elice_knowledge.settings import Settings
+
+    catalog = tmp_path / "models.json"
+    catalog.write_text(
+        json.dumps(
+            {
+                "answer": {"new": {"model": "chosen", "base_url": "https://example.test/v1"}},
+                "embedding": {
+                    "embed": {
+                        "backend": "elice-serverless",
+                        "model": "text-embedding-3-small",
+                        "base_url": "https://example.test/v1",
+                        "dimensions": 1536,
+                    }
+                },
+            }
+        )
+    )
+    settings = Settings(
+        model_catalog_file=catalog,
+        answer_model_profile="new",
+        embedding_model_profile="embed",
+        generation_model="stale",
+        embedding_model="stale",
+        elice_api_key="shared",
+    )
+    assert settings.generation_model == "chosen"
+    assert settings.embedding_model == "text-embedding-3-small"
+    assert settings.embedding_dimensions == 1536
+    assert settings.generation_api_key.get_secret_value() == "shared"

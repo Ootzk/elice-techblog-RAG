@@ -19,6 +19,7 @@ COPY apps/knowledge/pyproject.toml apps/knowledge/uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
 RUN python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base")'
 COPY apps/knowledge/src ./src
+COPY models.json ./models.json
 COPY corpus ./corpus
 COPY --from=web /web/build /app/web
 RUN uv sync --locked --no-dev --no-editable \
