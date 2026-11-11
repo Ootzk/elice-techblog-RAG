@@ -387,6 +387,23 @@ def test_grounding_guidance_distinguishes_no_context_from_missing_context():
     assert "제공된 자료: 1개" in present and "N/A" not in present
 
 
+def test_grounding_guidance_uses_frozen_no_context_policy():
+    from elice_reporting.agreement_sections import grounding_scope
+
+    rubric = {"applicability": {"groundedness_without_evidence": "not_applicable"}}
+    empty = grounding_scope({"generation_sources": []}, rubric=rubric).object
+    assert "근거 충실도는 N/A" in empty
+    assert "근거 충실도 0점" not in empty
+    abstained = grounding_scope(
+        {"status": "insufficient_evidence", "generation_sources": [{"text": "무관한 자료"}]},
+        rubric=rubric,
+    ).object
+    assert "근거 충실도는 N/A" in abstained
+    assert "근거 충실도 0점" not in abstained
+    old = grounding_scope({"generation_sources": []}, rubric={}).object
+    assert "근거 충실도 0점" in old
+
+
 def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context():
     from elice_reporting.agreement_sections import grounding_scope
 

@@ -33,6 +33,11 @@ def validate_rubric(rubric, kind):
         )
     ):
         raise ValueError("invalid_rubric")
+    applicability = rubric.get("applicability")
+    if applicability is not None and (
+        kind != "gold" or applicability != {"groundedness_without_evidence": "not_applicable"}
+    ):
+        raise ValueError("invalid_rubric_applicability")
     for definition in rubric["dimensions"].values():
         if (
             set(definition.get("levels", {})) != {str(s) for s in expected_scale}

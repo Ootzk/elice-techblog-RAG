@@ -74,7 +74,9 @@
 현재 Eval Harness는 사람과 모델이 같은 [gold-ordinal-v1 rubric](../../../apps/knowledge/src/elice_knowledge/data/rubrics/gold-ordinal-v1.json)으로 정확성·완전성·근거 충실도·질문 적합성을
 **0(부족)·1(부분 충족)·2(충분)**로 직접 채점한다. 모델은 Ragas DiscreteMetric을 사용한다.
 완전성은 required_points의 의미 충족을 보고 optional_points의 누락은 감점하지 않는다.
-근거 충실도는 실제 생성에 전달된 문맥만 사용한다. N/A·오류는 0점이 아니며 pass/fail 임계값은 없다.
+근거 충실도는 실제 생성에 전달된 문맥만 사용한다. 해당 문맥이 비어 있거나 답변을 유보하면 자동으로 N/A 처리한다.
+N/A는 근거가 없을 때의 환각을 측정하지 않으므로 다른 항목과 답변 내용을 함께 확인해야 한다.
+N/A·오류는 0점이 아니며 pass/fail 임계값은 없다.
 
 문항별 사실 기준은 JSONL에, 공통 항목·척도·anchor는 버전 있는 rubric 파일에 둔다.
 manifest의 default_rubric_id는 기본 기준을 가리키며 실제 채점 프로필에 rubric 원문·해시를 고정한다.

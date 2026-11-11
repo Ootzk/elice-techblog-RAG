@@ -112,7 +112,7 @@ def validate_grading(bundle, result):
         seen.add(key)
         if (
             row["status"] != "error"
-            and inapplicable(records[key[0]], cases[key[0]], key[1])
+            and inapplicable(records[key[0]], cases[key[0]], key[1], rubric=rubric)
             and row["status"] != "not_applicable"
         ) or (key[1] in {"behavior", "relevance"} and row["status"] == "not_applicable"):
             raise ValueError("grading_applicability_mismatch")

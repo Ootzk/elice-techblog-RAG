@@ -93,13 +93,41 @@ def test_model_abstention_never_returns_its_unsupported_answer():
     assert "근거 없는 내용" not in result.answer
 
 
-def test_no_sources_or_oversized_context_does_not_call_generation():
-    result, calls = ask_with_output(ANSWER, sources=[])
-    assert result.reason == "no_evidence" and calls == []
+def test_no_sources_generates_question_specific_uncertainty_without_external_claims():
+    output = {
+        "answerable": False,
+        "answer": "해당 GPU의 성능은 확인할 수 없습니다.",
+        "citations": [],
+    }
+    result, calls = ask_with_output(output, sources=[])
+    assert result.reason == "no_evidence" and len(calls) == 1
+    assert result.answer == output["answer"] and result.generation_sources == []
     result, calls = ask_with_output(
-        ANSWER, sources=[{**SOURCE, "text": "아주 긴 표 " * 5000}], qa_max_context_tokens=1024
+        output, sources=[{**SOURCE, "text": "아주 긴 표 " * 5000}], qa_max_context_tokens=1024
     )
-    assert result.reason == "context_budget" and calls == []
+    assert result.reason == "context_budget" and len(calls) == 1
+    assert result.answer == output["answer"] and result.generation_sources == []
+
+
+def test_partial_evidence_can_answer_and_explain_unknown_part():
+    output = {
+        **ANSWER,
+        "answer": "여러 작업이 GPU를 공유합니다. [1] 비용은 확인할 수 없습니다.",
+    }
+    result, calls = ask_with_output(output)
+    assert result.status == "answered" and result.answer == output["answer"]
+    assert len(result.citations) == 1
+    assert "근거가 일부만 있어도" in calls[0]["messages"][0]["content"]
+
+
+def test_false_abstention_cannot_sneak_in_citations():
+    output = {
+        "answerable": False,
+        "answer": "확인할 수 없습니다. [1]",
+        "citations": ANSWER["citations"],
+    }
+    result, _ = ask_with_output(output)
+    assert result.answer == ABSTENTION and result.citations == []
 
 
 def test_large_sources_are_skipped_without_cutting_smaller_sources():

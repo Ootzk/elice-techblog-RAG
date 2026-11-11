@@ -242,6 +242,46 @@ def test_rating_score_rejects_wrong_type_or_range(review, score):
     assert review.admin.get("/api/reviews").json()["items"][0]["completed"] == 0
 
 
+def test_no_context_requires_human_na(review):
+    from psycopg.types.json import Jsonb
+
+    from elice_knowledge.corpus import digest
+
+    bundle = deepcopy(review.bundle)
+    bundle["cases"][0]["result"]["generation_sources"] = []
+    bundle["digest"] = digest({k: v for k, v in bundle.items() if k != "digest"})
+    with review.service.connection() as conn:
+        conn.execute(
+            "UPDATE evaluation_sources SET bundle=%s WHERE run_id=%s", (Jsonb(bundle), RUN)
+        )
+    path = review.path + "/cases/0"
+    case = review.admin.get(path).json()
+    assert next(e for e in case["dimensions"] if e["dimension"] == "groundedness")["forced_na"]
+    body = submission(case)
+    body["scores"]["groundedness"].update(status="scored", score=2)
+    assert review.admin.post(path, json=body).status_code == 422
+    assert review.admin.post(path, json=submission(case)).status_code == 200
+
+
+def test_unanswerable_response_with_retrieved_context_requires_human_na(review):
+    from psycopg.types.json import Jsonb
+
+    from elice_knowledge.corpus import digest
+
+    bundle = deepcopy(review.bundle)
+    bundle["cases"][0]["result"]["status"] = "insufficient_evidence"
+    bundle["cases"][0]["result"]["answer"] = "질문에 필요한 내용을 확인할 수 없습니다."
+    bundle["digest"] = digest({k: v for k, v in bundle.items() if k != "digest"})
+    with review.service.connection() as conn:
+        conn.execute(
+            "UPDATE evaluation_sources SET bundle=%s WHERE run_id=%s", (Jsonb(bundle), RUN)
+        )
+    path = review.path + "/cases/0"
+    case = review.admin.get(path).json()
+    assert next(e for e in case["dimensions"] if e["dimension"] == "groundedness")["forced_na"]
+    assert review.admin.post(path, json=submission(case)).status_code == 200
+
+
 def test_applicability_and_csrf_are_enforced(review):
     path = review.path + "/cases/1"
     case = review.admin.get(path).json()
@@ -249,6 +289,7 @@ def test_applicability_and_csrf_are_enforced(review):
     assert {e["dimension"] for e in case["dimensions"] if e["forced_na"]} == {
         "correctness",
         "completeness",
+        "groundedness",
     }
     body["scores"]["correctness"].update(status="scored", score=2)
     assert review.admin.post(path, json=body).status_code == 422
