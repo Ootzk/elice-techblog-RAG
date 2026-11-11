@@ -1,5 +1,6 @@
 """Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -27,6 +28,14 @@ SCORER = {
     "version": 2,
 }
 SCORER_KEY = digest(SCORER)
+
+
+def parallel_records(records, run):
+    """Yield completed independent records with their original positions."""
+    with ThreadPoolExecutor(max_workers=min(len(records), 32)) as pool:
+        futures = {pool.submit(run, record): i for i, record in enumerate(records)}
+        for future in as_completed(futures):
+            yield futures[future], future.result()
 
 
 def dataset_snapshot(settings, dataset_id):
@@ -197,28 +206,32 @@ def run_evaluation(store, job):
             tracking.log_param(run_id, f"prompt.{name}.digest", prompt["digest"])
             # Server-local lineage; the digest identifies the prompt across servers.
             tracking.link_prompt_version_to_run(run_id, prompt["uri"])
-        cases = []
-        for record in evaluation["records"]:
-            store.heartbeat(job, f"evaluating:{len(cases)}/{len(evaluation['records'])}")
+        records = evaluation["records"]
+        cases = [None] * len(records)
+
+        def execute_record(record):
             output = execute(store, evaluation["profile_key"], **record["inputs"], mode="offline")
             scores = score(output["result"], record["expectations"]) if not output["error"] else {}
-            case = {"record_id": record["id"], **output, "scores": scores}
+            return {"record_id": record["id"], **output, "scores": scores}
+
+        for completed, (index, case) in enumerate(parallel_records(records, execute_record), 1):
             with store.connection() as conn:
                 conn.execute(
                     """INSERT INTO evaluation_cases
-                    (evaluation_id,record_id,run_id,status,result,scores,error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        (evaluation_id,record_id,run_id,status,result,scores,error)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                     (
                         job["id"],
-                        record["id"],
-                        output["run_id"],
-                        "failed" if output["error"] else "completed",
-                        Jsonb(output),
-                        Jsonb(scores),
-                        output["error"],
+                        case["record_id"],
+                        case["run_id"],
+                        "failed" if case["error"] else "completed",
+                        Jsonb({k: v for k, v in case.items() if k not in {"record_id", "scores"}}),
+                        Jsonb(case["scores"]),
+                        case["error"],
                     ),
                 )
-            cases.append(case)
+            cases[index] = case
+            store.heartbeat(job, f"evaluating:{completed}/{len(records)}")
         failed = sum(bool(c["error"]) for c in cases)
         bundle = create_bundle(run_id, evaluation, profile, cases)
         tracking.log_dict(run_id, bundle, "evaluation-bundle.json")
