@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -78,6 +79,42 @@ def doctor(env_file, catalog):
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def init_environment(env_file, kind):
+    import secrets
+
+    models = models_module()
+    target = models.safe_path(env_file)
+    if target.exists():
+        raise ValueError("환경 파일이 이미 있습니다")
+    source = ROOT / (".env.dev.example" if kind == "dev" else ".env.example")
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as out:
+            out.write(source.read_text())
+        values = {
+            "KNOWLEDGE_ENV_FILE": str(target.relative_to(ROOT)),
+            "ADMIN_ACCESS_CODE": secrets.token_urlsafe(32),
+            "AUTH_SESSION_SECRET": secrets.token_urlsafe(48),
+            "EVALUATION_API_TOKEN": secrets.token_urlsafe(32),
+        }
+        if kind == "dev":
+            password = secrets.token_urlsafe(24)
+            values.update(
+                {
+                    "POSTGRES_PASSWORD": password,
+                    "DATABASE_URL": f"postgresql://knowledge:{password}@postgres:5432/knowledge",
+                    "RAG_HOST_DATABASE_URL": f"postgresql://knowledge:{password}@127.0.0.1:5432/knowledge",
+                }
+            )
+        models.save_env(target, values)
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    print(
+        "환경 파일을 만들었습니다. 비밀값은 출력하지 않으며 ELICE_API_KEY와 MLflow 접속을 입력하세요."
+    )
+
+
 def setup(args):
     models = models_module()
     env = environment(args.env_file)
@@ -109,6 +146,16 @@ def setup(args):
             raise ValueError(f"judge/{name}: 등록된 프로필이 없습니다")
     if not args.experiment.strip():
         raise ValueError("실험 이름이 필요합니다")
+    if not env.get("ELICE_API_KEY"):
+        if not sys.stdin.isatty():
+            raise ValueError("환경 파일에 ELICE_API_KEY가 필요합니다")
+        from getpass import getpass
+
+        key = getpass("Elice Serverless API 키 (입력 내용 숨김): ")
+        if not key.strip():
+            raise ValueError("API 키가 비어 있습니다")
+        models.save_env(args.env_file, {"ELICE_API_KEY": key})
+        env["ELICE_API_KEY"] = key
     # Validate everything we can before modifying the service configuration.
     for kind, name in (("answer", args.answer), ("embedding", args.embedding)):
         profile = models.resolve_profile(data, kind, name, env)
@@ -250,13 +297,190 @@ def stop_mlflow():
     print("로컬 MLflow 서버를 종료했습니다. 데이터는 보존됩니다.")
 
 
+def list_datasets(env_file):
+    from elice_knowledge.settings import Settings
+    from elice_knowledge.tracking import client
+
+    os.environ.update(environment(env_file))
+    settings = Settings()
+    tracking = client(settings)
+    experiment = tracking.get_experiment_by_name(settings.qa_mlflow_experiment_name)
+    if experiment is None:
+        raise ValueError("설정된 MLflow 실험이 없습니다")
+    datasets = tracking.search_datasets(experiment_ids=[experiment.experiment_id])
+    print(
+        json.dumps(
+            [{"name": item.name, "dataset_id": item.dataset_id} for item in datasets],
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def create_agreement(args):
+    import re
+
+    from elice_knowledge.settings import Settings
+    from elice_knowledge.tracking import client
+
+    if not re.fullmatch(r"[a-f0-9]{32}", args.answers_run_id):
+        raise ValueError("답변 Run ID가 올바르지 않습니다")
+    env = environment(args.env_file)
+    os.environ.update(env)
+    tracking = client(Settings())
+    answers = tracking.get_run(args.answers_run_id)
+    if (
+        answers.info.status != "FINISHED"
+        or answers.data.tags.get("evaluation.kind") != "answers"
+    ):
+        raise ValueError("완료된 answers Run이 필요합니다")
+    runs = tracking.search_runs(
+        [answers.info.experiment_id],
+        filter_string=f"tags.`source_run_id` = '{args.answers_run_id}' and tags.`evaluation.kind` = 'grading'",
+        max_results=1000,
+        order_by=["attributes.start_time ASC"],
+    )
+    if len(runs) >= 1000:
+        raise ValueError(
+            "채점 Run이 너무 많습니다. review 명령으로 명시적으로 선택하세요"
+        )
+    matches = [
+        r
+        for r in runs
+        if r.info.status == "FINISHED"
+        and (not args.rater or r.data.tags.get("rater_id") in args.rater)
+        and (not args.round or r.data.tags.get("round") in {str(n) for n in args.round})
+    ]
+    if not matches:
+        raise ValueError("조건에 맞는 완료된 채점 Run이 없습니다")
+    if args.rater and set(args.rater) != {r.data.tags.get("rater_id") for r in matches}:
+        raise ValueError("지정한 평가자 중 조건에 맞는 완료된 채점 Run이 없습니다")
+    command = [
+        "tools/evaluation/review.py",
+        "agreement",
+        "--source-run-id",
+        args.answers_run_id,
+        "--output-dir",
+        args.output_dir,
+    ]
+    for item in matches:
+        command += ["--grading-run-id", item.info.run_id]
+    if args.log:
+        command.append("--log")
+    print(f"완료된 채점 {len(matches)}회를 사용합니다.", flush=True)
+    run(command, env)
+
+
+def list_runs(env_file, kind, limit):
+    from datetime import datetime
+
+    from elice_knowledge.settings import Settings
+    from elice_knowledge.tracking import client
+
+    os.environ.update(environment(env_file))
+    settings = Settings()
+    tracking = client(settings)
+    experiment = tracking.get_experiment_by_name(settings.qa_mlflow_experiment_name)
+    if experiment is None:
+        raise ValueError("설정된 MLflow 실험이 없습니다")
+    if not 1 <= limit <= 200:
+        raise ValueError("조회 개수는 1부터 200까지 가능합니다")
+    filter_string = f"tags.`evaluation.kind` = '{kind}'" if kind else ""
+    runs = tracking.search_runs(
+        [experiment.experiment_id],
+        filter_string=filter_string,
+        max_results=limit,
+        order_by=["attributes.start_time DESC"],
+    )
+    result = []
+    for run in runs:
+        result.append(
+            {
+                "run_id": run.info.run_id,
+                "kind": run.data.tags.get("evaluation.kind"),
+                "name": run.data.tags.get("mlflow.runName"),
+                "status": run.info.status,
+                "source_run_id": run.data.tags.get("source_run_id"),
+                "started_at": datetime.fromtimestamp(
+                    run.info.start_time / 1000, tz=UTC
+                ).isoformat()
+                if run.info.start_time
+                else None,
+            }
+        )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def manage_service(env_file, action):
+    """Run the project Compose lifecycle without touching shared MLflow."""
+    env = environment(env_file)
+    compose = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(models_module().safe_path(env_file)),
+        "-f",
+        "compose.yaml",
+    ]
+    development = env.get("APP_ENV", "prod") == "dev"
+    if development:
+        compose += ["-f", "compose.dev.yaml"]
+
+    def execute(*arguments):
+        subprocess.run(compose + list(arguments), cwd=ROOT, env=env, check=True)
+
+    if action == "init-db":
+        if development:
+            execute("up", "-d", "--wait", "postgres")
+            execute("build", "knowledge")
+        execute(
+            "run",
+            "--rm",
+            "--no-deps",
+            "knowledge",
+            "python",
+            "-m",
+            "elice_knowledge",
+            "init-db",
+        )
+    elif action == "start":
+        execute(
+            "up",
+            "-d",
+            *(["--build"] if development else ["--no-build"]),
+            "knowledge",
+            "worker",
+        )
+    elif action == "stop":
+        execute("stop", "knowledge", "worker")
+    else:
+        execute("ps")
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--env-file", default=".env.dev")
     p.add_argument("--catalog", default="models.json")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
+    init = sub.add_parser("init-env")
+    init.add_argument("--kind", choices=("dev", "prod"), default="dev")
+    sub.add_parser("datasets")
+    agreement = sub.add_parser("agreement")
+    agreement.add_argument("--answers-run-id", required=True)
+    agreement.add_argument("--output-dir", required=True)
+    agreement.add_argument("--rater", action="append")
+    agreement.add_argument("--round", type=int, action="append")
+    agreement.add_argument("--log", action="store_true")
+    runs = sub.add_parser("runs")
+    runs.add_argument(
+        "--kind",
+        choices=("answers", "grading", "agreement", "repeatability", "comparison"),
+    )
+    runs.add_argument("--limit", type=int, default=20)
     sub.add_parser("mlflow-stop")
+    service = sub.add_parser("serve")
+    service.add_argument("action", choices=("init-db", "start", "stop", "status"))
     report = sub.add_parser("report")
     report.add_argument("kind", choices=("agreement", "repeatability", "comparison"))
     report.add_argument("--run-id", required=True)
@@ -280,6 +504,8 @@ def main():
         "review",
         "repeatability",
         "comparison",
+        "comparison-agreement",
+        "judge",
     ):
         x = sub.add_parser(name)
         x.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -292,6 +518,8 @@ def main():
         "review",
         "repeatability",
         "comparison",
+        "comparison-agreement",
+        "judge",
     }
     raw = sys.argv[1:]
     index = next(
@@ -309,10 +537,20 @@ def main():
         args = p.parse_args(raw[: index + 1])
         args.arguments = raw[index + 1 :]
     try:
-        if args.command == "doctor":
+        if args.command == "init-env":
+            init_environment(args.env_file, args.kind)
+        elif args.command == "doctor":
             doctor(args.env_file, args.catalog)
+        elif args.command == "datasets":
+            list_datasets(args.env_file)
+        elif args.command == "runs":
+            list_runs(args.env_file, args.kind, args.limit)
+        elif args.command == "agreement":
+            create_agreement(args)
         elif args.command == "setup":
             setup(args)
+        elif args.command == "serve":
+            manage_service(args.env_file, args.action)
         elif args.command == "mlflow-start":
             serve_mlflow(args)
         elif args.command == "mlflow-stop":
@@ -355,6 +593,8 @@ def main():
                 "review": ["tools/evaluation/review.py"],
                 "repeatability": ["tools/evaluation/repeatability.py"],
                 "comparison": ["tools/evaluation/compare_repeated.py"],
+                "comparison-agreement": ["tools/evaluation/compare.py"],
+                "judge": ["tools/evaluation/judges.py"],
             }
             run(commands[args.command] + args.arguments, env)
     except ValueError as exc:

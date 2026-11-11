@@ -931,39 +931,54 @@ models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway�
 
 #### 운영 명령
 
-`tools/operations/rag.py`는 모델·Dataset·Prompt·평가의 기존 명령을 한곳에서 실행합니다.
-공용 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 한 번 적습니다. 모델 JSON에는
-모델명과 접속 주소 등만 적고 키는 넣지 않습니다.
+`./tools/operations/rag`는 설치부터 Corpus 처리·평가·보고서까지 기존 기능을 한곳에서 실행합니다.
+실제 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 넣습니다. 모델명과 주소는
+[models.json](models.json)에서 관리하며, CLI의 `--env-file`로 dev·prod 환경을 선택합니다.
+
+새 개발 환경에서는 다음 순서로 준비합니다. 이미 환경 파일이 있으면 `init-env`는 생략합니다.
 
 ```bash
-# 모델 선택과 원하는 MLflow 실험 이름을 대화식으로 입력
-uv run --project apps/knowledge --locked python tools/operations/rag.py setup
-uv run --project apps/knowledge --locked python tools/operations/rag.py doctor
-
-# 기존 명령을 같은 진입점에서 사용
-uv run --project apps/knowledge --locked python tools/operations/rag.py model list
-uv run --project apps/knowledge --locked python tools/operations/rag.py corpus --help
-uv run --project apps/knowledge --locked python tools/operations/rag.py evaluate --help
+# 환경 파일과 로그인·DB용 비밀값을 생성합니다. 기존 파일은 덮어쓰지 않습니다.
+./tools/operations/rag init-env
+# .env.dev에 ELICE_API_KEY와 MLFLOW_TRACKING_URI를 입력합니다.
+# 로컬 MLflow가 필요하면 MLFLOW_CRYPTO_KEK_PASSPHRASE도 넣고 실행합니다.
+./tools/operations/rag mlflow-start --configure
+./tools/operations/rag setup                 # 모델과 실험 이름을 대화식 선택
+./tools/operations/rag serve init-db
+./tools/operations/rag serve start
+./tools/operations/rag doctor
 ```
 
-설정된 MLflow 서버에 선택한 Judge endpoint와 scorer, Dataset, Prompt를 등록하며 설정 자체는
-유료 추론을 호출하지 않습니다. 설치 후 Compose로 Knowledge와 worker를 재생성해야 새 설정이
-반영됩니다. 같은 이름의 endpoint가 이미 있다면 모델과 주소를 비교합니다. 저장된 키는 다시
-읽을 수 없어 일치 여부를 검증하지 못합니다. 키 변경은 MLflow에서 따로 처리해야 합니다.
-
-개발용 MLflow가 없다면 `.env.dev`의 `MLFLOW_CRYPTO_KEK_PASSPHRASE`를 별도 비밀값으로 설정하고
-아래 명령으로 로컬 서버를 실행할 수 있습니다. 이 서버는 `data/mlflow-local/`의 SQLite와 artifact
-저장소를 사용하며, 종료해도 데이터가 남습니다. `--configure`를 지정하면 호스트용 `RAG_HOST_MLFLOW_TRACKING_URI`와 컨테이너용
-`MLFLOW_TRACKING_URI`를 각각 설정합니다. 컨테이너와 호스트가 같은 DB에 접근하려면 호스트 CLI용
-`RAG_HOST_DATABASE_URL`도 설정합니다. 이 로컬 구성은 제출용 클라우드의 PostgreSQL 기반
-MLflow와 구분합니다.
+환경 생성 시 관리자 로그인 코드·세션 비밀값·평가 API 토큰은 `.env.dev`에 생성하며 화면에
+출력하지 않습니다. 생성된 관리자 코드는 해당 파일에서 확인합니다. 기존 MLflow를 사용하면
+`mlflow-start`는 생략합니다. 로컬 MLflow는 SQLite·artifact를 `data/mlflow-local/`에 보존하고
+`mlflow-stop`으로 종료합니다. 제출 환경의 PostgreSQL 기반 MLflow와는 별도입니다.
 
 ```bash
-uv run --project apps/knowledge --locked python tools/operations/rag.py mlflow-start --port 5000 --configure
-uv run --project apps/knowledge --locked python tools/operations/rag.py mlflow-stop
+# Corpus 수집·청킹·색인. 청킹 결과의 policy_key를 사용합니다.
+./tools/operations/rag corpus ingest
+./tools/operations/rag corpus chunk
+./tools/operations/rag corpus index --policy-key '<policy-key>'
+
+# Dataset과 Run을 찾고 평가·보고서를 만듭니다.
+./tools/operations/rag datasets
+./tools/operations/rag evaluate --dataset-id '<dataset-id>' --submit --wait
+./tools/operations/rag runs --kind answers
+./tools/operations/rag agreement --answers-run-id '<answers-run-id>' --output-dir artifacts/evaluation/agreement --log
+./tools/operations/rag runs --kind agreement
+./tools/operations/rag report agreement --run-id '<agreement-run-id>' --output artifacts/reports/agreement.html
 ```
 
-`--env-file .env --catalog models.json`을 지정해 다른 환경을 선택할 수 있습니다.
+평가 `--submit`과 색인은 유료 모델 호출이 발생할 수 있습니다. `agreement`는 완료된 채점
+전체를 기본으로 모으며 `--rater`, `--round`로 제한할 수 있습니다. 반복성·비교는 각각
+`repeatability`, `comparison` 명령을 사용하고, 기존 Agreement 단위 비교는
+`comparison-agreement`를 사용합니다. `report`는 Agreement·Repeatability·Comparison 중 하나를
+선택합니다. 자세한 옵션은 각 명령의 `--help`에서 확인합니다.
+
+설정 시 기존 MLflow endpoint의 모델과 주소를 비교합니다. 저장된 키는 다시 읽을 수 없어 일치
+여부를 확인하지 못하며, 키 변경은 MLflow에서 따로 처리해야 합니다. `serve stop`은 Knowledge와
+worker만 멈추고 DB와 공용 MLflow 데이터는 유지합니다. prod에서는
+`--env-file .env`와 `init-env --kind prod`를 사용합니다.
 
 #### 모델 실행 옵션
 
