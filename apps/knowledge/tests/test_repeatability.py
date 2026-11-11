@@ -330,3 +330,33 @@ def test_different_grading_round_counts_are_kept_with_distinct_denominators():
     ]
     assert [row["attempts"] for row in chatgpt] == [8, 4]
     assert [row["boundaries"]["sufficient"]["denominator"] for row in chatgpt] == [8, 4]
+
+
+def test_tool_counts_are_derived_from_reconciled_agent_steps():
+    from elice_knowledge.performance import tool_counts
+
+    result = {
+        "tool_call_count": 3,
+        "agent_steps": [
+            {"action": "keyword_search"},
+            {"action": "meaning_search", "error": "failed"},
+            {"action": "meaning_search"},
+            {"action": "answer"},
+        ],
+    }
+    assert tool_counts(result) == {"keyword_search": 1, "meaning_search": 2}
+    snapshot = {
+        "bundle": {
+            "cases": [{"record_id": "q1", "error": None, "result": result, "duration_ms": 10}]
+        }
+    }
+    rows = {row["metric"]: row for row in resource_levels([snapshot], ["q1"])}
+    assert rows["tool_calls.keyword_search"]["mean"] == 1
+    assert rows["tool_calls.meaning_search"]["mean"] == 2
+    assert rows["tool_call_count"]["mean"] == 3
+    assert tool_counts({"tool_call_count": 1, "agent_steps": []}) is None
+    assert tool_counts({"tool_call_count": 0}) is None
+    assert tool_counts({"tool_call_count": 0, "agent_steps": []}) == {
+        "keyword_search": 0,
+        "meaning_search": 0,
+    }

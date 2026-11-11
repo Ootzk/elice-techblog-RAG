@@ -371,13 +371,13 @@ def test_efficiency_view_shows_measured_judge_round_and_question(tmp_path):
     ]
     assert any("3.0초" in source.get("text", []) for source in sources)
     assert any("1.5초" in source.get("text", []) for source in sources)
-    assert any("14 토큰" in source.get("text", []) for source in sources)
+    assert any("14" in source.get("text", []) for source in sources)
     assert not view.select(pn.pane.HTML)
     path = export_html(view, tmp_path / "efficiency.html", title="efficiency")
     assert path.is_file()
 
 
-def test_efficiency_graph_weights_answers_equally_and_keeps_rounds():
+def test_efficiency_graph_weights_answers_equally_without_individual_points():
     from elice_reporting.efficiency_sections import _call_value, _chart
 
     points = [
@@ -388,9 +388,28 @@ def test_efficiency_graph_weights_answers_equally_and_keeps_rounds():
     pane = _chart([{"label": "Judge", "points": points}], "초", "시간", repeat=True)
     sources = [r.data_source.data for r in pane.object.renderers if hasattr(r, "data_source")]
     assert sources[0]["value"] == [0.75]
-    assert sources[1]["value"] == [0.0, 1.0, 1.0]
+    assert len(sources) == 1
     assert (
         _call_value([{"input_tokens": 2}, {"input_tokens": None}], "input_tokens", "토큰")[0]
         is None
     )
     assert _call_value([{"input_tokens": 0}], "input_tokens", "토큰")[0] == 0
+
+
+def test_efficiency_tool_counts_reconcile_steps():
+    from elice_reporting.stacked_efficiency import tool_counts as _tool_counts
+
+    result = {
+        "tool_call_count": 2,
+        "agent_steps": [
+            {"action": "keyword_search"},
+            {"action": "meaning_search", "error": "failed"},
+            {"action": "answer"},
+        ],
+    }
+    assert _tool_counts(result) == {"keyword_search": 1, "meaning_search": 1}
+    assert _tool_counts({"tool_call_count": 1, "agent_steps": []}) is None
+    assert _tool_counts({"tool_call_count": 0, "agent_steps": []}) == {
+        "keyword_search": 0,
+        "meaning_search": 0,
+    }

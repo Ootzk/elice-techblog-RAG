@@ -8,6 +8,8 @@ from numbers import Real
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA
+from elice_knowledge.performance import tool_counts
+from elice_knowledge.tools import TOOL_NAMES
 
 CONTRACT = "repeatability-v1"
 MODEL_MEAN = "aggregate:models"
@@ -21,7 +23,12 @@ def resource_levels(snapshots, record_ids):
         "output_tokens": "completion_tokens",
         "total_tokens": "total_tokens",
     }
-    metrics = ("qa_duration_ms", *fields)
+    metrics = (
+        "qa_duration_ms",
+        *fields,
+        "tool_call_count",
+        *(f"tool_calls.{t}" for t in TOOL_NAMES),
+    )
     result = []
     for record_id in record_ids:
         for metric in metrics:
@@ -30,11 +37,20 @@ def resource_levels(snapshots, record_ids):
                 case = next(c for c in snapshot["bundle"]["cases"] if c["record_id"] == record_id)
                 if case["error"]:
                     continue
-                value = (
-                    case.get("duration_ms")
-                    if metric == "qa_duration_ms"
-                    else ((case.get("result") or {}).get("usage") or {}).get(fields[metric])
-                )
+                answer = case.get("result") or {}
+                if metric == "qa_duration_ms":
+                    value = case.get("duration_ms")
+                elif metric == "tool_call_count" or metric.startswith("tool_calls."):
+                    counts = tool_counts(answer)
+                    value = (
+                        None
+                        if counts is None
+                        else sum(counts.values())
+                        if metric == "tool_call_count"
+                        else counts[metric.removeprefix("tool_calls.")]
+                    )
+                else:
+                    value = (answer.get("usage") or {}).get(fields[metric])
                 if isinstance(value, Real) and not isinstance(value, bool) and isfinite(value):
                     values.append(value)
             result.append(

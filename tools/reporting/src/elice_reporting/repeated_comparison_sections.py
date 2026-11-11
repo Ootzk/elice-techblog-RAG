@@ -24,6 +24,7 @@ from .agreement_visuals import agreement_subjects
 from .comparison_sections import _ab_table, _rows, _selector, _settings
 from .conditions import condition_sections
 from .presentation import metric_label, model_name
+from .stacked_efficiency import paired_answer_groups, stack_chart
 
 BOUNDARIES = {
     "partial_or_better": "부분 충족 이상 · 1점 또는 2점",
@@ -193,6 +194,11 @@ def metric_guide(data):
                     "답변 시간·토큰",
                     "성공한 답변의 질문별 시행 평균을 구하고, 양쪽에서 측정된 질문을 같은 비중으로 "
                     "평균합니다. 캐시 입력은 입력 토큰에 포함되며 미기록 값과 실패는 제외합니다.",
+                ),
+                (
+                    "검색 도구 호출",
+                    "성공한 답변의 질문당 키워드·의미 검색 횟수입니다. 실패한 도구 호출도 세며, "
+                    "단계 기록이 총 호출 수와 다르면 미기록으로 처리합니다.",
                 ),
                 (
                     "표본 범위",
@@ -436,8 +442,15 @@ def efficiency_view(data):
         "cached_input_tokens": "캐시 입력 토큰",
         "output_tokens": "출력 토큰",
         "total_tokens": "전체 토큰",
+        "tool_call_count": "검색 도구 전체 호출",
+        "tool_calls.keyword_search": "키워드 검색 호출",
+        "tool_calls.meaning_search": "의미 검색 호출",
     }
     unavailable = [labels[key] for key, row in rows.items() if not row["paired_questions"]]
+    sources = {
+        "A": data.inputs["baseline"]["inputs"]["agreements"],
+        "B": data.inputs["candidate"]["inputs"]["agreements"],
+    }
 
     def chart(items, title, divisor, suffix):
         available = [(metric, label, rows[metric]) for metric, label in items if metric in rows]
@@ -533,21 +546,14 @@ def efficiency_view(data):
 
     return pn.Column(
         chart([("qa_duration_ms", "답변 시간")], "성공한 답변의 평균 소요 시간", 1000, "초"),
-        chart(
-            [
-                ("input_tokens", "입력"),
-                ("cached_input_tokens", "캐시 입력"),
-                ("output_tokens", "출력"),
-                ("total_tokens", "전체"),
-            ],
-            "성공한 답변의 평균 토큰 사용량",
-            1,
-            "",
-        ),
+        stack_chart(paired_answer_groups(sources, "tokens"), "tokens", "질문당 토큰 사용량"),
+        stack_chart(paired_answer_groups(sources, "tools"), "tools", "질문당 검색 도구 호출"),
         pn.pane.Markdown(
             "양쪽에서 측정된 질문만 비교하며, 각 질문의 답변 시행 평균을 같은 비중으로 합산합니다. "
             "관측한 문항과 시행 수는 막대에 마우스를 올리면 확인할 수 있습니다. "
-            "캐시 입력은 입력 토큰에 포함됩니다. 실패한 답변과 미기록 값은 제외합니다."
+            "캐시 입력은 입력 토큰에 포함되며 —은 캐시 미기록입니다. "
+            "답변 생성이 실패한 문항과 미기록 값은 "
+            "제외합니다. 검색 도구 호출에는 실패한 도구 호출도 포함합니다."
         ),
         pn.pane.Markdown("공통 측정값 없음: " + ", ".join(unavailable) if unavailable else ""),
         sizing_mode="stretch_width",
