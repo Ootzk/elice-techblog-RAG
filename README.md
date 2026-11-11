@@ -184,7 +184,7 @@ DB의 실행 이력은 별도로 유지됩니다. 보고서에는 원문이나 �
 `CRAWL_RETRIES`(2), `CRAWL_MAX_PAGES`(100), `CORPUS_MIN_DOCUMENTS`(20)로 조정합니다.
 컨테이너의 기본 보고서 디렉터리는 `/artifacts/ingest`이며 `INGEST_REPORT_DIR`로 변경할 수 있습니다.
 Ingest는 Embedding·MLflow를 호출하지 않습니다. CI에서는 임시 PostgreSQL 스키마로 저장·롤백·스냅샷을
-검사하며, 실제 사이트 수집은 CI에서 실행하지 않습니다.
+검사합니다. 별도의 Full integration test에서는 실제 사이트의 고정 문서 1개를 수집합니다.
 
 스냅샷 ID는 URL과 추출 문서 버전 집합으로 계산합니다.
 
@@ -930,6 +930,13 @@ models.json`을 사용하고 `--enable-dev`를 생략합니다. MLflow Gateway�
 필요합니다. 재채점 시 `--model-rater <이름>`을 반복 지정하면 선택된 Judge 중 일부만 사용할 수 있습니다.
 
 #### 운영 명령
+
+GitHub Actions의 `Full integration test`는 `release/* → main` PR에서 자동 실행하며 수동 실행도 가능합니다.
+저장소 Secret `ELICE_API_KEY`가 필요합니다. 일반 feature PR에서는 실행하지 않습니다.
+빈 PostgreSQL과 임시 MLflow에서 고정 문서 1개를 수집·임베딩하고 Gold 1문항과 세 Judge를
+실제로 호출한 뒤 Agreement HTML을 artifact로 저장합니다. 실행마다 API 비용이 발생하며,
+점수보다 설치·호출·저장 성공을 확인하는 검사입니다. MLflow 데이터는 job 종료 후 사라집니다.
+워크플로가 기본 브랜치에 존재해야 GitHub에서 수동 실행할 수 있습니다.
 
 `./tools/operations/rag`는 설치부터 Corpus 처리·평가·보고서까지 기존 기능을 한곳에서 실행합니다.
 실제 API 키는 Git에서 제외된 환경 파일의 `ELICE_API_KEY`에 넣습니다. 모델명과 주소는
