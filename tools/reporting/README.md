@@ -1,6 +1,6 @@
 # Evaluation Reporting
 
-MLflow analysis·repeatability·comparison run에 저장된 값·rubric·질문·답변·문맥·사유를 Notebook과
+MLflow agreement·repeatability·comparison run에 저장된 값·rubric·질문·답변·문맥·사유를 Notebook과
 hvPlot/Bokeh로 표시하고 Panel 독립 HTML로 export한다. 평가 점수를 재계산하거나 해석을 생성하지 않는다.
 Knowledge와 별도 Python 환경으로 사용하며 서버·DB를 배포하지 않는다.
 
@@ -10,7 +10,7 @@ Knowledge와 별도 Python 환경으로 사용하며 서버·DB를 배포하지 
 
 ```bash
 uv sync --project tools/reporting --locked
-cp tools/reporting/notebooks/templates/analysis.ipynb tools/reporting/notebooks/reports/my-analysis.ipynb
+cp tools/reporting/notebooks/templates/agreement.ipynb tools/reporting/notebooks/reports/my-agreement.ipynb
 uv run --project tools/reporting --env-file .env.dev jupyter lab
 ```
 
@@ -19,7 +19,7 @@ VS Code에서는 `tools/reporting/.venv/bin/python`을 커널로 선택하고 ML
 
 | 템플릿 | 입력 | 표시 내용 |
 | --- | --- | --- |
-| analysis.ipynb | 완료된 analysis run | 평가 조건·평가 주체·rubric·가중 κ·문항별 등급·사유·문맥 |
+| agreement.ipynb | 완료된 agreement run | 평가 조건·평가 주체·rubric·가중 κ·문항별 등급·사유·문맥 |
 | repeatability.ipynb | 같은 조건의 완료된 repeatability run | 평가 조건·시행 간 Wasserstein 변화폭·문항별 경계 충족률 히트맵 |
 | comparison.ipynb | 완료된 comparison run | 조건 차이·공통 관측의 등급/자원 변화·구간·정합성 차이·A/B 답변 |
 
@@ -29,7 +29,7 @@ VS Code에서는 `tools/reporting/.venv/bin/python`을 커널로 선택하고 ML
 SOURCE_MODE = "mlflow"
 RUN_ID = "완료된-run-id"
 REPORT_TITLE = "실험 제목"
-OUTPUT_HTML = ROOT / "artifacts/reports/my-analysis.html"
+OUTPUT_HTML = ROOT / "artifacts/reports/my-agreement.html"
 ```
 
 RUN_ID를 비우면 최근 완료 run 목록을 표시한다. 기본은 실제 MLflow이며 `demo`는 명시적으로 선택한다.
@@ -37,21 +37,21 @@ RUN_ID를 비우면 최근 완료 run 목록을 표시한다. 기본은 실제 M
 `import mlflow`·`mlflow.MlflowClient()`로 추가 조회할 수 있다.
 
 ```python
-from elice_reporting import from_mlflow, analysis_frames
+from elice_reporting import from_mlflow, agreement_frames
 
-data = from_mlflow("analysis", RUN_ID, ROOT / "artifacts/reports/cache")
-frames = analysis_frames(data)
+data = from_mlflow("agreement", RUN_ID, ROOT / "artifacts/reports/cache")
+frames = agreement_frames(data)
 ```
 
 로더는 읽기·다운로드만 한다. run 생성·Judge 호출·평가 재실행·업로드는 하지 않는다.
-answers는 evaluation-v1, grading·analysis·repeatability·comparison은 evaluation-v2, 채점은 rubric-v1을 요구한다.
+answers는 evaluation-v1, grading·agreement·repeatability·comparison은 evaluation-v2, 채점은 rubric-v1을 요구한다.
 rubric·입력·프로필 hash를 확인하며 이전 이진 계약은 거부한다. 형식 변환·호환 코드는 유지하지 않는다.
-실제 새 등급으로 재채점·사람 검수가 끝난 analysis가 있어야 실제 보고서를 만들 수 있다.
-`synthetic_grading_run_ids`가 있는 개발용 analysis에는 모의 검수 경고를 표시하고,
+실제 새 등급으로 재채점·사람 검수가 끝난 agreement가 있어야 실제 보고서를 만들 수 있다.
+`synthetic_grading_run_ids`가 있는 개발용 agreement에는 모의 검수 경고를 표시하고,
 해당 grading의 `review.provenance=synthetic` 태그를 읽어 평가자 범례에도 구분한다.
 
 로컬 모드는 `SOURCE_MODE="local"`과 LOCAL_REPORT·LOCAL_INPUTS를 설정한다.
-comparison은 comparison-result.json·comparison-inputs.json을 사용한다. analysis는 agreement.json과
+comparison은 comparison-result.json·comparison-inputs.json을 사용한다. agreement는 agreement.json과
 `{"bundle": <answers bundle>, "gradings": <grading manifest 목록>}`을 사용하며 profiles에
 프로필 hash→원문을 선택적으로 포함한다. 다운로드한 data.report·data.inputs도 저장해 사용할 수 있다.
 repeatability는 repeatability-result.json·repeatability-inputs.json을 사용한다.
@@ -63,7 +63,7 @@ repeatability는 repeatability-result.json·repeatability-inputs.json을 사용�
 전체 항목 평균 열 앞과 전체 문항 평균 행 위에 점선을 그어 원래 항목·문항과 구분한다.
 개별 질문 선택 시 평균 행의 점선은 표시하지 않는다.
 answers별 상세 등급과 사유는 평가 조건에 있는
-원본 analysis 링크에서 확인한다. 같은 정보를 answers별 행렬로 다시 표시하지 않는다.
+원본 agreement 링크에서 확인한다. 같은 정보를 answers별 행렬로 다시 표시하지 않는다.
 문항별 품질 수준 히트맵은 repeatability 결과에 저장된 시행 평균 충족률을 보여준다. 같은 답변의
 grading 반복은 시행별 충족률을 만드는 데 쓰고, 서로 다른 answers 시행은 동일 가중치로 평균한다.
 개별 주체는 평가 항목별로 분리하고 유효 answers 시행 수와 유효 채점 수를 함께 표시한다.
@@ -76,21 +76,21 @@ grading 반복은 시행별 충족률을 만드는 데 쓰고, 서로 다른 ans
 경계 판정을 0/1로 바꾼
 Bernoulli 분포의 1차 Wasserstein 거리 `W₁ = |p_i-p_j|`를 닫힌식으로 계산한 값이다. Gold의 두 경계는 각각 `%p` 단위의
 전체값과 평가 주체·항목별 값을 보여준다. 유효 등급이 없는 시행 쌍은 비교 가능 건수에서 제외한다.
-지표 정의와 판정 기준은 입력 analysis의 rubric snapshot을 그대로 읽고, 경계 충족률·평균 변화폭의
+지표 정의와 판정 기준은 입력 agreement의 rubric snapshot을 그대로 읽고, 경계 충족률·평균 변화폭의
 계산 단위와 제외 규칙을 별도 표·설명으로 표시한다. 합격 임계값은 설정하지 않는다.
 평가 조건의 주체별 표에는 시행마다 grading run 횟수·채점 가능 문항 수·항목당/전체 판정 건수를
 보여준다. 두 시행의 grading 횟수가 달라도 보고서를 만들며 해당 주체에 차이를 표시한다.
-문항별 결과는 원본 analysis에서 확인한다. 입력 analysis에 `distributions`가 있어야 한다.
+문항별 결과는 원본 agreement에서 확인한다. 입력 agreement에 `distributions`가 있어야 한다.
 
-## Analysis 표시 기준
+## Agreement 표시 기준
 
-평가 조건 → 평가 주체 범례 → Grading/Analysis 지표 정의 → 항목별 κ → 문항별 평가 순서다.
+평가 조건 → 평가 주체 범례 → Grading/Agreement 지표 정의 → 항목별 κ → 문항별 평가 순서다.
 조건에는 데이터셋·원본 answers 링크·QA 설정·rubric 정보를 표시한다. 원본 grading 링크는
 평가 주체의 해당 회차 행에 둔다. 불필요한 아코디언·하단 상세 부록은 두지 않는다.
 
 - Grading: 저장된 공통 rubric의 항목별 0·1·2 anchor를 표로 표시한다. Iron은 0·1이다.
   등급·N/A·오류·미기록을 구분하며 비율 점수로 등급을 재생성하지 않는다.
-- Analysis: 선형 가중 Cohen κ를 보고서에 표시한다. 일반/제곱 가중 κ와
+- Agreement: 선형 가중 Cohen κ를 보고서에 표시한다. 일반/제곱 가중 κ와
   Fleiss κ·Krippendorff α는 원본 artifact의 보조 결과로만 보존한다.
 - 항목별 κ: 드롭다운의 전체 항목은 Gold 네 행렬을 2×2로 보여주고, 개별 항목은 행렬 하나만 보여준다.
   우상단만 표시하며, 오른쪽 colorbar와 동일한
@@ -135,7 +135,7 @@ Luna·Terra처럼 같은 계열의 모델도 이름과 색으로 구분하고 �
 
 반복 회차는 별도 행·열을 유지한다. 평균·다수결로 합치지 않으며 κ도 회차 쌍별 저장값을 표시한다.
 같은 주체·같은 프로필의 여러 회차가 있으면 반복 일관성 뷰를 추가한다.
-다자 패널은 주체당 한 회차만 선택한 analysis를 사용한다. 중복 주체가 있으면 계수를 생략한 원본 사유를 표시한다.
+다자 패널은 주체당 한 회차만 선택한 agreement를 사용한다. 중복 주체가 있으면 계수를 생략한 원본 사유를 표시한다.
 
 ## HTML export와 관리
 

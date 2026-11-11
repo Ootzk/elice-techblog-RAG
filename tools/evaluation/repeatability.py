@@ -1,4 +1,4 @@
-"""Compare completed analysis runs from the same condition without model calls."""
+"""Compare completed agreement runs from the same condition without model calls."""
 
 import argparse
 import json
@@ -23,11 +23,11 @@ def snapshot(tracking, run_id, directory):
     if (
         run.info.status != "FINISHED"
         or run.data.tags.get("evaluation.schema") != SCHEMA
-        or run.data.tags.get("evaluation.kind") != "analysis"
+        or run.data.tags.get("evaluation.kind") != "agreement"
     ):
-        raise ValueError("repeatability_requires_finished_analysis")
-    analysis = artifact(tracking, run_id, "agreement.json", directory)
-    source_id = analysis["source_run_id"]
+        raise ValueError("repeatability_requires_finished_agreement")
+    agreement = artifact(tracking, run_id, "agreement.json", directory)
+    source_id = agreement["source_run_id"]
     source = tracking.get_run(source_id)
     bundle = artifact(tracking, source_id, "evaluation-bundle.json", directory)
     if (
@@ -37,9 +37,9 @@ def snapshot(tracking, run_id, directory):
         or run.data.tags.get("source_run_id") != source_id
         or run.data.tags.get("source_bundle_digest") != bundle.get("digest")
     ):
-        raise ValueError("repeatability_analysis_lineage_mismatch")
+        raise ValueError("repeatability_agreement_lineage_mismatch")
     grading_runs = []
-    for grading_id in analysis.get("grading_run_ids", []):
+    for grading_id in agreement.get("grading_run_ids", []):
         grading = tracking.get_run(grading_id)
         grading_tags = grading.data.tags
         if (
@@ -62,23 +62,23 @@ def snapshot(tracking, run_id, directory):
             }
         )
     return {
-        "analysis_run_id": run_id,
+        "agreement_run_id": run_id,
         "bundle": bundle,
-        "analysis": analysis,
+        "agreement": agreement,
         "grading_runs": grading_runs,
     }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--analysis-run-id", action="append", required=True)
+    parser.add_argument("--agreement-run-id", action="append", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--log", action="store_true", help="Publish a separate repeatability run"
     )
     args = parser.parse_args()
-    if len(args.analysis_run_id) < 2:
-        parser.error("Provide at least two --analysis-run-id values")
+    if len(args.agreement_run_id) < 2:
+        parser.error("Provide at least two --agreement-run-id values")
     args.output_dir.mkdir(parents=True, exist_ok=True)
     names = (
         "repeatability-result.json",
@@ -91,21 +91,21 @@ def main():
         )
     tracking = client(Settings())
     snapshots = [
-        snapshot(tracking, rid, args.output_dir) for rid in args.analysis_run_id
+        snapshot(tracking, rid, args.output_dir) for rid in args.agreement_run_id
     ]
     report = build(snapshots)
-    inputs = {"analyses": snapshots}
+    inputs = {"agreements": snapshots}
     for filename, value in ((names[0], report), (names[1], inputs)):
         (args.output_dir / filename).write_text(
             json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
         )
-    output = {"report": str(args.output_dir / names[0]), "analyses": len(snapshots)}
+    output = {"report": str(args.output_dir / names[0]), "agreements": len(snapshots)}
     if args.log:
         experiment_ids = {
-            tracking.get_run(rid).info.experiment_id for rid in args.analysis_run_id
+            tracking.get_run(rid).info.experiment_id for rid in args.agreement_run_id
         }
         if len(experiment_ids) != 1:
-            raise ValueError("repeatability_analysis_experiment_mismatch")
+            raise ValueError("repeatability_agreement_experiment_mismatch")
         run_id = tracking.create_run(
             experiment_ids.pop(),
             tags=tags(
@@ -121,11 +121,11 @@ def main():
             tracking.log_dict(run_id, report, names[0])
             tracking.log_dict(run_id, inputs, names[1])
             tracking.log_param(
-                run_id, "analysis_run_ids", json.dumps(args.analysis_run_id)
+                run_id, "agreement_run_ids", json.dumps(args.agreement_run_id)
             )
             tracking.log_param(run_id, "dataset_digest", report["dataset_digest"])
             tracking.log_param(run_id, "qa_profile_digest", report["qa_profile_digest"])
-            tracking.log_metric(run_id, "repeatability.analyses", len(snapshots))
+            tracking.log_metric(run_id, "repeatability.agreements", len(snapshots))
             tracking.log_metric(
                 run_id, "repeatability.summary_rows", len(report["summaries"])
             )

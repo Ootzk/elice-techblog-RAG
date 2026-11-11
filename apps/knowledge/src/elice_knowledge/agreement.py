@@ -87,7 +87,7 @@ def pairwise(left, right, scale=(0, 1, 2)):
     )
 
 
-def analyze(bundle, entries, rubric=None):
+def build_agreement(bundle, entries, rubric=None):
     validate_bundle(bundle)
     records = {row["id"]: row for row in bundle["records"]}
     cases = {row["record_id"]: row for row in bundle["cases"] if not row["error"]}
@@ -208,7 +208,7 @@ def analyze(bundle, entries, rubric=None):
         comparisons=comparisons,
         panels=panels,
         distributions=distributions,
-        analysis_protocol=protocol(rubric["scale"]),
+        agreement_protocol=protocol(rubric["scale"]),
         rubric=rubric,
         rubric_digest=digest(rubric),
     )

@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from test_agreement import bundle
 
-from elice_knowledge.agreement import analyze, pairwise, review_packet
+from elice_knowledge.agreement import build_agreement, pairwise, review_packet
 from elice_knowledge.corpus import digest
 from elice_knowledge.reliability import panel, report_metrics
 
@@ -94,7 +94,7 @@ def source_with_four_cases():
     return source
 
 
-def test_analysis_prioritizes_human_alignment_and_separates_model_only_panel():
+def test_agreement_prioritizes_human_alignment_and_separates_model_only_panel():
     source = source_with_four_cases()
     entries = []
     for name, values in (
@@ -112,8 +112,8 @@ def test_analysis_prioritizes_human_alignment_and_separates_model_only_panel():
                 status="scored",
             )
         entries += labels
-    report = analyze(source, entries)
-    assert report["analysis_protocol"]["cohen"] == "sklearn.metrics.cohen_kappa_score"
+    report = build_agreement(source, entries)
+    assert report["agreement_protocol"]["cohen"] == "sklearn.metrics.cohen_kappa_score"
     assert len([r for r in report["comparisons"] if r["purpose"] == "human_alignment"]) == 12
     assert len(report["panels"]) == 8  # all and models_only, independently for four dimensions.
     assert {r["scope"] for r in report["panels"]} == {"all", "models_only"}
@@ -121,7 +121,7 @@ def test_analysis_prioritizes_human_alignment_and_separates_model_only_panel():
     assert any(k.endswith(".fleiss_kappa") for k in metrics)
     assert any(k.endswith(".krippendorff_alpha") for k in metrics)
     repeat = [dict(r, round="2") for r in entries if r["rater"] == "human:alice"]
-    repeated = analyze(source, entries + repeat)
+    repeated = build_agreement(source, entries + repeat)
     assert all(r["fleiss_kappa"] is None for r in repeated["panels"] if r["scope"] == "all")
     assert all(
         r["fleiss_kappa"] is not None for r in repeated["panels"] if r["scope"] == "models_only"
@@ -153,7 +153,7 @@ def test_cli_logs_panel_coefficients_and_protocol_without_model_calls(monkeypatc
 
     tracking = SimpleNamespace(
         download_artifacts=download,
-        create_run=lambda *a, **kw: SimpleNamespace(info=SimpleNamespace(run_id="analysis")),
+        create_run=lambda *a, **kw: SimpleNamespace(info=SimpleNamespace(run_id="agreement")),
         log_dict=lambda *a: artifacts.append(a),
         log_metric=lambda run, key, value: logged.update({key: value}),
         set_terminated=lambda *a: None,
@@ -162,7 +162,7 @@ def test_cli_logs_panel_coefficients_and_protocol_without_model_calls(monkeypatc
     monkeypatch.setattr(tool, "client", lambda *a: tracking)
     argv = [
         "review",
-        "analyze",
+        "agreement",
         "--source-run-id",
         source["source_run_id"],
         "--output-dir",
@@ -202,7 +202,7 @@ def test_cli_logs_panel_coefficients_and_protocol_without_model_calls(monkeypatc
     assert fleiss == pytest.approx([1 / 3] * 4)
     assert alpha == pytest.approx([7 / 18] * 4)
     assert any(
-        a[2] == "agreement.json" and a[1]["analysis_protocol"]["versions"] for a in artifacts
+        a[2] == "agreement.json" and a[1]["agreement_protocol"]["versions"] for a in artifacts
     )
 
 

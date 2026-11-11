@@ -86,7 +86,7 @@ API에는 현재 코드·선택 회차의 판정과 초안만 포함한다. Judg
 한 회차의 artifact는 진행 중에는 최신 제출을 반영하며 완료 후 판정은 불변이다.
 
 **내 판정 내려받기**는 schema·원본 해시·평가자·회차·ratings를 포함하는 grading-result.json이다.
-`review.py analyze --grading-run-id` 또는 `--grading-file`로 사람·모델의 완료한 채점들을 함께 분석한다.
+`review.py agreement --grading-run-id` 또는 `--grading-file`로 사람·모델의 완료한 채점들을 함께 분석한다.
 원시 ratings JSONL이나 이전 형식의 채점은 입력받지 않는다. 실제 사람의 반복 정합성 결과가 확보되었다는 뜻은 아니다.
 
 ## API
@@ -121,7 +121,7 @@ API에는 현재 코드·선택 회차의 판정과 초안만 포함한다. Judg
 모델은 Ragas DiscreteMetric으로 사람과 같은 rubric 등급을 직접 반환한다. 비율→등급 변환이나
 통과 임계값은 없다. 선택적 진단 비율은 별도 measurements에 저장하며 사람 등급과 혼합하지 않는다.
 rubric은 grading 프로필에 원문·해시로 고정한다. 같은 답변을 다른 rubric으로 채점할 수 있으나
-서로 다른 rubric의 결과를 한 analysis에 섞지 않는다. 프로필마다 회차 숫자가 겹칠 수 있으므로
+서로 다른 rubric의 결과를 한 agreement에 섞지 않는다. 프로필마다 회차 숫자가 겹칠 수 있으므로
 API는 숫자 round 대신 유일한 grading_id(UUID)를 사용한다.
 새 기준의 사람 정합성은 새 등급으로 검수한 자료로 확인해야 하며 이전 이진 결과를 변환하지 않는다.
 

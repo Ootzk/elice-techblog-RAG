@@ -324,7 +324,7 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/revi
 원시 JSONL을 수동 작성해 분석에 넣는 경로는 유지하지 않는다.
 
 ```bash
-uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py agreement \
   --source-run-id '<answers-run-id>' \
   --grading-run-id '<model-grading-run-id>' --grading-run-id '<human-grading-run-id>' \
   --output-dir artifacts/evaluation/agreement --log
@@ -340,7 +340,7 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/revi
 CLI는 완료한 grading만 받으며, 이때 α의 결측은 주로 N/A·채점 오류에서 발생한다.
 
 ```bash
-uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py analyze \
+uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/review.py agreement \
   --source-run-id '<answers-run-id>' \
   --grading-run-id '<human-round-run-id>' \
   --grading-run-id '<chatgpt-round-run-id>' \
@@ -353,18 +353,18 @@ uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/revi
 Fleiss는 모두 등급을 제출한 문항만, 순서형 α는 두 명 이상이 등급을 제출한 문항을 사용한다. N/A·오류·미제출은
 각각 집계한다. 여러 회차를 넣어도 쌍별 반복 분석은 가능하지만, 중복 주체가 있는 종합 계수는
 multiple_gradings_per_subject로 계산하지 않는다. 미정 계수는 JSON에 null·사유를 남기고 MLflow metric에는 쓰지 않는다.
-패키지 버전과 분석 정책은 `analysis_protocol`에 기록한다. 분석 명령은 생성·Judge를 호출하지 않는다.
---log는 별도 analysis run에 입력 grading manifest·비교 결과와 유효한 일치율·κ metric을 기록한다.
+패키지 버전과 분석 정책은 `agreement_protocol`에 기록한다. 분석 명령은 생성·Judge를 호출하지 않는다.
+--log는 별도 agreement run에 입력 grading manifest·비교 결과와 유효한 일치율·κ metric을 기록한다.
 N/A·오류·미입력은 가중 kappa에서 제외하고 적용 가능 여부의 일치율·제외 건수를 따로 표시한다.
 유효 쌍이 2개 미만이거나 양쪽이 동일한 상수 라벨이면 kappa는 null로 남긴다.
 라벨 불균형과 작은 표본의 영향을 받으므로 kappa 하나나 다수결을 정답·신뢰성의 증거로 쓰지 않는다.
 [정의](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.cohen_kappa_score.html)를 참고한다.
 
-analyze에 `--log`를 붙이면 분석·등급을 별도 MLflow run에 저장한다. 원본 QA Trace의 assessment는 수정하지 않는다.
+`review.py agreement`에 `--log`를 붙이면 정합성 결과·등급을 별도 MLflow run에 저장한다. 원본 QA Trace의 assessment는 수정하지 않는다.
 모든 비교는 동일한 source bundle과 답변 해시에 묶인다. 원본 기대 조건·QA 답변·기존 Judge 판정은 덮어쓰지 않는다.
 사람 라벨을 실제로 입력하기 전에는 Human Alignment가 검증된 것으로 보고하지 않는다.
-개발용 임의 점수는 grading run에 `review.provenance=synthetic`, analysis run에
-`analysis.provenance=synthetic-demo`로 표시한다. 보고서의 모의 검수 수치는 UI 동작 확인용이며
+개발용 임의 점수는 grading run에 `review.provenance=synthetic`, agreement run에
+`agreement.provenance=synthetic-demo`로 표시한다. 보고서의 모의 검수 수치는 UI 동작 확인용이며
 사람 판단과의 정합성 근거로 사용하지 않는다.
 
 ### 자원·시간 지표
@@ -426,16 +426,16 @@ PostgreSQL 통합 테스트는 전용 테스트 DB가 설정된 환경에서 별
 런타임 npm 의존성 보안 검사는 별도로 확인하며, 개발 도구에 low severity advisory 4개가 남아 있다. `npm audit --omit=dev`는 0개다.
 정적 배포 이미지에는 Node/npm 개발 도구를 포함하지 않는다.
 
-## Analysis A/B 비교
+## Agreement A/B 비교
 
-완료한 analysis 한 쌍을 읽어 대응 문항의 품질·QA 자원·정합성을 비교한다. 같은 Dataset·rubric·평가자 ID 집단을
-요구하며 한 평가자의 여러 회차를 독립 표본으로 넣지 않는다. 분석 정책·버전이 바뀌었다면 먼저 analyze를 다시
+완료한 agreement 한 쌍을 읽어 대응 문항의 품질·QA 자원·정합성을 비교한다. 같은 Dataset·rubric·평가자 ID 집단을
+요구하며 한 평가자의 여러 회차를 독립 표본으로 넣지 않는다. 분석 정책·버전이 바뀌었다면 먼저 `review.py agreement`를 다시
 실행한다. 이 과정과 comparison 모두 생성·Judge를 호출하지 않는다.
 
 ```bash
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/compare.py \
-  --baseline-analysis-run-id '<analysis-A-id>' \
-  --candidate-analysis-run-id '<analysis-B-id>' \
+  --baseline-agreement-run-id '<agreement-A-id>' \
+  --candidate-agreement-run-id '<agreement-B-id>' \
   --purpose system --hypothesis '검색 도구 예산 증가가 근거 확보와 답변 품질을 높이는가' \
   --output-dir artifacts/evaluation/compare-A-B
 # --log를 추가하면 baseline experiment에 독립 comparison run을 기록한다.

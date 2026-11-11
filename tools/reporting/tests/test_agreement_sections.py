@@ -8,13 +8,13 @@ import panel as pn
 import pytest
 
 from elice_reporting import demo, from_mlflow
-from elice_reporting.analysis_sections import (
+from elice_reporting.agreement_sections import (
     evaluation_conditions,
     item_browser,
     item_switch_code,
     metric_guide,
 )
-from elice_reporting.analysis_visuals import analysis_subjects, kappa_heatmaps, rater_legend
+from elice_reporting.agreement_visuals import agreement_subjects, kappa_heatmaps, rater_legend
 from elice_reporting.data import _digest
 
 
@@ -23,8 +23,8 @@ def test_selector_preloads_cases_and_shows_question_answer_without_detail_card()
 
     pn.extension()
     hv.extension("bokeh")
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     browser = item_browser(data, subjects, ["0", "1"])
     assert isinstance(browser.objects[0], pn.widgets.Select)
     first, second = browser.objects[2:]
@@ -61,8 +61,8 @@ def test_dropdown_callback_switches_views_in_exported_html():
 
 
 def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_definitions():
-    data = demo("analysis")
-    conditions = evaluation_conditions(data, analysis_subjects(data))
+    data = demo("agreement")
+    conditions = evaluation_conditions(data, agreement_subjects(data))
     text = "\n".join(pane.object for pane in conditions.select(pn.pane.HTML))
     assert "평가 문항" in text and "최대 검색 도구 호출" in text
     assert data.inputs["bundle"]["dataset_digest"] not in text
@@ -90,14 +90,14 @@ def test_conditions_have_dataset_configuration_and_nested_legend_and_metric_defi
     assert not definitions.select(pn.Accordion)
     assert "Fleiss" not in definition_text and "Krippendorff" not in definition_text
     assert "우연 일치" in definition_text
-    view = kappa_heatmaps(data, analysis_subjects(data))
+    view = kappa_heatmaps(data, agreement_subjects(data))
     assert isinstance(view.objects[0], pn.widgets.Select)
     assert isinstance(view.objects[1].objects[0], pn.GridBox)
 
 
 def test_condition_category_dropdown_switches_offline_views():
-    data = demo("analysis")
-    view = evaluation_conditions(data, analysis_subjects(data))
+    data = demo("agreement")
+    view = evaluation_conditions(data, agreement_subjects(data))
     selector = view.objects[0]
     assert isinstance(selector, pn.widgets.Select)
     assert list(selector.options) == [
@@ -126,8 +126,8 @@ def test_condition_category_dropdown_switches_offline_views():
 
 
 def test_synthetic_review_is_labeled_in_report_legend():
-    data = demo("analysis")
-    human = next(s for s in analysis_subjects(data) if s["rater"].startswith("human:"))
+    data = demo("agreement")
+    human = next(s for s in agreement_subjects(data) if s["rater"].startswith("human:"))
     data.links.setdefault("gradings", []).append(
         {
             "rater": human["rater"],
@@ -136,7 +136,7 @@ def test_synthetic_review_is_labeled_in_report_legend():
             "synthetic": True,
         }
     )
-    subjects = analysis_subjects(data)
+    subjects = agreement_subjects(data)
     assert any(s["display_name"].startswith("모의 검수") for s in subjects)
     legend = rater_legend(subjects).object
     assert "개발용 임의 점수" in legend
@@ -144,7 +144,7 @@ def test_synthetic_review_is_labeled_in_report_legend():
 
 
 def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_path, monkeypatch):
-    data = deepcopy(demo("analysis"))
+    data = deepcopy(demo("agreement"))
     grading = data.inputs["gradings"][2]
     old_digest = grading["rater_profile_digest"]
     profile = {
@@ -163,8 +163,8 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
 
     def get_run(run_id):
         tags = {
-            "evaluation.kind": "analysis"
-            if run_id == "analysis-1"
+            "evaluation.kind": "agreement"
+            if run_id == "agreement-1"
             else "grading"
             if run_id == "grading-1"
             else "answers",
@@ -205,13 +205,13 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
         ),
     )
     loaded = from_mlflow(
-        "analysis",
-        "analysis-1",
+        "agreement",
+        "agreement-1",
         tmp_path,
         tracking_uri="https://user:secret@mlflow.example/team?token=private",
     )
-    legend = rater_legend(analysis_subjects(loaded)).object
-    assert analysis_subjects(loaded)[2]["actual_models"] == ["claude-haiku-5-5"]
+    legend = rater_legend(agreement_subjects(loaded)).object
+    assert agreement_subjects(loaded)[2]["actual_models"] == ["claude-haiku-5-5"]
     assert "Claude Haiku 5.5" in legend and "실행 기록" in legend
     links = loaded.links
     assert (
@@ -221,19 +221,19 @@ def test_mlflow_profile_models_are_bound_to_frozen_grading_and_not_guessed(tmp_p
     assert (
         links["gradings"][0]["url"] == "https://mlflow.example/team/#/experiments/42/runs/grading-1"
     )
-    conditions = evaluation_conditions(loaded, analysis_subjects(loaded))
+    conditions = evaluation_conditions(loaded, agreement_subjects(loaded))
     markup = "".join(p.object for p in conditions.select(pn.pane.HTML))
     assert 'href="https://mlflow.example/team/#/experiments/42/runs/grading-1"' in markup
     assert "secret" not in markup and "private" not in markup
     profile["scorers"][0]["model"] = "changed"
     with pytest.raises(ValueError, match="profile binding"):
-        from_mlflow("analysis", "analysis-1", tmp_path)
+        from_mlflow("agreement", "agreement-1", tmp_path)
 
 
 def test_reason_filters_support_each_all_combination_and_escape_saved_reasons():
     from html import unescape
 
-    from elice_reporting.analysis_sections import rationale_browser, rationale_filter_code
+    from elice_reporting.agreement_sections import rationale_browser, rationale_filter_code
 
     node = shutil.which("node")
     if not node:
@@ -270,8 +270,8 @@ console.log(JSON.stringify(results));
     assert tables[3][0] == "<table><tr>model-c</tr></table>"
     # The callback must escape the complete table once for Panel's HTML model.
     assert results[0][1][0].startswith("&lt;table&gt;")
-    data = demo("analysis")
-    subjects = analysis_subjects(data)
+    data = demo("agreement")
+    subjects = agreement_subjects(data)
     first_model = next(s for s in subjects if s["rater"].startswith("model:"))
     grading = next(g for g in data.inputs["gradings"] if g["rater_id"] == first_model["rater"])
     grading["ratings"][0]["rationale"] = "<script>unsafe()</script>"
@@ -290,20 +290,20 @@ console.log(JSON.stringify(results));
 
 
 def test_stored_ordinal_reason_is_escaped_without_reinterpreting_score():
-    from elice_reporting.analysis_sections import rationale_markup
+    from elice_reporting.agreement_sections import rationale_markup
 
     text = "필수 항목 일부 누락. <script>unsafe()</script>"
     html = rationale_markup(text)
     assert "&lt;script&gt;unsafe()&lt;/script&gt;" in html
     assert "<script>unsafe()" not in html
-    data = demo("analysis")
+    data = demo("agreement")
     notes = metric_guide(data).objects[1].object
     assert "pass/fail 대신" in notes and "변환하지 않습니다" in notes
     assert "0.99도 fail" not in notes
 
 
 def test_context_browser_preserves_exact_selected_text_and_distinguishes_search_only():
-    from elice_reporting.analysis_sections import context_browser
+    from elice_reporting.agreement_sections import context_browser
 
     generated = dict(
         chunk_id="one",
@@ -338,7 +338,7 @@ def test_context_browser_preserves_exact_selected_text_and_distinguishes_search_
 
 
 def test_context_empty_and_missing_are_not_conflated():
-    from elice_reporting.analysis_sections import context_browser
+    from elice_reporting.agreement_sections import context_browser
 
     missing = context_browser({})
     empty = context_browser({"generation_sources": []})
@@ -354,7 +354,7 @@ def test_context_empty_and_missing_are_not_conflated():
 
 
 def test_grounding_guidance_distinguishes_no_context_from_missing_context():
-    from elice_reporting.analysis_sections import grounding_scope
+    from elice_reporting.agreement_sections import grounding_scope
 
     empty = grounding_scope({"generation_sources": []}).object
     assert "제공된 자료: 0개" in empty
@@ -368,7 +368,7 @@ def test_grounding_guidance_distinguishes_no_context_from_missing_context():
 
 
 def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context():
-    from elice_reporting.analysis_sections import grounding_scope
+    from elice_reporting.agreement_sections import grounding_scope
 
     result = {
         "status": "insufficient_evidence",
@@ -388,7 +388,7 @@ def test_grounding_guidance_handles_unanswerable_question_with_nonempty_context(
 
 @pytest.mark.parametrize("raters,dimensions", [(3, 4), (5, 1)])
 def test_matrix_taps_choose_cell_column_row_or_everything_offline(raters, dimensions):
-    from elice_reporting.analysis_sections import grading_selection_code
+    from elice_reporting.agreement_sections import grading_selection_code
 
     node = shutil.which("node")
     if not node:
@@ -429,8 +429,8 @@ def test_matrix_tap_callbacks_bind_each_case_to_its_own_dropdown_models():
 
     pn.extension()
     hv.extension("bokeh")
-    data = demo("analysis")
-    view = item_browser(data, analysis_subjects(data), ["0", "1"])
+    data = demo("agreement")
+    view = item_browser(data, agreement_subjects(data), ["0", "1"])
     root = view.get_root()
     plots = list(root.select({"type": figure}))
     assert len(plots) == 2
@@ -466,7 +466,7 @@ def test_markdown_cards_render_structure_and_keep_untrusted_content_inert():
 
 
 def test_reference_list_keeps_uncited_passages_and_duplicate_titles_selectable():
-    from elice_reporting.analysis_sections import context_browser
+    from elice_reporting.agreement_sections import context_browser
 
     source = {
         "title": "Same article",
@@ -523,9 +523,9 @@ def test_experiment_conditions_display_only_recorded_recipe_and_never_guess_miss
     assert "recorded-model" in text and "HNSW" in text
     assert "512" not in text and "bge-m3" not in text
     assert dict(sections[0][1])["표 / 코드"] == "미기록 / 미기록"
-    data = demo("analysis")
+    data = demo("agreement")
     data.inputs["bundle"]["qa_profile"]["experiment_conditions"] = recorded
-    view = evaluation_conditions(data, analysis_subjects(data))
+    view = evaluation_conditions(data, agreement_subjects(data))
     assert list(view.objects[0].options) == [
         "데이터셋",
         "답변·검색 설정",

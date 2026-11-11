@@ -2,7 +2,7 @@
 
 from .data import (
     ReportData,
-    analysis_frames,
+    agreement_frames,
     comparison_frames,
     demo,
     find_root,
@@ -14,7 +14,7 @@ from .presentation import case_view, metric_card, report_purpose_callout, text_b
 
 __all__ = [
     "ReportData",
-    "analysis_frames",
+    "agreement_frames",
     "comparison_frames",
     "case_view",
     "metric_card",

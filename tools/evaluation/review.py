@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from elice_knowledge.agreement import analyze, review_packet
+from elice_knowledge.agreement import build_agreement, review_packet
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA, tags, validate_grading
 from elice_knowledge.judge_runs import evaluate_models
@@ -30,7 +30,7 @@ def write_json(path, value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("export", "judge", "analyze"))
+    parser.add_argument("action", choices=("export", "judge", "agreement"))
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
@@ -52,7 +52,7 @@ def main():
     parser.add_argument(
         "--log",
         action="store_true",
-        help="Log the analysis report and reliability metrics to MLflow",
+        help="Log the agreement report and reliability metrics to MLflow",
     )
     args = parser.parse_args()
     if not 1 <= args.repeat <= 100:
@@ -145,15 +145,15 @@ def main():
             )
         results.extend(json.loads(path.read_text()) for path in args.grading_file)
         if not results:
-            parser.error("analyze requires --grading-run-id or --grading-file")
+            parser.error("agreement requires --grading-run-id or --grading-file")
         for result in results:
             validate_grading(bundle, result)
             if not result["complete"]:
-                raise ValueError("analysis_requires_complete_grading")
+                raise ValueError("agreement_requires_complete_grading")
         if len({r["rubric_digest"] for r in results}) != 1:
-            raise ValueError("analysis_requires_same_rubric")
+            raise ValueError("agreement_requires_same_rubric")
         entries = [row for result in results for row in result["ratings"]]
-        report = analyze(bundle, entries, results[0]["rubric"])
+        report = build_agreement(bundle, entries, results[0]["rubric"])
         report["grading_run_ids"] = args.grading_run_id
         report["synthetic_grading_run_ids"] = synthetic_gradings
         report["schema"] = SCHEMA
@@ -162,13 +162,13 @@ def main():
             run_id = tracking.create_run(
                 experiment,
                 tags=tags(
-                    "analysis",
+                    "agreement",
                     **{
                         "mlflow.runName": "grading-agreement",
                         "mlflow.parentRunId": args.source_run_id,
                         "source_run_id": args.source_run_id,
                         "source_bundle_digest": bundle["digest"],
-                        "analysis.provenance": "synthetic-demo"
+                        "agreement.provenance": "synthetic-demo"
                         if synthetic_gradings
                         else "observed",
                     },
@@ -180,7 +180,7 @@ def main():
                 for name, value in report_metrics(report).items():
                     tracking.log_metric(run_id, name, value)
                 tracking.set_terminated(run_id, "FINISHED")
-                print(json.dumps({"analysis_run_id": run_id}))
+                print(json.dumps({"agreement_run_id": run_id}))
             except Exception:
                 tracking.set_terminated(run_id, "FAILED")
                 raise

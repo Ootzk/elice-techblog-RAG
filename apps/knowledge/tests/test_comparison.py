@@ -10,7 +10,7 @@ import pytest
 from test_evaluation_tools import load_tool
 from test_reliability import source_with_four_cases
 
-from elice_knowledge.agreement import analyze
+from elice_knowledge.agreement import build_agreement
 from elice_knowledge.comparison import compare, comparison_metrics, scalar
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import answer_digest
@@ -21,12 +21,12 @@ from elice_knowledge.rubrics import load_rubric
 
 
 def refresh(snapshot):
-    report = analyze(
+    report = build_agreement(
         snapshot["bundle"],
         [r for g in snapshot["gradings"] for r in g["ratings"]],
         snapshot["gradings"][0]["rubric"],
     )
-    snapshot["analysis"] = {**report, "schema": SCHEMA, "grading_run_ids": []}
+    snapshot["agreement"] = {**report, "schema": SCHEMA, "grading_run_ids": []}
     return snapshot
 
 
@@ -107,7 +107,9 @@ def frozen(name, *, patterns=None, source=None, failed=(), ids=None):
         )
         grades.append(grade)
     return refresh(
-        dict(analysis_run_id="analysis-" + name, experiment_id="9", bundle=bundle, gradings=grades)
+        dict(
+            agreement_run_id="agreement-" + name, experiment_id="9", bundle=bundle, gradings=grades
+        )
     )
 
 
@@ -210,7 +212,7 @@ def test_incompatible_or_stale_inputs_are_rejected(change, match):
     elif change == "duplicate":
         b["gradings"].append(deepcopy(b["gradings"][0]))
     else:
-        b["analysis"]["comparisons"][0]["cohen_kappa"] = 999
+        b["agreement"]["comparisons"][0]["cohen_kappa"] = 999
     with pytest.raises(ValueError, match=match):
         run(a, b)
 
@@ -218,7 +220,7 @@ def test_incompatible_or_stale_inputs_are_rejected(change, match):
 def test_judge_comparison_freezes_answers_and_human_votes_and_labels_score_shifts():
     a = frozen("a")
     b = deepcopy(a)
-    b["analysis_run_id"] = "analysis-b"
+    b["agreement_run_id"] = "agreement-b"
     g = b["gradings"][1]
     g["rater_profile_digest"] = digest("judge-v2")
     for row in g["ratings"]:
@@ -253,14 +255,14 @@ def test_bootstrap_constant_effect_small_sample_and_nonfinite_measurement():
 def test_cli_local_preview_and_independent_comparison_run(tmp_path, monkeypatch, capsys):
     tool = load_tool("compare")
     a, b = frozen("a"), frozen("b")
-    by_analysis = {s["analysis_run_id"]: s for s in (a, b)}
+    by_agreement = {s["agreement_run_id"]: s for s in (a, b)}
     writes, metrics, created, states = [], [], [], []
 
     def get_run(key):
-        if key in by_analysis:
-            source = by_analysis[key]["bundle"]
+        if key in by_agreement:
+            source = by_agreement[key]["bundle"]
             tags = {
-                "evaluation.kind": "analysis",
+                "evaluation.kind": "agreement",
                 "evaluation.schema": SCHEMA,
                 "source_run_id": source["source_run_id"],
                 "source_bundle_digest": source["digest"],
@@ -276,9 +278,9 @@ def test_cli_local_preview_and_independent_comparison_run(tmp_path, monkeypatch,
         if name == "evaluation-bundle.json":
             data = next(s["bundle"] for s in (a, b) if s["bundle"]["source_run_id"] == key)
         elif name == "agreement.json":
-            data = by_analysis[key]["analysis"]
+            data = by_agreement[key]["agreement"]
         else:
-            data = {"results": by_analysis[key]["gradings"]}
+            data = {"results": by_agreement[key]["gradings"]}
         path = Path(directory) / name
         path.write_text(json.dumps(data))
         return str(path)
@@ -299,10 +301,10 @@ def test_cli_local_preview_and_independent_comparison_run(tmp_path, monkeypatch,
     monkeypatch.setattr(tool, "client", lambda *x: tracking)
     argv = [
         "compare",
-        "--baseline-analysis-run-id",
-        a["analysis_run_id"],
-        "--candidate-analysis-run-id",
-        b["analysis_run_id"],
+        "--baseline-agreement-run-id",
+        a["agreement_run_id"],
+        "--candidate-agreement-run-id",
+        b["agreement_run_id"],
         "--purpose",
         "system",
         "--hypothesis",
@@ -365,7 +367,7 @@ def test_no_overlap_and_same_answers_in_system_mode_are_rejected():
         run(frozen("a", ids=["0"]), frozen("b", ids=["1"]))
     a = frozen("a")
     b = deepcopy(a)
-    b["analysis_run_id"] = "another-analysis"
+    b["agreement_run_id"] = "another-agreement"
     with pytest.raises(ValueError, match="distinct_answers"):
         run(a, b)
 
@@ -391,9 +393,9 @@ def test_comparison_logging_failure_marks_only_its_own_run_failed(tmp_path, monk
         "sys.argv",
         [
             "compare",
-            "--baseline-analysis-run-id",
+            "--baseline-agreement-run-id",
             "a",
-            "--candidate-analysis-run-id",
+            "--candidate-agreement-run-id",
             "b",
             "--purpose",
             "system",
@@ -425,7 +427,7 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
         profiles[key] = profile
     refresh(data)
     grade_ids = {f"grading-{i}": g for i, g in enumerate(data["gradings"])}
-    data["analysis"]["grading_run_ids"] = list(grade_ids)
+    data["agreement"]["grading_run_ids"] = list(grade_ids)
 
     def get_run(key):
         if key in grade_ids:
@@ -436,9 +438,9 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
                 "source_bundle_digest": data["bundle"]["digest"],
                 "rater_profile_digest": g["rater_profile_digest"],
             }
-        elif key == data["analysis_run_id"]:
+        elif key == data["agreement_run_id"]:
             tags = {
-                "evaluation.kind": "analysis",
+                "evaluation.kind": "agreement",
                 "evaluation.schema": SCHEMA,
                 "source_run_id": data["bundle"]["source_run_id"],
                 "source_bundle_digest": data["bundle"]["digest"],
@@ -457,7 +459,7 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
             else (
                 data["bundle"]
                 if name == "evaluation-bundle.json"
-                else data["analysis"]
+                else data["agreement"]
                 if name == "agreement.json"
                 else {"results": data["gradings"]}
             )
@@ -467,12 +469,12 @@ def test_snapshot_loads_and_checks_the_original_grading_profiles(tmp_path):
         return str(path)
 
     tracking = SimpleNamespace(get_run=get_run, download_artifacts=download)
-    snap = tool.snapshot(tracking, data["analysis_run_id"], tmp_path)
+    snap = tool.snapshot(tracking, data["agreement_run_id"], tmp_path)
     assert snap["profiles"] == profiles
     first_key = next(iter(profiles))
     profiles[first_key]["name"] = "tampered"
     with pytest.raises(ValueError, match="grading_profile_mismatch"):
-        tool.snapshot(tracking, data["analysis_run_id"], tmp_path)
+        tool.snapshot(tracking, data["agreement_run_id"], tmp_path)
 
 
 def test_judge_comparison_saves_profile_changes_without_treating_scores_as_quality_improvement():
@@ -486,7 +488,7 @@ def test_judge_comparison_saves_profile_changes_without_treating_scores_as_quali
     a["profiles"] = {key: old}
     refresh(a)
     b = deepcopy(a)
-    b["analysis_run_id"] = "new-analysis"
+    b["agreement_run_id"] = "new-agreement"
     new = {"model": "gateway:/judge-v2"}
     key = digest(new)
     g = b["gradings"][1]

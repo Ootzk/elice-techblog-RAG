@@ -768,22 +768,22 @@ rubric 원문·해시·등록 scorer 버전·모델 URI·Ragas/SDK 설정을 프
 QA Trace에는 LangGraph 노드·분기·검색 도구·모델 메시지·토큰·최종 근거와 인용 검증 span을 기록합니다.
 기존 Gateway 인증정보를 재사용하며 앱에 Judge별 API 키를 추가하지 않습니다.
 
-답변 생성(answers)·채점(grading)·정합성(analysis)·반복성(repeatability)·조건 비교(comparison)는 별도 run입니다.
+답변 생성(answers)·채점(grading)·정합성(agreement)·반복성(repeatability)·조건 비교(comparison)는 별도 run입니다.
 answers는 `evaluation-v1`, 나머지는 `evaluation-v2`를 사용하며 등급 채점은 `rubric-v1`입니다.
 이전 이진 채점과 호환 코드는 유지하지 않으며 고정 답변은 재사용합니다. 정확한 계약은
 [평가 저장 스키마](docs/evaluation-schema.md)에 정의합니다.
 
-실험 관계는 **조건 하나 → 여러 answers → 각 answers의 여러 grading**입니다. analysis는 answers 하나의
+실험 관계는 **조건 하나 → 여러 answers → 각 answers의 여러 grading**입니다. agreement는 answers 하나의
 선택한 grading들을 읽고 회차별 판정을 유지합니다. 같은 조건에서 만든 A1·A2 같은 답변 반복은
 `repeatability`로, 서로 다른 조건 A·B는 `comparison`으로 구분합니다.
 [관계도와 현재 구현 범위](docs/evaluation-schema.md#실험-단위와-관계)에 정리했습니다.
-repeatability는 같은 조건의 서로 다른 answers에 대한 analysis 두 개 이상을 입력받고,
+repeatability는 같은 조건의 서로 다른 answers에 대한 agreement 두 개 이상을 입력받고,
 시행·주체·항목별로 전체 문항의 0·1·2 등급 건수와 rubric의 두 경계(부분 충족 이상·충분)
 충족 비율을 비교합니다. 반복성 보고서는 문항별 시행 평균 충족률과 시행 간 변화폭을 보여주며,
-answers별 상세 등급과 사유는 평가 조건의 원본 analysis 링크에서 확인합니다.
+answers별 상세 등급과 사유는 평가 조건의 원본 agreement 링크에서 확인합니다.
 Iron은 0·1 경계 하나를 씁니다. 이는 작은 반복 표본의 기술 통계이며 답변 변동과 Judge 변동을
 인과적으로 분리한 추정치는 아닙니다. 시행별 grading 횟수는 같지 않아도 되며, 보고서에서
-평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 현재 comparison CLI는 analysis 한 쌍과
+평가 주체별 실행 횟수와 판정 건수를 함께 확인합니다. 현재 comparison CLI는 agreement 한 쌍과
 주체당 grading 하나만 받습니다.
 
 반복성 보고서의 `1점 이상`·`2점` 시행 간 평균 변화폭은 같은 질문의 answers 시행 쌍에서
@@ -803,14 +803,14 @@ Judge 반복 채점의 경계 충족률 차이를 절댓값으로 계산합니�
 
 ```bash
 uv run --project apps/knowledge --env-file .env.dev python tools/evaluation/repeatability.py \
-  --analysis-run-id <A1-analysis-run-id> --analysis-run-id <A2-analysis-run-id> \
+  --agreement-run-id <A1-agreement-run-id> --agreement-run-id <A2-agreement-run-id> \
   --output-dir artifacts/evaluation/repeatability-a --log
 ```
 
-이 명령은 모델을 호출하지 않고 완료된 analysis의 저장 결과만 읽습니다. 기존 analysis에
-등급 건수·rubric 경계 결과가 없다면 같은 grading으로 analysis를 다시 생성해야 합니다.
+이 명령은 모델을 호출하지 않고 완료된 agreement의 저장 결과만 읽습니다. 기존 agreement에
+등급 건수·rubric 경계 결과가 없다면 같은 grading으로 agreement를 다시 생성해야 합니다.
 
-Comparison은 analysis A/B의 공통 관측에서 등급·선택적 진단·QA 자원 사용량의 대응 평균 차이와
+Comparison은 agreement A/B의 공통 관측에서 등급·선택적 진단·QA 자원 사용량의 대응 평균 차이와
 SciPy paired bootstrap 구간을 저장합니다. system 비교는 평가자·기준을, judge 비교는 답변·사람 판정을
 고정합니다. κ·α도 공통 관측에서 다시 계산합니다. Judge 점수 상승을 답변 개선으로 표시하지 않습니다.
 원본 run 수정·모델 재호출·자동 승자 선정 없이 입력·제외 사유·계보를 보존합니다.
@@ -853,7 +853,7 @@ Run에는 기대 조건·실제 답변·최종 문맥·QA 프로필을 고정한
 
 ### Notebook 실험 보고서 초안
 
-[tools/reporting](tools/reporting/README.md)의 analysis·repeatability·comparison 템플릿을 복사해 MLflow 결과를 읽고,
+[tools/reporting](tools/reporting/README.md)의 agreement·repeatability·comparison 템플릿을 복사해 MLflow 결과를 읽고,
 저장된 조건·지표·문항별 결과를 hvPlot/Bokeh 그래프와 HTML 표로 표현합니다. Knowledge와 독립된 환경을 사용하며,
 내보낸 HTML은 Jupyter·MLflow 연결 없이 열 수 있습니다. 합성 데모는 실제 실험 결과와 구분해 표시합니다.
 

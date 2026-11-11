@@ -320,33 +320,33 @@ def model_boundary_changes(changes, dimensions, boundary_names):
 
 def build(snapshots):
     if len(snapshots) < 2:
-        raise ValueError("repeatability_requires_two_analyses")
-    ids = [s["analysis_run_id"] for s in snapshots]
+        raise ValueError("repeatability_requires_two_agreements")
+    ids = [s["agreement_run_id"] for s in snapshots]
     if len(ids) != len(set(ids)):
-        raise ValueError("repeatability_duplicate_analysis")
+        raise ValueError("repeatability_duplicate_agreement")
     first = snapshots[0]["bundle"]
     validate_bundle(first)
     answer_ids = []
     profiles = {}
     rows = defaultdict(dict)
     for snapshot in snapshots:
-        bundle, analysis = snapshot["bundle"], snapshot["analysis"]
+        bundle, agreement = snapshot["bundle"], snapshot["agreement"]
         validate_bundle(bundle)
         if (
-            analysis.get("schema") != SCHEMA
-            or analysis.get("source_run_id") != bundle["source_run_id"]
-            or analysis.get("source_digest") != bundle["digest"]
-            or analysis.get("kind") != bundle["kind"]
-            or not isinstance(analysis.get("distributions"), list)
-            or analysis.get("rubric_digest") != digest(analysis.get("rubric"))
+            agreement.get("schema") != SCHEMA
+            or agreement.get("source_run_id") != bundle["source_run_id"]
+            or agreement.get("source_digest") != bundle["digest"]
+            or agreement.get("kind") != bundle["kind"]
+            or not isinstance(agreement.get("distributions"), list)
+            or agreement.get("rubric_digest") != digest(agreement.get("rubric"))
         ):
-            raise ValueError("repeatability_invalid_analysis")
+            raise ValueError("repeatability_invalid_agreement")
         if (
             any(
                 bundle[key] != first[key]
                 for key in ("dataset_id", "dataset_digest", "kind", "records", "qa_profile")
             )
-            or analysis["rubric_digest"] != snapshots[0]["analysis"]["rubric_digest"]
+            or agreement["rubric_digest"] != snapshots[0]["agreement"]["rubric_digest"]
         ):
             raise ValueError("repeatability_condition_mismatch")
         answer_id = bundle["source_run_id"]
@@ -354,8 +354,8 @@ def build(snapshots):
             raise ValueError("repeatability_requires_distinct_answers")
         answer_ids.append(answer_id)
         eligible = {case["record_id"] for case in bundle["cases"] if not case["error"]}
-        scale = {str(score) for score in analysis["rubric"]["scale"]}
-        for item in analysis["distributions"]:
+        scale = {str(score) for score in agreement["rubric"]["scale"]}
+        for item in agreement["distributions"]:
             if item["record_id"] not in eligible or set(item["score_counts"]) != scale:
                 raise ValueError("repeatability_invalid_distribution")
             rater, profile = item["rater"], item["profile_digest"]
@@ -363,7 +363,7 @@ def build(snapshots):
                 raise ValueError("repeatability_rater_profile_changed")
             profiles[rater] = profile
             key = (item["record_id"], rater, item["dimension"])
-            if snapshot["analysis_run_id"] in rows[key]:
+            if snapshot["agreement_run_id"] in rows[key]:
                 raise ValueError("repeatability_duplicate_distribution")
             if item["attempts"] != item["valid"] + sum(item["status_counts"].values()):
                 raise ValueError("repeatability_invalid_counts")
@@ -389,7 +389,7 @@ def build(snapshots):
                     or boundary["count"] != expected[name]
                 ):
                     raise ValueError("repeatability_invalid_boundary")
-            rows[key][snapshot["analysis_run_id"]] = item
+            rows[key][snapshot["agreement_run_id"]] = item
     if not rows:
         raise ValueError("repeatability_no_distributions")
     record_ids = [record["id"] for record in first["records"]]
@@ -406,10 +406,10 @@ def build(snapshots):
     )
     summaries = []
     for snapshot in snapshots:
-        run_id = snapshot["analysis_run_id"]
+        run_id = snapshot["agreement_run_id"]
         failed = {case["record_id"] for case in snapshot["bundle"]["cases"] if case["error"]}
         for rater, dimension in rater_dimensions:
-            counts = {str(score): 0 for score in snapshot["analysis"]["rubric"]["scale"]}
+            counts = {str(score): 0 for score in snapshot["agreement"]["rubric"]["scale"]}
             statuses = {status: 0 for status in ("not_applicable", "error", "pending")}
             missing = 0
             attempts = 0
@@ -434,7 +434,7 @@ def build(snapshots):
             )
             summaries.append(
                 dict(
-                    analysis_run_id=run_id,
+                    agreement_run_id=run_id,
                     rater=rater,
                     profile_digest=profiles[rater],
                     dimension=dimension,
@@ -462,13 +462,13 @@ def build(snapshots):
         dataset_id=first["dataset_id"],
         dataset_digest=first["dataset_digest"],
         qa_profile_digest=digest(first["qa_profile"]),
-        rubric_digest=snapshots[0]["analysis"]["rubric_digest"],
-        analyses=[
+        rubric_digest=snapshots[0]["agreement"]["rubric_digest"],
+        agreements=[
             dict(
-                analysis_run_id=s["analysis_run_id"],
+                agreement_run_id=s["agreement_run_id"],
                 source_run_id=s["bundle"]["source_run_id"],
                 source_bundle_digest=s["bundle"]["digest"],
-                analysis_digest=digest(s["analysis"]),
+                agreement_digest=digest(s["agreement"]),
             )
             for s in snapshots
         ],

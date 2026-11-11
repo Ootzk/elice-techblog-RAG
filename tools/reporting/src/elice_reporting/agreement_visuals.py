@@ -99,7 +99,7 @@ def _icon(rater, color, badge, model_names=()):
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
 
 
-def analysis_subjects(data):
+def agreement_subjects(data):
     """One visual identity per rater, profile and round in a stable display order."""
     subjects = []
     seen = set()

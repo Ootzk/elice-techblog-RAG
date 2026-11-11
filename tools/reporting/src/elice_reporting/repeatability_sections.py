@@ -1,18 +1,18 @@
-"""Repeatability condition panel using the analysis report's shared categories."""
+"""Repeatability condition panel using the agreement report's shared categories."""
 
 from html import escape
 
 import panel as pn
 from markupsafe import Markup
 
-from .analysis_sections import (
+from .agreement_sections import (
     _run_reference,
     _table,
     condition_categories,
     condition_selector,
     rubric_guide,
 )
-from .analysis_visuals import _icon, analysis_subjects
+from .agreement_visuals import _icon, agreement_subjects
 
 BOUNDARY_LABELS = {
     "partial_or_better": "부분 충족 이상",
@@ -25,8 +25,8 @@ def rater_display_names(data):
     raters = sorted({row["rater"] for row in data.report["summaries"]})
     human_ids = [rater for rater in raters if rater.startswith("human:")]
     observations = {rater: set() for rater in raters}
-    for source in data.links.get("source_analyses", []):
-        for subject in analysis_subjects(source):
+    for source in data.links.get("source_agreements", []):
+        for subject in agreement_subjects(source):
             if subject["rater"] in observations:
                 observations[subject["rater"]].add(subject["display_name"])
     labels = {}
@@ -63,7 +63,7 @@ def rater_icons(data):
 
 def repeatability_metric_guide(data):
     """Show the frozen rubric and definitions of the saved repeatability measures."""
-    rubric = data.inputs["analyses"][0]["analysis"]["rubric"]
+    rubric = data.inputs["agreements"][0]["agreement"]["rubric"]
     criteria = {
         "partial_or_better": "유효 등급 중 1점 또는 2점의 비율. 0점은 미충족.",
         "sufficient": "유효 등급 중 2점의 비율. 0점과 1점은 미충족.",
@@ -140,36 +140,36 @@ def grading_breakdown(snapshot, rater, summaries):
 
 
 def repeatability_conditions(data):
-    snapshots = data.inputs["analyses"]
+    snapshots = data.inputs["agreements"]
     first = snapshots[0]
-    links = data.links.get("analyses", [])
+    links = data.links.get("agreements", [])
     answer_refs = []
-    analysis_refs = []
+    agreement_refs = []
     failed = []
     for index, snapshot in enumerate(snapshots):
         link = links[index] if index < len(links) else {}
         source_id = snapshot["bundle"]["source_run_id"]
-        analysis_id = snapshot["analysis_run_id"]
+        agreement_id = snapshot["agreement_run_id"]
         answer_refs.append(
             f"A{index + 1}: "
             + str(_run_reference(link.get("answers", {"run_id": source_id}), "답변 실행 기록"))
         )
-        analysis_refs.append(
+        agreement_refs.append(
             f"A{index + 1}: "
-            + str(_run_reference(link.get("analysis", {"run_id": analysis_id}), "분석 기록"))
+            + str(_run_reference(link.get("agreement", {"run_id": agreement_id}), "분석 기록"))
         )
         errors = sum(bool(case["error"]) for case in snapshot["bundle"]["cases"])
         failed.append(f"A{index + 1} {errors}문항")
     categories = condition_categories(
         first["bundle"],
         failed=" / ".join(failed),
-        rubric_id=first["analysis"]["rubric"]["id"],
+        rubric_id=first["agreement"]["rubric"]["id"],
         answers_reference=Markup("<br>".join(answer_refs)),
     )
     dataset = categories[0][1]
     categories[0] = (
         "데이터셋",
-        pn.Column(dataset, _table([("원본 분석", Markup("<br>".join(analysis_refs)))])),
+        pn.Column(dataset, _table([("원본 분석", Markup("<br>".join(agreement_refs)))])),
     )
 
     raters = sorted({row["rater"] for row in data.report["summaries"]})
@@ -181,11 +181,12 @@ def repeatability_conditions(data):
     for rater in raters:
         counts = []
         grading_counts = []
-        for index, analysis in enumerate(data.report["analyses"]):
+        for index, agreement in enumerate(data.report["agreements"]):
             selected = [
                 row
                 for row in summary
-                if row["rater"] == rater and row["analysis_run_id"] == analysis["analysis_run_id"]
+                if row["rater"] == rater
+                and row["agreement_run_id"] == agreement["agreement_run_id"]
             ]
             breakdown = grading_breakdown(snapshots[index], rater, selected)
             grading_counts.append(breakdown["run_count"])

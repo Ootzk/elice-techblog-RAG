@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from elice_knowledge.agreement import analyze, pairwise, review_packet
+from elice_knowledge.agreement import build_agreement, pairwise, review_packet
 from elice_knowledge.evaluation_bundle import create_bundle, validate_bundle
 
 
@@ -46,14 +46,14 @@ def test_blind_packet_and_binding_reject_changed_answers_and_duplicates():
     grounding = next(row for row in packet if row["dimension"] == "groundedness")
     assert "expectations" not in grounding
     assert all(row["score"] is None for row in labels)
-    assert analyze(source, labels)["human_labels"] == 0
+    assert build_agreement(source, labels)["human_labels"] == 0
     labels[0]["score"] = 2
     labels[0]["status"] = "scored"
     with pytest.raises(ValueError, match="duplicate_review_label"):
-        analyze(source, labels + [labels[0]])
+        build_agreement(source, labels + [labels[0]])
     labels[0]["answer_digest"] = "different-answer"
     with pytest.raises(ValueError, match="binding_mismatch"):
-        analyze(source, labels)
+        build_agreement(source, labels)
     source["cases"][0]["result"]["answer"] = "changed"
     with pytest.raises(ValueError, match="digest_mismatch"):
         validate_bundle(source)
@@ -88,9 +88,14 @@ def test_rounds_compare_identical_answers_and_distinguish_rubric_changes():
     second = deepcopy(first)
     for row in second:
         row["round"] = "2"
-    assert analyze(source, first + second)["comparisons"][0]["comparison"] == "repeat_consistency"
+    assert (
+        build_agreement(source, first + second)["comparisons"][0]["comparison"]
+        == "repeat_consistency"
+    )
     third = deepcopy(first)
     for row in third:
         row["protocol"] = digest({"model": "chatgpt", "version": 2})
-    assert analyze(source, first + third)["comparisons"][0]["comparison"] == "judge_revision"
+    assert (
+        build_agreement(source, first + third)["comparisons"][0]["comparison"] == "judge_revision"
+    )
     assert bundle()["cases"][0]["result"]["answer"] == "fact"

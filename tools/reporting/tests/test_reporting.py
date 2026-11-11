@@ -13,7 +13,7 @@ import pytest
 from nbclient import NotebookClient
 
 from elice_reporting import (
-    analysis_frames,
+    agreement_frames,
     case_view,
     comparison_frames,
     demo,
@@ -31,24 +31,24 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 
 def test_report_purpose_callouts_explain_each_report_scope():
-    analysis = report_purpose_callout("analysis").object
+    agreement = report_purpose_callout("agreement").object
     repeatability = report_purpose_callout("repeatability").object
     comparison = report_purpose_callout("comparison").object
-    assert "ANALYSIS" in analysis and "같은 평가자가 다시 채점해도" in analysis
+    assert "AGREEMENT" in agreement and "같은 평가자가 다시 채점해도" in agreement
     assert "REPEATABILITY" in repeatability and "채점 자체의 흔들림" in repeatability
     assert "COMPARISON" in comparison and "차이의 원인까지 단정하지는" in comparison
 
 
 def test_demo_tables_preserve_unavailable_coefficients_and_rater_identity():
-    data = demo("analysis")
-    frames = analysis_frames(data)
+    data = demo("agreement")
+    frames = agreement_frames(data)
     assert data.source == "demo" and data.report["demo"]
     assert len(frames["cases"]) == 4 and not frames["labels"].empty
     assert (frames["pairs"]["purpose"] == "human_alignment").any()
     assert frames["pairs"]["cohen_kappa"].min() >= -1
     data.report["comparisons"][0]["cohen_kappa"] = None
     data.report["comparisons"][0]["kappa_undefined_reason"] = "constant labels"
-    undefined = analysis_frames(data)["pairs"].iloc[0]
+    undefined = agreement_frames(data)["pairs"].iloc[0]
     assert pd.isna(undefined["cohen_kappa"])
     assert undefined["undefined_reason"] == "constant labels"
     assert frames["labels"]["rater"].nunique() == 3
@@ -61,7 +61,7 @@ def test_demo_tables_preserve_unavailable_coefficients_and_rater_identity():
 def test_readable_case_uses_generation_context_and_escapes_model_text():
     import panel as pn
 
-    bundle = deepcopy(demo("analysis").inputs["bundle"])
+    bundle = deepcopy(demo("agreement").inputs["bundle"])
     bundle["cases"][0]["result"]["answer"] = "<script>bad()</script>"
     view = case_view(bundle, "0", title="문항 0")
     html = "\n".join(pane.object for pane in view.select(pn.pane.HTML))
@@ -73,13 +73,23 @@ def test_readable_case_uses_generation_context_and_escapes_model_text():
 
 
 def test_old_grading_contract_is_rejected(tmp_path):
-    data = demo("analysis")
+    data = demo("agreement")
     data.inputs["gradings"][1].pop("contract")
-    report, inputs = tmp_path / "analysis.json", tmp_path / "inputs.json"
+    report, inputs = tmp_path / "agreement.json", tmp_path / "inputs.json"
     report.write_text(json.dumps(data.report))
     inputs.write_text(json.dumps(data.inputs))
     with pytest.raises(ValueError, match="rubric-v1"):
-        from_files("analysis", report, inputs)
+        from_files("agreement", report, inputs)
+
+
+def test_previous_analysis_artifact_is_rejected(tmp_path):
+    data = demo("agreement")
+    data.report["analysis_protocol"] = data.report.pop("agreement_protocol")
+    report, inputs = tmp_path / "agreement.json", tmp_path / "inputs.json"
+    report.write_text(json.dumps(data.report))
+    inputs.write_text(json.dumps(data.inputs))
+    with pytest.raises(ValueError, match="Agreement protocol"):
+        from_files("agreement", report, inputs)
 
 
 def test_report_bindings_reject_edited_inputs(tmp_path):
@@ -96,7 +106,25 @@ def test_report_bindings_reject_edited_inputs(tmp_path):
         from_files("comparison", report, inputs)
 
 
-@pytest.mark.parametrize("kind", ["analysis", "comparison"])
+def test_comparison_rejects_previous_analysis_run_references(tmp_path):
+    from elice_reporting.data import _digest
+
+    data = demo("comparison")
+    for side in ("baseline", "candidate"):
+        identity = data.inputs[side].pop("agreement_run_id")
+        data.inputs[side]["analysis_run_id"] = identity
+        data.inputs[side]["analysis"] = data.inputs[side].pop("agreement")
+        data.report[side]["analysis_run_id"] = data.report[side].pop("agreement_run_id")
+        data.report[side]["input_digest"] = _digest(data.inputs[side])
+    data.report["digest"] = _digest({k: v for k, v in data.report.items() if k != "digest"})
+    report, inputs = tmp_path / "comparison.json", tmp_path / "inputs.json"
+    report.write_text(json.dumps(data.report))
+    inputs.write_text(json.dumps(data.inputs))
+    with pytest.raises(ValueError, match="agreement run references"):
+        from_files("comparison", report, inputs)
+
+
+@pytest.mark.parametrize("kind", ["agreement", "comparison"])
 def test_mlflow_loading_is_read_only_and_uses_frozen_artifacts(kind, tmp_path, monkeypatch):
     fixture = demo(kind)
     reads = []
@@ -133,7 +161,7 @@ def test_mlflow_loading_is_read_only_and_uses_frozen_artifacts(kind, tmp_path, m
     )
     loaded = from_mlflow(kind, "report-run", tmp_path)
     assert loaded.report == report and loaded.inputs == fixture.inputs
-    assert len(reads) == (3 if kind == "analysis" else 2)
+    assert len(reads) == (3 if kind == "agreement" else 2)
 
 
 class Resources(HTMLParser):
@@ -202,7 +230,7 @@ def test_exported_table_search_sort_reset_and_escaping_without_python_callbacks(
 
 
 @pytest.mark.parametrize(
-    "kind, judge_mode", [("analysis", False), ("comparison", False), ("comparison", True)]
+    "kind, judge_mode", [("agreement", False), ("comparison", False), ("comparison", True)]
 )
 def test_template_executes_and_exports_without_network_or_saved_outputs(
     kind, judge_mode, tmp_path, monkeypatch
@@ -234,7 +262,7 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
         nbformat.v4.new_code_cell(
             (
                 "assert not report_view.select(pn.Accordion)\n"
-                if kind == "analysis"
+                if kind == "agreement"
                 else "assert details.active == []\n"
             )
             + (
@@ -245,12 +273,12 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
             + "assert case_ids == list(available_ids)\n"
             + (
                 "assert len(examples_view.objects[2:]) == len(available_ids)\n"
-                if kind == "analysis"
+                if kind == "agreement"
                 else "assert len(examples) == len(available_ids)\n"
             )
             + "headings = [p.object for p in report_view if isinstance(p, pn.pane.Markdown)]\n"
             'assert [h[3] for h in headings if h.startswith("## ") and h[3:4].isdigit()] '
-            + ('== ["1", "2", "3", "4"]' if kind == "analysis" else '== ["1", "2", "3", "4", "5"]')
+            + ('== ["1", "2", "3", "4"]' if kind == "agreement" else '== ["1", "2", "3", "4", "5"]')
         )
     )
     NotebookClient(
@@ -274,11 +302,11 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
     )
 
 
-def test_analysis_rejects_mixed_rubric_snapshots(tmp_path):
-    data = demo("analysis")
+def test_agreement_rejects_mixed_rubric_snapshots(tmp_path):
+    data = demo("agreement")
     data.inputs["gradings"][1]["rubric_digest"] = "different-rubric"
-    report, inputs = tmp_path / "analysis.json", tmp_path / "inputs.json"
+    report, inputs = tmp_path / "agreement.json", tmp_path / "inputs.json"
     report.write_text(json.dumps(data.report))
     inputs.write_text(json.dumps(data.inputs))
     with pytest.raises(ValueError, match="same rubric"):
-        from_files("analysis", report, inputs)
+        from_files("agreement", report, inputs)

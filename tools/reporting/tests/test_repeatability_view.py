@@ -17,15 +17,15 @@ from elice_reporting.repeatability_view import (
 
 
 def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
-    analyses = [{"analysis_run_id": f"analysis-{i}"} for i in range(3)]
+    agreements = [{"agreement_run_id": f"agreement-{i}"} for i in range(3)]
     summaries = []
     snapshots = []
-    for run in analyses:
+    for run in agreements:
         distributions = []
         for rater in ("model:chatgpt", "model:claude"):
             for dimension in ("correctness", "completeness"):
                 summary = {
-                    "analysis_run_id": run["analysis_run_id"],
+                    "agreement_run_id": run["agreement_run_id"],
                     "rater": rater,
                     "dimension": dimension,
                     "score_counts": {"0": 0, "1": 1, "2": 2},
@@ -41,8 +41,8 @@ def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
                 distributions.append(dict(summary, record_id="q1", attempts=3, valid=3))
         snapshots.append(
             {
-                "analysis_run_id": run["analysis_run_id"],
-                "analysis": {"distributions": distributions},
+                "agreement_run_id": run["agreement_run_id"],
+                "agreement": {"distributions": distributions},
                 "bundle": {
                     "records": [
                         {"id": "q1", "inputs": {"question": "첫 번째 질문"}},
@@ -60,7 +60,7 @@ def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
         report={
             "kind": "gold",
             "summaries": summaries,
-            "analyses": analyses,
+            "agreements": agreements,
             "boundary_levels": [
                 {
                     "record_id": "q1",
@@ -110,7 +110,7 @@ def test_gold_report_shows_only_question_level_boundary_heatmaps_with_icons():
                 for record_id, rate in (("q1", 2 / 3), (None, 0.7))
             ],
         },
-        inputs={"analyses": snapshots},
+        inputs={"agreements": snapshots},
         source="local",
     )
     view = quality_heatmaps(data)
@@ -160,7 +160,7 @@ def test_quality_level_heatmap_keeps_question_and_rater_rows_distinct():
         kind="repeatability",
         report={
             "kind": "gold",
-            "analyses": [{}, {}, {}],
+            "agreements": [{}, {}, {}],
             "model_boundary_levels": [],
             "question_average_levels": [],
             "dimension_average_levels": [],
@@ -221,7 +221,7 @@ def test_quality_level_heatmap_uses_saved_model_mean_without_human():
     data = ReportData(
         kind="repeatability",
         report={
-            "analyses": [{}, {}],
+            "agreements": [{}, {}],
             "boundary_levels": [],
             "model_boundary_levels": [
                 {
@@ -384,7 +384,7 @@ def test_boundary_change_view_uses_saved_paired_metrics():
 
 
 def test_repeatability_guide_reuses_rubric_and_defines_both_boundaries():
-    rubric = demo("analysis").report["rubric"]
+    rubric = demo("agreement").report["rubric"]
     data = ReportData(
         kind="repeatability",
         report={
@@ -392,7 +392,7 @@ def test_repeatability_guide_reuses_rubric_and_defines_both_boundaries():
                 "overall": [{"boundary": "partial_or_better"}, {"boundary": "sufficient"}]
             }
         },
-        inputs={"analyses": [{"analysis": {"rubric": rubric}}]},
+        inputs={"agreements": [{"agreement": {"rubric": rubric}}]},
         source="local",
     )
     guide = repeatability_metric_guide(data)

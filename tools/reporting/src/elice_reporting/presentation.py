@@ -8,7 +8,7 @@ import panel as pn
 def report_purpose_callout(kind):
     """Explain what the report measures without interpreting a particular run."""
     messages = {
-        "analysis": (
+        "agreement": (
             "평가자들의 판단은 얼마나 믿을 만한가?",
             "같은 답변을 사람과 모델이 채점한 결과를 비교합니다. 서로 판단이 얼마나 비슷한지, "
             "같은 평가자가 다시 채점해도 판단이 유지되는지 확인합니다. 사람 채점이 있으면 "

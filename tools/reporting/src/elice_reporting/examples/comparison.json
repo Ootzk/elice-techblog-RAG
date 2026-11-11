@@ -5,10 +5,10 @@
     "purpose": "system",
     "hypothesis": "합성 설정 변경 예시",
     "baseline": {
-      "analysis_run_id": "analysis-demo-A",
+      "agreement_run_id": "agreement-demo-A",
       "source_run_id": "answers-demo-A",
       "source_bundle_digest": "4edac2b3665574f969cf56f3af9e018c922af324fd874a94f5915511224293e6",
-      "input_digest": "eb96e958957f0299ec5463934c0fe7d62b819df4aceb2ed8d2a54c3049be0517",
+      "input_digest": "24de814b7d103276531d2268ddd8b3eb24230fe556c79c97c57990e8eace1192",
       "gradings": [
         {
           "rater_id": "human:alice",
@@ -28,10 +28,10 @@
       ]
     },
     "candidate": {
-      "analysis_run_id": "analysis-demo-B",
+      "agreement_run_id": "agreement-demo-B",
       "source_run_id": "answers-demo-B",
       "source_bundle_digest": "f4d65786f4bdc260ae3cd5aea73d796198de2b2e1741b63a06aa5c8a84528a4b",
-      "input_digest": "a69b519ccd1346078542d9101a6dc217d73d3c306cd73c9cc1ed0670056a4d63",
+      "input_digest": "16abc4052fd6ce8b07b032a985abbf7af8e2da3785d0012a54be95bd59ba8646",
       "gradings": [
         {
           "rater_id": "human:alice",
@@ -3514,12 +3514,12 @@
       ],
       "policy": "intersection_of_scored_rater_question_observations"
     },
-    "digest": "e342b97f3e5050d592d6954f3edf3e32e95f5c78cd9231c31063543728f9660b",
+    "digest": "865ca445ced19800fa773c7a0f7ecde47cafd3f8e9ac2f98cd6cfc753e382255",
     "demo": true
   },
   "inputs": {
     "baseline": {
-      "analysis_run_id": "analysis-demo-A",
+      "agreement_run_id": "agreement-demo-A",
       "experiment_id": "9",
       "bundle": {
         "schema": "evaluation-v1",
@@ -4864,7 +4864,7 @@
           ]
         }
       ],
-      "analysis": {
+      "agreement": {
         "source_run_id": "answers-demo-A",
         "source_digest": "4edac2b3665574f969cf56f3af9e018c922af324fd874a94f5915511224293e6",
         "kind": "gold",
@@ -5604,7 +5604,7 @@
             "ambiguous_subjects": []
           }
         ],
-        "analysis_protocol": {
+        "agreement_protocol": {
           "name": "agreement-ordinal-v1",
           "cohen": "sklearn.metrics.cohen_kappa_score",
           "fleiss": "statsmodels.stats.inter_rater.fleiss_kappa(method=fleiss)",
@@ -5700,7 +5700,7 @@
       }
     },
     "candidate": {
-      "analysis_run_id": "analysis-demo-B",
+      "agreement_run_id": "agreement-demo-B",
       "experiment_id": "9",
       "bundle": {
         "schema": "evaluation-v1",
@@ -7045,7 +7045,7 @@
           ]
         }
       ],
-      "analysis": {
+      "agreement": {
         "source_run_id": "answers-demo-B",
         "source_digest": "f4d65786f4bdc260ae3cd5aea73d796198de2b2e1741b63a06aa5c8a84528a4b",
         "kind": "gold",
@@ -7785,7 +7785,7 @@
             "ambiguous_subjects": []
           }
         ],
-        "analysis_protocol": {
+        "agreement_protocol": {
           "name": "agreement-ordinal-v1",
           "cohen": "sklearn.metrics.cohen_kappa_score",
           "fleiss": "statsmodels.stats.inter_rater.fleiss_kappa(method=fleiss)",

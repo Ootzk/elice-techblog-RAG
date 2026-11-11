@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 import panel as pn
 from markupsafe import Markup
 
-from .analysis_visuals import (
+from .agreement_visuals import (
     DIMENSIONS,
     PLOT_STYLE,
     grading_cells,
@@ -144,7 +144,7 @@ def _criterion_text(text):
 
 
 def rubric_guide(rubric, *, repeatability=False):
-    """Display the shared rubric anchors for analysis and repeatability reports."""
+    """Display the shared rubric anchors for agreement and repeatability reports."""
     header = (
         "<tr><th>항목</th><th>평가 대상</th>"
         + "".join(
@@ -213,7 +213,7 @@ def metric_guide(data):
                     "선형 가중 Cohen κ",
                     "동일 rubric의 등급 차이에 비례한 불일치를 우연 일치로 보정합니다. "
                     "전체 등급 순서는 고정합니다. "
-                    "일반 κ·제곱 가중 κ는 원본 analysis에 보조 저장합니다.",
+                    "일반 κ·제곱 가중 κ는 원본 agreement에 보조 저장합니다.",
                 ),
             ]
         ),

@@ -6,7 +6,7 @@ import panel as pn
 from bokeh.models import ColumnDataSource, FixedTicker, HoverTool, Range1d, Span
 from bokeh.plotting import figure
 
-from .analysis_visuals import _icon
+from .agreement_visuals import _icon
 from .presentation import metric_label
 from .repeatability_sections import rater_display_names, rater_icons
 
@@ -255,7 +255,7 @@ def quality_heatmaps(data):
     boundaries = list(summaries[0]["boundaries"])
     names = rater_display_names(data)
     icons = rater_icons(data)
-    records = data.inputs["analyses"][0]["bundle"]["records"]
+    records = data.inputs["agreements"][0]["bundle"]["records"]
     questions = {record["id"]: record["inputs"]["question"] for record in records}
     options = {"전체 질문": "all"}
     options.update(

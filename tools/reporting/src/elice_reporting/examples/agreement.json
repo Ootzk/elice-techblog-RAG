@@ -739,7 +739,7 @@
         "ambiguous_subjects": []
       }
     ],
-    "analysis_protocol": {
+    "agreement_protocol": {
       "name": "agreement-ordinal-v1",
       "cohen": "sklearn.metrics.cohen_kappa_score",
       "fleiss": "statsmodels.stats.inter_rater.fleiss_kappa(method=fleiss)",

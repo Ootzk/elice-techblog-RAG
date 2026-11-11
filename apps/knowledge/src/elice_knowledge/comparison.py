@@ -1,4 +1,4 @@
-"""A paired comparison of frozen A/B analysis inputs; never invokes models."""
+"""A paired comparison of frozen A/B agreement inputs; never invokes models."""
 
 import math
 import re
@@ -6,7 +6,7 @@ from importlib.metadata import version
 from itertools import combinations
 from numbers import Real
 
-from elice_knowledge.agreement import analyze, pairwise
+from elice_knowledge.agreement import build_agreement, pairwise
 from elice_knowledge.corpus import digest
 from elice_knowledge.evaluation_bundle import validate_bundle
 from elice_knowledge.evaluation_schema import SCHEMA, validate_grading
@@ -18,10 +18,13 @@ SCORES = {0, 1, 2}
 
 
 def validate_snapshot(snapshot):
-    bundle, analysis, gradings = snapshot["bundle"], snapshot["analysis"], snapshot["gradings"]
+    bundle, agreement, gradings = snapshot["bundle"], snapshot["agreement"], snapshot["gradings"]
     validate_bundle(bundle)
-    if analysis.get("schema") != SCHEMA or analysis.get("source_run_id") != bundle["source_run_id"]:
-        raise ValueError("comparison_analysis_source_mismatch")
+    if (
+        agreement.get("schema") != SCHEMA
+        or agreement.get("source_run_id") != bundle["source_run_id"]
+    ):
+        raise ValueError("comparison_agreement_source_mismatch")
     if not gradings:
         raise ValueError("comparison_requires_gradings")
     for key, value in snapshot.get("profiles", {}).items():
@@ -36,10 +39,12 @@ def validate_snapshot(snapshot):
             raise ValueError("comparison_requires_one_grading_per_subject")
         subjects[grading["rater_id"]] = grading
     if len({g["rubric_digest"] for g in gradings}) != 1:
-        raise ValueError("analysis_requires_same_rubric")
-    recomputed = analyze(bundle, [r for g in gradings for r in g["ratings"]], gradings[0]["rubric"])
-    if any(analysis.get(key) != value for key, value in recomputed.items()):
-        raise ValueError("comparison_analysis_inputs_or_protocol_mismatch")
+        raise ValueError("agreement_requires_same_rubric")
+    recomputed = build_agreement(
+        bundle, [r for g in gradings for r in g["ratings"]], gradings[0]["rubric"]
+    )
+    if any(agreement.get(key) != value for key, value in recomputed.items()):
+        raise ValueError("comparison_agreement_inputs_or_protocol_mismatch")
     return subjects
 
 
@@ -318,13 +323,13 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
         or not 0 < confidence < 1
     ):
         raise ValueError("invalid_comparison_bootstrap_configuration")
-    if baseline["analysis_run_id"] == candidate["analysis_run_id"]:
-        raise ValueError("comparison_requires_distinct_analysis_runs")
+    if baseline["agreement_run_id"] == candidate["agreement_run_id"]:
+        raise ValueError("comparison_requires_distinct_agreement_runs")
     left, right = validate_snapshot(baseline), validate_snapshot(candidate)
     a, b = baseline["bundle"], candidate["bundle"]
     if any(a[k] != b[k] for k in ("dataset_digest", "kind")):
         raise ValueError("comparison_dataset_or_rubric_mismatch")
-    if baseline["analysis"]["rubric_digest"] != candidate["analysis"]["rubric_digest"]:
+    if baseline["agreement"]["rubric_digest"] != candidate["agreement"]["rubric_digest"]:
         raise ValueError("comparison_rubric_mismatch")
     if set(left) != set(right):
         raise ValueError("comparison_rater_panel_mismatch")
@@ -415,8 +420,8 @@ def compare(baseline, candidate, *, purpose, hypothesis, seed=42, resamples=2000
         comparison_contract="comparison-v1",
         purpose=purpose,
         hypothesis=hypothesis,
-        baseline={k: baseline[k] for k in ("analysis_run_id",)},
-        candidate={k: candidate[k] for k in ("analysis_run_id",)},
+        baseline={k: baseline[k] for k in ("agreement_run_id",)},
+        candidate={k: candidate[k] for k in ("agreement_run_id",)},
         protocol=dict(
             seed=seed,
             resamples=resamples,
