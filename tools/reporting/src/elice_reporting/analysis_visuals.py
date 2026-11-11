@@ -82,13 +82,19 @@ def _icon(rater, color, badge, model_names=()):
         )
     else:
         glyph = '<rect x="4" y="5" width="24" height="24" rx="7" fill="#64748b"/>'
+    badge_markup = (
+        '<circle cx="29" cy="29" r="7" fill="#172536" stroke="white"/>'
+        f'<text x="29" y="32.2" text-anchor="middle" fill="white" '
+        f'font-family="sans-serif" font-size="9">{badge}</text>'
+        if badge is not None
+        else ""
+    )
     svg = (
         '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">'
         f'<rect x="1" y="1" width="31" height="31" rx="9" fill="{color}" '
         f'fill-opacity="0.09" stroke="{color}" stroke-opacity="0.22"/>{glyph}'
-        + '<circle cx="29" cy="29" r="7" fill="#172536" stroke="white"/>'
-        f'<text x="29" y="32.2" text-anchor="middle" fill="white" '
-        f'font-family="sans-serif" font-size="9">{badge}</text></svg>'
+        + badge_markup
+        + "</svg>"
     )
     return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
 

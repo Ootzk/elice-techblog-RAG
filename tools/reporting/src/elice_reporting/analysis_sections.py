@@ -53,8 +53,7 @@ def _run_reference(link, label=None):
     return Markup(escape(label))
 
 
-def evaluation_conditions(data, subjects):
-    bundle = data.inputs["bundle"]
+def condition_categories(bundle, *, failed, rubric_id, answers_reference):
     profile = bundle["qa_profile"]
     models = list(
         dict.fromkeys(
@@ -66,9 +65,9 @@ def evaluation_conditions(data, subjects):
     dataset = [
         ("데이터셋", "🥇 Gold" if bundle["kind"] == "gold" else "🦾 Iron"),
         ("평가 문항", f"{len(bundle['records'])}문항"),
-        ("답변 생성 실패", f"{data.report['qa_failed_cases']}문항"),
-        ("판정 기준", data.report["rubric"]["id"]),
-        ("원본 답변", _run_reference(data.links.get("answers", {}), "답변 실행 기록")),
+        ("답변 생성 실패", failed),
+        ("판정 기준", rubric_id),
+        ("원본 답변", answers_reference),
     ]
     fields = (
         ("top_k", "검색당 결과 수", "개"),
@@ -100,7 +99,10 @@ def evaluation_conditions(data, subjects):
     categories.extend((title, _table(rows)) for title, rows in sections)
     if not sections:
         categories.append(("상세 실험 조건", _table([("기록 상태", "미기록")])))
-    categories.append(("평가 주체", rater_legend(subjects)))
+    return categories
+
+
+def condition_selector(categories):
     views = [
         pn.Column(content, visible=index == 0, sizing_mode="stretch_width")
         for index, (_, content) in enumerate(categories)
@@ -116,6 +118,18 @@ def evaluation_conditions(data, subjects):
         value=item_switch_code(len(views)),
     )
     return pn.Column(selector, *views, sizing_mode="stretch_width")
+
+
+def evaluation_conditions(data, subjects):
+    bundle = data.inputs["bundle"]
+    categories = condition_categories(
+        bundle,
+        failed=f"{data.report['qa_failed_cases']}문항",
+        rubric_id=data.report["rubric"]["id"],
+        answers_reference=_run_reference(data.links.get("answers", {}), "답변 실행 기록"),
+    )
+    categories.append(("평가 주체", rater_legend(subjects)))
+    return condition_selector(categories)
 
 
 def _criterion_text(text):

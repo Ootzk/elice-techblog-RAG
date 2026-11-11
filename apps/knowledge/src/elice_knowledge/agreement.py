@@ -124,6 +124,49 @@ def analyze(bundle, entries, rubric=None):
             raise ValueError("duplicate_review_label")
         seen.add(identity)
         groups[identity[:4]][case_id] = label
+    distributions = []
+    grouped = defaultdict(list)
+    for entry in entries:
+        grouped[(entry["record_id"], entry["rater"], entry["protocol"], entry["dimension"])].append(
+            entry
+        )
+    for (record_id, rater, profile_digest, dimension), ratings in sorted(grouped.items()):
+        counts = {str(score): 0 for score in rubric["scale"]}
+        statuses = {status: 0 for status in ("not_applicable", "error", "pending")}
+        for rating in ratings:
+            if rating["status"] == "scored":
+                counts[str(rating["score"])] += 1
+            else:
+                statuses[rating["status"]] += 1
+        valid = sum(counts.values())
+        boundaries = (
+            {
+                "partial_or_better": sum(counts[str(s)] for s in rubric["scale"] if s >= 1),
+                "sufficient": counts["2"],
+            }
+            if bundle["kind"] == "gold"
+            else {"satisfied": counts["1"]}
+        )
+        distributions.append(
+            dict(
+                record_id=record_id,
+                rater=rater,
+                profile_digest=profile_digest,
+                dimension=dimension,
+                attempts=len(ratings),
+                score_counts=counts,
+                status_counts=statuses,
+                valid=valid,
+                boundaries={
+                    name: {
+                        "count": count,
+                        "denominator": valid,
+                        "rate": count / valid if valid else None,
+                    }
+                    for name, count in boundaries.items()
+                },
+            )
+        )
     comparisons, panels = [], []
     for dimension in DIMENSIONS[bundle["kind"]]:
         selected = [(key, labels) for key, labels in groups.items() if key[0] == dimension]
@@ -164,6 +207,7 @@ def analyze(bundle, entries, rubric=None):
         ),
         comparisons=comparisons,
         panels=panels,
+        distributions=distributions,
         analysis_protocol=protocol(rubric["scale"]),
         rubric=rubric,
         rubric_digest=digest(rubric),

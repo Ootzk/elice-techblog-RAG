@@ -1,6 +1,6 @@
 # Evaluation Reporting
 
-MLflow analysis·comparison run에 저장된 값·rubric·질문·답변·문맥·사유를 Notebook과
+MLflow analysis·repeatability·comparison run에 저장된 값·rubric·질문·답변·문맥·사유를 Notebook과
 hvPlot/Bokeh로 표시하고 Panel 독립 HTML로 export한다. 평가 점수를 재계산하거나 해석을 생성하지 않는다.
 Knowledge와 별도 Python 환경으로 사용하며 서버·DB를 배포하지 않는다.
 
@@ -20,6 +20,7 @@ VS Code에서는 `tools/reporting/.venv/bin/python`을 커널로 선택하고 ML
 | 템플릿 | 입력 | 표시 내용 |
 | --- | --- | --- |
 | analysis.ipynb | 완료된 analysis run | 평가 조건·평가 주체·rubric·가중 κ·문항별 등급·사유·문맥 |
+| repeatability.ipynb | 같은 조건의 완료된 repeatability run | analysis와 같은 평가 조건 범주·Gold의 두 rubric 경계를 비교하고 경계별 answers 매트릭스를 2열로 배치 |
 | comparison.ipynb | 완료된 comparison run | 조건 차이·공통 관측의 등급/자원 변화·구간·정합성 차이·A/B 답변 |
 
 템플릿을 복사한 뒤 설정 셀을 바꿔 순서대로 실행한다.
@@ -43,7 +44,7 @@ frames = analysis_frames(data)
 ```
 
 로더는 읽기·다운로드만 한다. run 생성·Judge 호출·평가 재실행·업로드는 하지 않는다.
-answers는 evaluation-v1, grading·analysis·comparison은 evaluation-v2, 채점은 rubric-v1을 요구한다.
+answers는 evaluation-v1, grading·analysis·repeatability·comparison은 evaluation-v2, 채점은 rubric-v1을 요구한다.
 rubric·입력·프로필 hash를 확인하며 이전 이진 계약은 거부한다. 형식 변환·호환 코드는 유지하지 않는다.
 실제 새 등급으로 재채점·사람 검수가 끝난 analysis가 있어야 실제 보고서를 만들 수 있다.
 `synthetic_grading_run_ids`가 있는 개발용 analysis에는 모의 검수 경고를 표시하고,
@@ -53,6 +54,16 @@ rubric·입력·프로필 hash를 확인하며 이전 이진 계약은 거부한
 comparison은 comparison-result.json·comparison-inputs.json을 사용한다. analysis는 agreement.json과
 `{"bundle": <answers bundle>, "gradings": <grading manifest 목록>}`을 사용하며 profiles에
 프로필 hash→원문을 선택적으로 포함한다. 다운로드한 data.report·data.inputs도 저장해 사용할 수 있다.
+repeatability는 repeatability-result.json·repeatability-inputs.json을 사용한다.
+보고서는 Gold의 두 경계를 별도 구역에 표시하고, 각 구역의 answers 반복 매트릭스를
+2열 그리드에 순서대로 배치한다. 홀수 시행이면 마지막 행은 한 칸만 사용한다.
+질문 선택에서 전체 문항의 합산 분포 또는 개별 문항의 분포를 볼 수 있다. 개별 문항은
+입력 analysis에 고정된 등급 건수를 읽으며, 선택 시 두 경계와 모든 answers 매트릭스를 함께 갱신한다.
+평가 주체 아이콘·모델명은 범례와 행렬에 표시한다. 셀 hover에는 원점수·충족 건수/유효 건수와
+N/A·오류·미기록을 표시한다. 저장된 전체 문항 합계만 표현하며 별도의 건수·시행 간 범위 표는 두지 않는다.
+평가 조건의 주체별 표에는 시행마다 grading run 횟수·채점 가능 문항 수·항목당/전체 판정 건수를
+보여준다. 두 시행의 grading 횟수가 달라도 보고서를 만들며 해당 주체에 차이를 표시한다.
+문항별 결과는 원본 analysis에서 확인한다. 입력 analysis에 `distributions`가 있어야 한다.
 
 ## Analysis 표시 기준
 

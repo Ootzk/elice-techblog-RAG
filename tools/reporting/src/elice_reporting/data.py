@@ -46,9 +46,38 @@ def _validate_gradings(gradings):
 
 
 def _validate(kind, report, inputs, source, run_id=None):
-    if kind not in {"analysis", "comparison"} or report.get("schema") != "evaluation-v2":
+    if (
+        kind not in {"analysis", "comparison", "repeatability"}
+        or report.get("schema") != "evaluation-v2"
+    ):
         raise ValueError("Unsupported report schema or kind")
-    if kind == "comparison":
+    if kind == "repeatability":
+        if report.get("repeatability_contract") != "repeatability-v1":
+            raise ValueError("Unsupported repeatability contract")
+        if not isinstance(report.get("summaries"), list):
+            raise ValueError("Repeatability summary is missing")
+        if report.get("digest") != _digest({k: v for k, v in report.items() if k != "digest"}):
+            raise ValueError("Repeatability content digest mismatch")
+        snapshots = inputs.get("analyses", [])
+        if len(snapshots) < 2 or len(snapshots) != len(report.get("analyses", [])):
+            raise ValueError("Repeatability requires analysis snapshots")
+        for expected, snapshot in zip(report["analyses"], snapshots, strict=True):
+            bundle, analysis = snapshot["bundle"], snapshot["analysis"]
+            if (
+                expected["analysis_run_id"] != snapshot["analysis_run_id"]
+                or expected["analysis_digest"] != _digest(analysis)
+                or expected["source_run_id"] != bundle["source_run_id"]
+                or expected["source_bundle_digest"] != bundle["digest"]
+                or bundle["digest"] != _digest({k: v for k, v in bundle.items() if k != "digest"})
+                or analysis.get("source_digest") != bundle["digest"]
+            ):
+                raise ValueError("Repeatability input binding mismatch")
+            grading_runs = snapshot.get("grading_runs")
+            if grading_runs is not None and [g["run_id"] for g in grading_runs] != analysis.get(
+                "grading_run_ids", []
+            ):
+                raise ValueError("Repeatability grading run metadata mismatch")
+    elif kind == "comparison":
         if report.get("comparison_contract") != "comparison-v1":
             raise ValueError("Unsupported comparison contract")
         if not {"baseline", "candidate"} <= inputs.keys():
@@ -94,7 +123,7 @@ def from_files(kind, report_path, inputs_path):
 
 
 def demo(kind):
-    if kind not in {"analysis", "comparison"}:
+    if kind not in {"analysis", "comparison", "repeatability"}:
         raise ValueError("Unknown demo kind")
     content = json.loads(files("elice_reporting").joinpath("examples", kind + ".json").read_text())
     return _validate(kind, content["report"], content["inputs"], "demo")
@@ -138,7 +167,7 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
         or run.data.tags.get("evaluation.kind") != kind
         or run.data.tags.get("evaluation.schema") != "evaluation-v2"
     ):
-        raise ValueError("Select a finished compatible analysis/comparison run")
+        raise ValueError("Select a finished compatible reporting run")
     if kind == "analysis":
         report = read(run_id, "agreement.json")
         original = tracking.get_run(report["source_run_id"])
@@ -207,6 +236,35 @@ def from_mlflow(kind, run_id, cache_dir, *, tracking_uri=None):
         inputs = read(run_id, "comparison-inputs.json")
         if run.data.tags.get("comparison_digest") != report.get("digest"):
             raise ValueError("Comparison digest mismatch")
+    elif kind == "repeatability":
+        report = read(run_id, "repeatability-result.json")
+        inputs = read(run_id, "repeatability-inputs.json")
+        if run.data.tags.get("repeatability_digest") != report.get("digest"):
+            raise ValueError("Repeatability digest mismatch")
+        links = {"analyses": [], "source_analyses": []}
+        for snapshot in inputs.get("analyses", []):
+            analysis_run = tracking.get_run(snapshot["analysis_run_id"])
+            source_run = tracking.get_run(snapshot["bundle"]["source_run_id"])
+            if (
+                analysis_run.info.status != "FINISHED"
+                or analysis_run.data.tags.get("evaluation.kind") != "analysis"
+                or source_run.data.tags.get("evaluation.kind") != "answers"
+            ):
+                raise ValueError("Invalid repeatability lineage")
+            links["analyses"].append(
+                {
+                    "analysis": _run_link(uri, analysis_run, snapshot["analysis_run_id"]),
+                    "answers": _run_link(uri, source_run, snapshot["bundle"]["source_run_id"]),
+                }
+            )
+            links["source_analyses"].append(
+                from_mlflow(
+                    "analysis",
+                    snapshot["analysis_run_id"],
+                    cache_dir,
+                    tracking_uri=tracking_uri,
+                )
+            )
     else:
         raise ValueError("Unknown report kind")
     data = _validate(kind, report, inputs, "mlflow", run_id)

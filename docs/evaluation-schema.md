@@ -27,9 +27,9 @@ flowchart TD
     GA2 --> IA2["analysis A2"]
     GB1 --> IB1["analysis B1"]
     GB2 --> IB2["analysis B2"]
-    IA1 -. 참조 .-> RA["repeatability A · 설계 중"]
+    IA1 -. 참조 .-> RA["repeatability A"]
     IA2 -. 참조 .-> RA
-    IB1 -. 참조 .-> RB["repeatability B · 설계 중"]
+    IB1 -. 참조 .-> RB["repeatability B"]
     IB2 -. 참조 .-> RB
     RA -. 참조 .-> CMP["comparison A ↔ B · 반복 입력 방식 설계 중"]
     RB -. 참조 .-> CMP
@@ -41,17 +41,18 @@ flowchart TD
 | answers → grading | 1:N. 주체·프로필·회차별로 고정 답변을 채점한다. |
 | answers → analysis | 1:N. analysis 하나는 answers 하나에서 선택한 grading들을 분석한다. 다른 선택으로 다시 분석할 수 있다. |
 | grading ↔ analysis | 참조 관계. analysis는 grading 여러 개를 읽고, 원본 grading은 다른 analysis에서도 재사용할 수 있다. |
-| analysis → repeatability | 같은 조건의 answers에서 나온 analysis 여러 개를 참조하는 목표 구조다. |
+| analysis → repeatability | 같은 조건의 서로 다른 answers에서 나온 analysis 두 개 이상을 참조한다. |
 | repeatability → comparison | 조건 A와 B의 반복 결과를 참조하는 목표 구조다. |
 
 analysis는 같은 모델의 여러 회차를 별도 관측으로 보존하고, Cohen κ를 회차 쌍별로 계산한다.
 회차 등급을 평균·다수결로 합쳐 하나의 평가자로 만들지 않는다. repeatability에서는 같은 조건의
 여러 answers를 질문 ID로 연결하되, A1의 Judge 1회차와 A2의 Judge 1회차를 대응 관측으로 가정하지 않는다.
-반복성의 집계 방법과 보고서 표현은 아직 결정하지 않았다.
+analysis는 문항·평가 주체·프로필·항목별 등급 건수와 rubric 경계 충족 건수를 보존한다.
+repeatability는 이 집계만 읽고, 원본 grading을 다시 채점하거나 회차 번호를 대응시키지 않는다.
 `comparison`은 앞으로 조건 A/B의 차이를 보는 이름으로 사용하고 `condition_change`라는 별도 종류를 만들지 않는다.
 
 현재 `review.py analyze`는 answers 하나와 여러 grading 회차를 받아 analysis를 만든다.
-`repeatability` run·CLI·보고서는 아직 없다. 현재 `compare.py`의 `comparison-v1`은 analysis 한 쌍과
+현재 `compare.py`의 `comparison-v1`은 analysis 한 쌍과
 평가 주체당 grading 하나씩만 받는다. 같은 조건의 A1/A2를 회차 번호끼리 대응시킨 결과는
 반복성의 최종 결과로 취급하지 않으며, 여러 answers·반복 grading을 받는 comparison 계약은 아직 설계 중이다.
 현재 CLI의 `system`·`judge` 비교 모드와 향후 조건 간 반복 비교의 범위도 이 설계에서 정리한다.
@@ -67,7 +68,7 @@ answers A1: 고정된 질문·기대 조건·답변·문맥
 └─ grading: human:<로그인 코드 ID> / 프로필 H / 2회차
 
 analysis: 같은 A1에 연결된 지정 grading들의 정합성
-repeatability: 같은 조건의 여러 analysis를 비교하는 목표 구조 (미구현)
+repeatability: 같은 조건의 여러 analysis에 저장된 rubric 경계 분포 비교
 comparison-v1: 현재는 analysis 한 쌍 비교; 향후 조건 A/B의 반복 결과 비교로 확장 예정
 ```
 
@@ -76,11 +77,13 @@ comparison-v1: 현재는 analysis 한 쌍 비교; 향후 조건 A/B의 반복 �
 | answers | 데이터셋의 답변 생성 1회 | evaluation-bundle.json, evaluation-results.json | 답변 가능 여부·생성 자원·시간 |
 | grading | 한 주체가 answers 전체를 채점한 1회 | grading-result.json, rater-profile.json | rubric 등급 평균·분포·상태별 건수, 선택적 Ragas 진단 |
 | analysis | 같은 답변에 대한 지정 grading 집합 | agreement.json, grading-inputs.json | 항목별 일치율·가중 κ·다자 계수 |
+| repeatability | 같은 조건의 서로 다른 answers에 대한 analysis 2개 이상 | repeatability-result.json, repeatability-inputs.json | 시행·주체·항목별 전체 문항 등급 건수와 rubric 경계 충족 건수·비율 |
 | comparison-v1 · 현재 | analysis A/B 한 쌍, 주체당 grading 하나 | comparison-result.json, comparison-inputs.json | 대응 평균 차이·bootstrap 구간·문항 전이·공통 표본의 계수 차이 |
 
-`evaluation.kind` 태그로 현재 구현된 run 종류를 구분한다. grading은 `mlflow.parentRunId`와
+`evaluation.kind` 태그로 run 종류를 구분한다. grading은 `mlflow.parentRunId`와
 source_run_id로 answers에 연결한다. analysis·comparison은 입력 run과 해시를 artifact로 기록하며
-원본을 수정하지 않는다. 위 표의 repeatability는 아직 저장 계약과 run 종류를 정하지 않아 포함하지 않았다.
+원본을 수정하지 않는다. repeatability는 `evaluation-v2`·`repeatability-v1` 계약을 쓰고
+입력 analysis ID·artifact digest를 고정한다.
 
 ## 고정 답변과 rubric
 
@@ -195,6 +198,45 @@ Fleiss κ는 명목형 정확 일치의 보조 지표로 모든 선택 주체가
 ordinal α는 문항마다 최소 두 유효 등급이 있는 자료를 사용하되, 패널에 기여하는 주체는 최소 세 명이어야 한다.
 N/A·error·미제출을 제외하고 건수를 별도 보고한다. 유효 표본이 너무 적거나 변동이 없으면
 계수는 null과 사유로 남기며 metric에 임의의 0을 기록하지 않는다.
+
+## Repeatability
+
+같은 Dataset records·QA 프로필·rubric을 사용한 서로 다른 answers의 analysis를 두 개 이상 입력한다.
+analysis별로 동일 평가 주체·프로필의 여러 grading 회차를 그대로 묶는다. 회차 번호는 answers 간
+대응 키가 아니다. 서로 다른 조건은 comparison 대상으로 남긴다.
+
+analysis는 **문항 × 평가 주체 × 평가 프로필 × 항목**마다 원래 등급 건수, N/A·오류·미제출 건수,
+유효 판정 수와 rubric 경계의 충족 건수·비율을 저장한다. Gold의 두 경계는 `score >= 1`
+(부분 충족 이상)과 `score == 2`(충분)다. Iron은 `score == 1`(충족) 하나만 쓴다.
+분모는 0·1·2 또는 0·1의 유효 판정뿐이다. 분모가 0이면 비율은 null이다. 답변 생성 오류는
+채점 0점으로 바꾸지 않고 별도 상태로 표시한다. 시행에서 빠진 평가 주체도 미기록으로 구분한다.
+예를 들어 Gold의 0·1·2가 각 1건이면
+건수는 `[1, 1, 1]`, 경계 충족은 `2/3`·`1/3`이다.
+
+repeatability는 **답변 시행 × 평가 주체 × 항목**의 등급 건수를 문항 전체에서 합산하고,
+합산 건수에서 경계 충족 비율을 계산한다. 한 grading 회차의 문항별 판정은 각각 한 관측이다.
+유효 건수가 다른 시행을 비교할 때는 분모·N/A·오류·미기록 문항 수도 함께 본다.
+시행별 grading 횟수를 같게 강제하지 않는다. 입력 analysis에 연결된 grading run의 메타데이터로
+평가 주체별 실행 횟수를 기록하고, 보고서에는 `grading 횟수 × 채점 가능 문항 수 = 항목당 판정 건수`를
+표시한다. 실행 횟수가 다르거나 일부 판정이 빠진 경우에는 실제 건수와 차이를 드러낸다.
+시행 간 경계 비율 범위와 문항별 분포는 repeatability 결과에 중복 저장하지 않는다.
+Judge 자체의 변동도 섞이므로 시행 간 차이를 답변 생성만의 변동으로 해석하지 않는다.
+보고서 본문은 Gold의 두 경계를 별도 구역으로 나누고 각 구역의 answers 매트릭스를
+2열 그리드에 배치한다. 질문 선택으로 전체 분포와 입력 analysis의 문항별 분포를 전환한다.
+회차별 개별 판정과 사유는 입력 analysis에서 확인한다.
+
+지표 후보와 선택 근거:
+
+| 후보 | 판단 |
+| --- | --- |
+| 등급 평균·표준편차 | 0·1·2 사이 간격을 양적 크기로 취급한다. 순서형 rubric의 주 반복 지표로 쓰지 않는다. |
+| 다수결·최빈 등급 | 소수 회차의 반대 판정을 숨기며 3회에서 1건 차이로 대표 등급이 바뀔 수 있다. 원래 건수를 보존한다. |
+| 범주 분포의 총변동거리(TV) | 분포 차이를 나타내지만 0↔1과 0↔2를 같은 거리로 취급한다. 3회에서는 해상도도 거칠어 채택하지 않는다. |
+| 선형 가중 κ·순서형 α | 평가자 정합성에는 유용하나, 서로 다른 답변 시행의 문항별 경계 안정성을 직접 설명하지 않는다. analysis에서 유지한다. |
+| rubric 경계 누적 비율 | 순서를 보존하고 0·1·2 분포를 두 경계로 완전히 표현한다. 원래 건수와 분모를 함께 표시한다. |
+
+이는 **탐색적 반복성 기술 통계**다. 3회는 판정 뒤집힘을 발견할 수 있지만 문항별 확률을 정밀하게
+추정하지 못한다. 여러 질문을 평가하는 일과 같은 답변을 여러 번 Judge로 채점하는 일은 다른 표본 축이다.
 
 ## Comparison과 보고서
 
