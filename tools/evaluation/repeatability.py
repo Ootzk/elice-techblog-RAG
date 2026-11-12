@@ -45,7 +45,7 @@ def snapshot(tracking, run_id, directory):
         or run.data.tags.get("source_bundle_digest") != bundle.get("digest")
     ):
         raise ValueError("repeatability_agreement_lineage_mismatch")
-    grading_runs = []
+    grading_runs, excluded_grading_runs = [], []
     for grading_id in agreement.get("grading_run_ids", []):
         grading = tracking.get_run(grading_id)
         grading_tags = grading.data.tags
@@ -60,21 +60,23 @@ def snapshot(tracking, run_id, directory):
             or not grading_tags.get("round")
         ):
             raise ValueError("repeatability_grading_lineage_mismatch")
-        if grading_tags["rater_id"].startswith("baseline:"):
-            continue
-        grading_runs.append(
-            {
-                "run_id": grading_id,
-                "rater": grading_tags["rater_id"],
-                "profile_digest": grading_tags["rater_profile_digest"],
-                "round": grading_tags["round"],
-            }
-        )
+        entry = {
+            "run_id": grading_id,
+            "rater": grading_tags["rater_id"],
+            "profile_digest": grading_tags["rater_profile_digest"],
+            "round": grading_tags["round"],
+        }
+        (
+            excluded_grading_runs
+            if entry["rater"].startswith("baseline:")
+            else grading_runs
+        ).append(entry)
     return {
         "agreement_run_id": run_id,
         "bundle": bundle,
         "agreement": agreement,
         "grading_runs": grading_runs,
+        "excluded_grading_runs": excluded_grading_runs,
     }
 
 

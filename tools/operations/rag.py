@@ -330,10 +330,10 @@ def create_agreement(args):
     tracking = client(Settings())
     answers = tracking.get_run(args.answers_run_id)
     if (
-        answers.info.status != "FINISHED"
+        answers.info.status not in {"FINISHED", "FAILED"}
         or answers.data.tags.get("evaluation.kind") != "answers"
     ):
-        raise ValueError("완료된 answers Run이 필요합니다")
+        raise ValueError("종료된 answers Run이 필요합니다")
     runs = tracking.search_runs(
         [answers.info.experiment_id],
         filter_string=f"tags.`source_run_id` = '{args.answers_run_id}' and tags.`evaluation.kind` = 'grading'",
@@ -529,7 +529,7 @@ def main():
             i
             for i, item in enumerate(raw)
             if item in passthrough
-            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog"})
+            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog", "report"})
         ),
         None,
     )

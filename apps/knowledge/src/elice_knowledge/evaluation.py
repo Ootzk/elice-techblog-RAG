@@ -1,5 +1,7 @@
 """Freeze MLflow Dataset inputs, execute shared QA, and record scores and Judge verdicts."""
 
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -29,6 +31,14 @@ SCORER = {
 SCORER_KEY = digest(SCORER)
 
 
+def parallel_records(records, run):
+    """Yield completed independent records with their original positions."""
+    with ThreadPoolExecutor(max_workers=min(len(records), 32)) as pool:
+        futures = {pool.submit(run, record): i for i, record in enumerate(records)}
+        for future in as_completed(futures):
+            yield futures[future], future.result()
+
+
 def dataset_snapshot(settings, dataset_id):
     import mlflow
 
@@ -37,6 +47,8 @@ def dataset_snapshot(settings, dataset_id):
     # EvaluationDataset.records lazily uses MLflow's active tracking store.
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri.get_secret_value())
     dataset = tracking_client(settings).get_dataset(dataset_id)
+    source_order = json.loads((dataset.tags or {}).get("source_order", "[]"))
+    positions = {source_id: index for index, source_id in enumerate(source_order)}
     records = []
     for record in dataset.records:
         # Only inputs are validated as QA input. Expectations never enter QA.
@@ -60,6 +72,8 @@ def dataset_snapshot(settings, dataset_id):
         records.append(
             {
                 "id": str(record.dataset_record_id),
+                "source_id": (record.tags or {}).get("source_id"),
+                "source_order": positions.get((record.tags or {}).get("source_id")),
                 "inputs": {
                     "question": request.question,
                     "history": [m.model_dump() for m in request.history],
@@ -197,28 +211,32 @@ def run_evaluation(store, job):
             tracking.log_param(run_id, f"prompt.{name}.digest", prompt["digest"])
             # Server-local lineage; the digest identifies the prompt across servers.
             tracking.link_prompt_version_to_run(run_id, prompt["uri"])
-        cases = []
-        for record in evaluation["records"]:
-            store.heartbeat(job, f"evaluating:{len(cases)}/{len(evaluation['records'])}")
+        records = evaluation["records"]
+        cases = [None] * len(records)
+
+        def execute_record(record):
             output = execute(store, evaluation["profile_key"], **record["inputs"], mode="offline")
             scores = score(output["result"], record["expectations"]) if not output["error"] else {}
-            case = {"record_id": record["id"], **output, "scores": scores}
+            return {"record_id": record["id"], **output, "scores": scores}
+
+        for completed, (index, case) in enumerate(parallel_records(records, execute_record), 1):
             with store.connection() as conn:
                 conn.execute(
                     """INSERT INTO evaluation_cases
-                    (evaluation_id,record_id,run_id,status,result,scores,error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                        (evaluation_id,record_id,run_id,status,result,scores,error)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                     (
                         job["id"],
-                        record["id"],
-                        output["run_id"],
-                        "failed" if output["error"] else "completed",
-                        Jsonb(output),
-                        Jsonb(scores),
-                        output["error"],
+                        case["record_id"],
+                        case["run_id"],
+                        "failed" if case["error"] else "completed",
+                        Jsonb({k: v for k, v in case.items() if k not in {"record_id", "scores"}}),
+                        Jsonb(case["scores"]),
+                        case["error"],
                     ),
                 )
-            cases.append(case)
+            cases[index] = case
+            store.heartbeat(job, f"evaluating:{completed}/{len(records)}")
         failed = sum(bool(c["error"]) for c in cases)
         bundle = create_bundle(run_id, evaluation, profile, cases)
         tracking.log_dict(run_id, bundle, "evaluation-bundle.json")

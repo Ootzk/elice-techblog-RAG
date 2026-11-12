@@ -486,11 +486,14 @@ def _case_scores(data, record_id):
 
 
 def comparison_questions(data):
+    from .data import ordered_records
+
     left = data.inputs["baseline"]["bundle"]
     right = data.inputs["candidate"]["bundle"]
     records = {r["id"]: r for r in left["records"]}
     cases = [{c["record_id"]: c for c in bundle["cases"]} for bundle in (left, right)]
-    ids = data.report["coverage"]["shared_record_ids"]
+    shared = set(data.report["coverage"]["shared_record_ids"])
+    ids = [record["id"] for record in ordered_records(left) if record["id"] in shared]
     categories = []
     for index, record_id in enumerate(ids, 1):
         question = records[record_id]["inputs"]["question"]

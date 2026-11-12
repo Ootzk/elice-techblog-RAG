@@ -96,15 +96,17 @@ def main():
     tracking = client(Settings())
     source = tracking.get_run(args.answers_run_id)
     if (
-        source.info.status != "FINISHED"
+        source.info.status not in {"FINISHED", "FAILED"}
         or source.data.tags.get("evaluation.kind") != "answers"
     ):
-        raise ValueError("A finished answers run is required")
+        raise ValueError("A terminated answers run is required")
     bundle = validate_bundle(
         read(tracking, args.answers_run_id, "evaluation-bundle.json")
     )
     if bundle["source_run_id"] != args.answers_run_id:
         raise ValueError("source_run_mismatch")
+    if not any(not case["error"] for case in bundle["cases"]):
+        raise ValueError("no_gradable_answers")
     if args.rubric_grading_run_id:
         rubric = validate_grading(
             bundle, read(tracking, args.rubric_grading_run_id, "grading-result.json")
