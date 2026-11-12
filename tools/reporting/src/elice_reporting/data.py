@@ -29,6 +29,31 @@ def find_root(start=None):
     raise ValueError("Run the notebook within the project or supply the repository path")
 
 
+def ordered_records(bundle):
+    """Keep frozen source order; for existing runs match the repository's exact records."""
+    records = bundle["records"]
+    if all(str(r.get("source_order", "")).isdigit() for r in records):
+        return sorted(records, key=lambda r: int(r["source_order"]))
+    try:
+        kind = bundle["kind"]
+        path = find_root() / "tools" / "evaluation" / f"{kind}_set" / f"{kind}.jsonl"
+        source = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        order = {
+            _digest({"inputs": item["inputs"], "expectations": item["expectations"]}): index
+            for index, item in enumerate(source)
+        }
+        keys = [
+            _digest({"inputs": r["inputs"], "expectations": r["expectations"]}) for r in records
+        ]
+        if len(set(keys)) == len(keys) and all(key in order for key in keys):
+            return [
+                record for _, record in sorted(zip((order[k] for k in keys), records, strict=True))
+            ]
+    except (KeyError, OSError, ValueError):
+        pass
+    return records
+
+
 def _digest(value):
     encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
@@ -90,10 +115,18 @@ def _validate(kind, report, inputs, source, run_id=None):
             ):
                 raise ValueError("Repeatability input binding mismatch")
             grading_runs = snapshot.get("grading_runs")
-            if grading_runs is not None and [g["run_id"] for g in grading_runs] != agreement.get(
-                "grading_run_ids", []
-            ):
-                raise ValueError("Repeatability grading run metadata mismatch")
+            if grading_runs is not None:
+                excluded = snapshot.get("excluded_grading_runs", [])
+                ids = [g["run_id"] for g in grading_runs + excluded]
+                expected_ids = agreement.get("grading_run_ids", [])
+                if (
+                    len(ids) != len(expected_ids)
+                    or len(set(ids)) != len(ids)
+                    or set(ids) != set(expected_ids)
+                    or any(not g["rater"].startswith("baseline:") for g in excluded)
+                    or any(g["rater"].startswith("baseline:") for g in grading_runs)
+                ):
+                    raise ValueError("Repeatability grading run metadata mismatch")
     elif kind == "comparison":
         contract = report.get("comparison_contract")
         if contract not in {"comparison-v1", "comparison-v2"}:
@@ -361,6 +394,7 @@ def _identity(subject):
 
 def _cases(bundle):
     records = {r["id"]: r for r in bundle["records"]}
+    cases = {c["record_id"]: c for c in bundle["cases"]}
     return pd.DataFrame(
         [
             dict(
@@ -369,7 +403,7 @@ def _cases(bundle):
                 answer=(c.get("result") or {}).get("answer"),
                 error=c.get("error"),
             )
-            for c in bundle["cases"]
+            for c in (cases[r["id"]] for r in ordered_records(bundle))
         ]
     )
 

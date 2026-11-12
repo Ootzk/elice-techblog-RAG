@@ -181,8 +181,8 @@ Gold/Iron 접수 시 모든 해당 Judge의 등록 버전을 고정하고, QA �
 Ragas로 채점하고 `mlflow.genai.evaluate()`가 병렬 실행과 MLflow 기록을 담당한다.
 등록 scorer의 모델 URI·rubric을 재사용하며 별도의 모델 API 키를 설정하지 않는다.
 질문·지표를 SDK에서 병렬 실행하며 기본 상한은
-프로세스당 질문 2개 × 차원 4개다. `MLFLOW_GENAI_EVAL_MAX_WORKERS`와
-`MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`로 조절한다. 모델·반복 회차는 순차 실행한다.
+grading별 질문 32개 × 차원 16개다. `MLFLOW_GENAI_EVAL_MAX_WORKERS`와
+`MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS`로 조절한다. 모델·반복 회차도 최대 32개 Run까지 병렬 실행한다.
 Judge 오류·누락 판정은 평가 실패로 처리하되 다른 항목의 성공 결과는 보존한다.
 답변 생성 run은 `evaluation.kind=answers`이며 생성 bundle과 결정적 지표만 보관한다.
 채점은 모델별 grading 자식 run으로 나누고 `grading-result.json`·`rater-profile.json`과

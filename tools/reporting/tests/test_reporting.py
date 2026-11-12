@@ -293,7 +293,7 @@ def test_template_executes_and_exports_without_network_or_saved_outputs(
             )
             + "headings = [p.object for p in report_view if isinstance(p, pn.pane.Markdown)]\n"
             'assert [h[3] for h in headings if h.startswith("## ") and h[3:4].isdigit()] '
-            + '== ["1", "2", "3", "4", "5"]'
+            + '== ["1", "2", "3", "4", "5", "6"]'
         )
     )
     NotebookClient(

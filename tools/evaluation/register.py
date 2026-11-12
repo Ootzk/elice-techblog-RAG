@@ -182,11 +182,12 @@ def main():
         plans = []
         for kind in kinds:
             path = ROOT / f"{kind}_set" / f"{kind}.jsonl"
+            records = load_records(path, kind)
             plans.append(
                 {
                     "kind": kind,
                     "name": f"elice-techblog-{kind}",
-                    "records": load_records(path, kind),
+                    "records": records,
                     "tags": {
                         "dataset_kind": kind,
                         "default_rubric_id": __import__(
@@ -194,6 +195,9 @@ def main():
                         ).load_rubric(kind)["id"],
                         "source_path": f"tools/evaluation/{kind}_set/{kind}.jsonl",
                         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "source_order": canonical(
+                            [r["tags"]["source_id"] for r in records]
+                        ),
                     },
                 }
             )

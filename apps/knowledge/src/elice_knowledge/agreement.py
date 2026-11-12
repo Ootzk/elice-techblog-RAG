@@ -34,7 +34,7 @@ def review_packet(bundle, rater, rubric=None):
                     "rubric": rubric["dimensions"][dimension],
                     "scale": rubric["scale"],
                     "scale_labels": rubric["scale_labels"],
-                    "forced_na": inapplicable(record, case, dimension),
+                    "forced_na": inapplicable(record, case, dimension, rubric=rubric),
                     **{key: value for key, value in data.items() if key != "tags"},
                 }
             )
@@ -102,7 +102,7 @@ def build_agreement(bundle, entries, rubric=None):
         ):
             raise ValueError("review_answer_binding_mismatch")
         if not isinstance(entry["rater"], str) or not entry["rater"].startswith(
-            ("human:", "model:")
+            ("human:", "model:", "baseline:")
         ):
             raise ValueError("invalid_review_rater")
         from elice_knowledge.evaluation_schema import validate_rating

@@ -44,6 +44,8 @@ def purpose(left, right, comparison):
     if comparison != "inter_rater":
         return comparison
     types = {r.split(":", 1)[0] for r in (left, right)}
+    if "baseline" in types:
+        return "baseline_comparison"
     return (
         "human_alignment"
         if types == {"human", "model"}
@@ -157,6 +159,7 @@ def panel(selected, case_ids, *, scope, scale=(0, 1, 2)):
 
 def multirater(selected, case_ids, scale=(0, 1, 2)):
     """Report the selected panel and homogeneous subsets without pooling repetitions."""
+    selected = [row for row in selected if not row[0][1].startswith("baseline:")]
     cohorts = [("all", selected)]
     humans = [row for row in selected if row[0][1].startswith("human:")]
     models = [row for row in selected if row[0][1].startswith("model:")]

@@ -1,6 +1,6 @@
 # 릴리스와 배포 준비
 
-현재 개발 대상은 `v0.2.0`이며, 직전 릴리스는 `v0.1.0`이다. 개발 환경의 수집·검색·QA·평가 기능 구현과,
+현재 릴리스 대상은 `v1.0.0`이며, 마지막으로 발행된 릴리스는 `v0.1.0`이다. 개발 환경의 수집·검색·QA·평가 기능 구현과,
 이미지 발행·클라우드 배포·전수 품질 검증의 완료 상태는 구분한다.
 
 ## 패키지와 배포 단위
@@ -14,21 +14,21 @@
 | Notebook 보고서 | `tools/reporting/pyproject.toml` | `tools/reporting/uv.lock` | 로컬 Jupyter 환경, 이미지 발행 없음 |
 | PostgreSQL·Ollama·MLflow | 각 외부 제품 버전 | 해당 인프라 관리 범위 | 이 저장소의 제품 버전과 별도 관리 |
 
-자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge·Web·Reporting 및 lockfile의 자체 항목은 모두 `0.2.0`이다.
-v0.2.0은 Human Review 구축과 실험 인프라 고도화를 목표로 한다. Open WebUI 원본 커밋·버전은
+자체 패키지는 통합 릴리스 버전을 사용한다. 현재 Knowledge·Web·Reporting 및 lockfile의 자체 항목은 모두 `1.0.0`이다.
+v1.0.0은 RAG 서비스와 평가·사람 검수·실험 보고서의 통합 릴리스다. Open WebUI 원본 커밋·버전은
 `apps/web/UPSTREAM.md`의 출처 정보이며, 자체 Web 패키지 버전과 구분한다.
 API OpenAPI 버전·연결 검증 MLflow 태그·MCP 버전은 설치된 Knowledge 패키지 메타데이터를 사용한다.
 
 다음 릴리스에서는 대상 `release/vX.Y.Z`에서 분기한 feature 브랜치에서 모든 자체 패키지를 맞춘다.
-예를 들어 다음 대상 버전이 `0.3.0`일 때 저장소 루트에서 실행한다.
+예를 들어 다음 대상 버전이 `1.0.0`일 때 저장소 루트에서 실행한다.
 
 ```bash
-uv version --project apps/knowledge --no-sync 0.3.0
-uv version --project tools/reporting --no-sync 0.3.0
-npm version 0.3.0 --prefix apps/web --no-git-tag-version --allow-same-version --ignore-scripts
+uv version --project apps/knowledge --no-sync 1.0.0
+uv version --project tools/reporting --no-sync 1.0.0
+npm version 1.0.0 --prefix apps/web --no-git-tag-version --allow-same-version --ignore-scripts
 uv sync --project apps/knowledge --locked
 uv sync --project tools/reporting --locked
-uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.3.0
+uv run --project apps/knowledge python .github/scripts/release.py check --release-version 1.0.0
 ```
 
 `uv version --no-sync`는 pyproject와 lock을 갱신하며, 이어지는 sync가 설치된 패키지 메타데이터도 갱신한다.
@@ -39,7 +39,7 @@ uv/npm 명령의 동시 갱신은 원본에 영향을 주지 않는 임시 복�
 현재 상태를 외부 API 호출이나 파일 수정 없이 검사하려면 다음을 사용한다.
 
 ```bash
-uv run --project apps/knowledge python .github/scripts/release.py check --release-version 0.2.0
+uv run --project apps/knowledge python .github/scripts/release.py check --release-version 1.0.0
 uv run --project apps/knowledge python -m unittest discover -s .github/tests -v
 uv lock --check --project apps/knowledge
 ```
@@ -49,12 +49,12 @@ uv lock --check --project apps/knowledge
 1. feature → release PR: 브랜치·버전·lock 자체 항목, CI·릴리스 계약 테스트, 공백 검사를 항상 실행한다.
    나머지는 merge-base부터 PR head까지 바뀐 경로에 따라 선택한다. 기본 검사는 Python 표준
    라이브러리만 사용하며 npm/uv 의존성을 설치하거나 DB를 기동하지 않는다.
-2. release → main PR: 제목은 `Release v0.2.0`. 변경 경로와 관계없이 Web·Knowledge·Reporting 전체 검사와
+2. release → main PR: 제목은 `Release v1.0.0`. 변경 경로와 관계없이 Web·Knowledge·Reporting 전체 검사와
    `linux/amd64` 이미지 빌드를 실행한다.
    이미지가 있어야 하는 릴리스 PR은 이미지 빌드가 생략되어도 `Ready to merge`를 통과하지 못한다.
 3. 사용자가 release PR을 **merge commit**으로 병합한다. feature PR의 squash merge와 구분한다.
 4. main push의 Release workflow가 정확히 해당 SHA의 병합 PR·부모 commit·패키지 버전·미사용 태그를 확인한다.
-5. GHCR에 `:v0.2.0`, `:sha-<전체 merge SHA>`, `:latest` 이미지를 게시한다.
+5. GHCR에 `:v1.0.0`, `:sha-<전체 merge SHA>`, `:latest` 이미지를 게시한다.
 6. 필요한 모든 이미지 게시가 성공한 뒤 같은 merge SHA에 태그·GitHub Release를 생성한다.
 
 | feature PR 변경 범위 | 추가 검사 |
@@ -93,7 +93,7 @@ Release workflow가 main에 반영되어 있다.
 ## 환경별 이미지 사용
 
 prod `compose.yaml`에는 build가 없고 `KNOWLEDGE_IMAGE`가 필수다.
-`.env.example`은 개발 목표인 `:v0.2.0`을 지정하며 실제 태그 발행 후에 pull한다. 버전 태그나 digest로
+`.env.example`은 개발 목표인 `:v1.0.0`을 지정하며 실제 태그 발행 후에 pull한다. 버전 태그나 digest로
 고정하고 변경되는 `latest`를 배포 기준으로 사용하지 않는다.
 
 dev `compose.dev.yaml`은 로컬 Knowledge build와 PostgreSQL을 추가한다.

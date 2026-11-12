@@ -330,10 +330,10 @@ def create_agreement(args):
     tracking = client(Settings())
     answers = tracking.get_run(args.answers_run_id)
     if (
-        answers.info.status != "FINISHED"
+        answers.info.status not in {"FINISHED", "FAILED"}
         or answers.data.tags.get("evaluation.kind") != "answers"
     ):
-        raise ValueError("완료된 answers Run이 필요합니다")
+        raise ValueError("종료된 answers Run이 필요합니다")
     runs = tracking.search_runs(
         [answers.info.experiment_id],
         filter_string=f"tags.`source_run_id` = '{args.answers_run_id}' and tags.`evaluation.kind` = 'grading'",
@@ -459,7 +459,7 @@ def manage_service(env_file, action):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--env-file", default=".env.dev")
+    p.add_argument("--env-file", default=None)
     p.add_argument("--catalog", default="models.json")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
@@ -502,6 +502,7 @@ def main():
         "dataset",
         "evaluate",
         "review",
+        "random-baseline",
         "repeatability",
         "comparison",
         "comparison-agreement",
@@ -516,6 +517,7 @@ def main():
         "dataset",
         "evaluate",
         "review",
+        "random-baseline",
         "repeatability",
         "comparison",
         "comparison-agreement",
@@ -527,7 +529,7 @@ def main():
             i
             for i, item in enumerate(raw)
             if item in passthrough
-            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog"})
+            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog", "report"})
         ),
         None,
     )
@@ -536,6 +538,10 @@ def main():
     else:
         args = p.parse_args(raw[: index + 1])
         args.arguments = raw[index + 1 :]
+    if args.env_file is None:
+        args.env_file = (
+            ".env" if args.command == "init-env" and args.kind == "prod" else ".env.dev"
+        )
     try:
         if args.command == "init-env":
             init_environment(args.env_file, args.kind)
@@ -591,6 +597,7 @@ def main():
                 "dataset": ["tools/evaluation/register.py"],
                 "evaluate": ["tools/evaluation/evaluate.py"],
                 "review": ["tools/evaluation/review.py"],
+                "random-baseline": ["tools/evaluation/random_baseline.py"],
                 "repeatability": ["tools/evaluation/repeatability.py"],
                 "comparison": ["tools/evaluation/compare_repeated.py"],
                 "comparison-agreement": ["tools/evaluation/compare.py"],

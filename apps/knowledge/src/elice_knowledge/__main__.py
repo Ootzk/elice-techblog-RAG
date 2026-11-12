@@ -179,6 +179,11 @@ def main():
             return
         if args.command == "init-db":
             stage = "database initialization"
+            if settings.app_env == "prod":
+                if not settings.admin_access_code:
+                    raise ServiceError("admin_access_code_required", 400)
+                if not settings.auth_session_secret:
+                    raise ServiceError("auth_session_secret_required", 400)
             initialize_database(settings)
             print(json.dumps({"status": "ok", "operation": "init-db"}))
             return

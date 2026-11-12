@@ -119,12 +119,20 @@ def dimension_payload(record, case, dimension):
     return data
 
 
-def inapplicable(record, case, dimension):
+def inapplicable(record, case, dimension, rubric=None):
     expected = record["expectations"]
     if dimension == "correctness":
         return not expected.get("answerable") or case["result"]["status"] != "answered"
     if dimension == "completeness":
         return not expected.get("answerable") or not expected.get("required_points")
+    if dimension == "groundedness":
+        result = case["result"]
+        if "generation_sources" not in result:
+            raise ValueError("generation_sources_missing: regenerate QA before judging grounding")
+        policy = (rubric or {}).get("applicability", {}).get("groundedness_without_evidence")
+        return policy == "not_applicable" and (
+            not result["generation_sources"] or result.get("status") == "insufficient_evidence"
+        )
     return False
 
 
@@ -132,8 +140,8 @@ def evaluation_workers():
     """Use MLflow's native pools rather than multiplying them with another pool."""
     limits = {}
     for variable, default, maximum in (
-        ("MLFLOW_GENAI_EVAL_MAX_WORKERS", 2, 32),
-        ("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", 4, 16),
+        ("MLFLOW_GENAI_EVAL_MAX_WORKERS", 32, 32),
+        ("MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS", 16, 16),
     ):
         value = int(os.environ.setdefault(variable, str(default)))
         if not 1 <= value <= maximum:
@@ -167,7 +175,7 @@ def evaluate_answers(
         dimensions += [{**specs[0], "name": d, "dimension": d} for d in DIAGNOSTICS]
     for spec in dimensions:
         for key, case in valid.items():
-            payload(expected[key], case, spec["dimension"])
+            payload(expected[key], case, spec["dimension"], rubric=rubric)
     collector = Collector(records, valid)
     scorers = [scorer(settings, spec, rubric=rubric, collector=collector) for spec in dimensions]
     data = [

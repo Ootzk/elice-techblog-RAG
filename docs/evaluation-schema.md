@@ -15,6 +15,10 @@
 grading 한 run은 **answers 하나를 한 평가 주체가 한 번 채점한 결과**다.
 같은 모델·사람이 같은 answers를 여러 번 채점해도 매번 별도 grading run을 만든다.
 answers를 다시 실행한 것은 답변 변동이고, 같은 answers를 다시 채점한 것은 채점 변동이다.
+무작위 기준선은 `baseline:uniform-random` 주체의 별도 grading run이다. 모델·사람과
+구분하며 MLflow에 직접 저장한다. 동일 rubric의 N/A 규칙을 적용하고 유효 항목의 등급을
+균등 추출한다. seed와 회차를 기록하고 pairwise κ 비교에는 포함하되 다중 평가자 패널,
+repeatability와 comparison에서는 제외한다.
 
 ```mermaid
 flowchart TD
@@ -137,7 +141,9 @@ relevance·behavior에는 N/A를 허용하지 않는다. 허용 자료는 항목
 
 - 정확성: 질문·답변·기대 답안·금지 주장.
 - 완전성: 질문·답변·필수 요점. 선택 사항의 누락은 감점 기준이 아니다.
-- 근거 충실도: 답변과 실제 `generation_sources`. Gold 답안·검색 후보·외부 지식으로 보충하지 않는다.
+- 근거 충실도: 답변과 실제 `generation_sources`. 최종 문맥이 비어 있거나 답변을 유보하면 자동으로 N/A 처리한다.
+  Gold 답안·검색 후보·외부 지식으로 보충하지 않는다. N/A는 사실 주장의 정확성을 보증하지 않는다.
+  이 적용 규칙은 rubric snapshot에 보관하며 이전 평가 결과에는 소급 적용하지 않는다.
 - 질문 적합성: 질문·고정 이력·답변. 기대 답안 없이 요청 대응을 본다.
 - 행동 준수: 질문·이력·실제 답변·agent 단계와 기대 행동·필수 요점·실패 조건.
 
@@ -195,7 +201,9 @@ manifest는 schema·contract·source_run_id·source_bundle_digest·grading_id·�
 ## 실행과 사람 검수
 
 한 모델 run에 그 모델의 모든 문항·항목을 넣는다. MLflow SDK가 질문·항목을 병렬 실행하고 결과를
-모아 grading을 게시한다. 기본 상한은 프로세스당 질문 2개 × 항목 4개이며 모델·회차는 순차 실행한다.
+모아 grading을 게시한다. 모델과 회차별 grading은 최대 32개까지 병렬 실행한다.
+각 grading의 기본 상한은 질문 32개 × 질문당 평가 항목 16개이며, 환경변수로 조절할 수 있다.
+실제 병렬 요청 수는 실행 중인 grading·질문·평가 항목 수에 따라 달라진다.
 모든 4항목이 별도의 고정 graph span인 것은 아니다. Judge 내부 모델 호출은 tracing 대상이다.
 
 Human Review는 현재 로그인한 코드로 채점하며 타인·모델의 점수와 사유를 UI/API에서 제외한다.

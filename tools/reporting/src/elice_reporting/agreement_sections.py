@@ -288,7 +288,13 @@ def item_browser(data, subjects, case_ids):
                 content_card("✦ 답변", result.get("answer"), markdown=True, accent="#7c3aed"),
                 *([text_block("생성 오류", case["error"])] if case.get("error") else []),
                 *(
-                    [grounding_scope(result, records[record_id].get("expectations", {}))]
+                    [
+                        grounding_scope(
+                            result,
+                            records[record_id].get("expectations", {}),
+                            data.report["rubric"],
+                        )
+                    ]
                     if bundle["kind"] == "gold"
                     else []
                 ),
@@ -319,7 +325,7 @@ def item_browser(data, subjects, case_ids):
     )
 
 
-def grounding_scope(result, expectations=None):
+def grounding_scope(result, expectations=None, rubric=None):
     """Describe the recorded context, without assigning or overriding any grade."""
     sources = result.get("generation_sources")
     unanswerable = (expectations or {}).get("answerable") is False
@@ -342,6 +348,14 @@ def grounding_scope(result, expectations=None):
                 if sources
                 else "\n\n답변 작성에 제공된 자료가 없습니다. "
             )
+            if (not sources or abstained) and (rubric or {}).get("applicability", {}).get(
+                "groundedness_without_evidence"
+            ) == "not_applicable":
+                text += (
+                    "답변을 유보했거나 전달된 자료가 없어 **근거 충실도는 N/A**입니다. "
+                    "답변의 정확성과 질문 적합성은 각각의 기준으로 확인합니다."
+                )
+                return pn.pane.Markdown(text, sizing_mode="stretch_width")
             text += (
                 "답변 근거가 부족하다는 사실만으로 N/A나 0점을 결정하지 않습니다. "
                 "답변이 실제로 무엇을 주장했는지 확인합니다.\n\n"
