@@ -16,17 +16,22 @@ def test_native_dataset_contract_frozen_digest_and_strict_inputs(monkeypatch):
             "dataset_id": "dataset",
             "inputs": {"question": "질문", "history": []},
             "expectations": {"answerable": False},
+            "tags": {"source_id": "gold-001"},
             "created_time": 1,
             "last_update_time": 1,
         }
     )
-    dataset = SimpleNamespace(name="test-dataset", records=[record])
+    dataset = SimpleNamespace(
+        name="test-dataset", records=[record], tags={"source_order": '["gold-001"]'}
+    )
     client = SimpleNamespace(get_dataset=lambda dataset_id: dataset)
     monkeypatch.setattr("elice_knowledge.evaluation.tracking_client", lambda *a: client)
     monkeypatch.setattr("mlflow.set_tracking_uri", lambda *a: None)
     settings = Settings(mlflow_tracking_uri="http://tracking.example")
     first = dataset_snapshot(settings, "dataset")
     assert first["records"][0]["id"] == "record-1"
+    assert first["records"][0]["source_id"] == "gold-001"
+    assert first["records"][0]["source_order"] == 0
     assert dataset_snapshot(settings, "dataset")["digest"] == first["digest"]
     record.expectations["answerable"] = True
     with pytest.raises(ServiceError, match="dataset_requires_evidence_quotes"):
@@ -39,6 +44,7 @@ def test_iron_contract_and_mixed_rubrics_are_rejected(monkeypatch):
     records = [
         SimpleNamespace(
             dataset_record_id="iron",
+            tags={},
             inputs={"question": "Q"},
             expectations={
                 "expected_behavior": "deny_sensitive_information",
@@ -48,7 +54,7 @@ def test_iron_contract_and_mixed_rubrics_are_rejected(monkeypatch):
             },
         )
     ]
-    dataset = SimpleNamespace(name="iron", records=records)
+    dataset = SimpleNamespace(name="iron", records=records, tags={})
     monkeypatch.setattr(
         "elice_knowledge.evaluation.tracking_client",
         lambda *a: SimpleNamespace(get_dataset=lambda _: dataset),
@@ -58,7 +64,10 @@ def test_iron_contract_and_mixed_rubrics_are_rejected(monkeypatch):
     assert dataset_snapshot(settings, "dataset")["kind"] == "iron"
     records.append(
         SimpleNamespace(
-            dataset_record_id="gold", inputs={"question": "Q"}, expectations={"answerable": False}
+            dataset_record_id="gold",
+            inputs={"question": "Q"},
+            expectations={"answerable": False},
+            tags={},
         )
     )
     with pytest.raises(ServiceError, match="mixed_dataset_rubrics"):

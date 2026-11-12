@@ -66,9 +66,11 @@ def snapshot(tracking, run_id, directory):
             "profile_digest": grading_tags["rater_profile_digest"],
             "round": grading_tags["round"],
         }
-        (excluded_grading_runs if entry["rater"].startswith("baseline:") else grading_runs).append(
-            entry
-        )
+        (
+            excluded_grading_runs
+            if entry["rater"].startswith("baseline:")
+            else grading_runs
+        ).append(entry)
     return {
         "agreement_run_id": run_id,
         "bundle": bundle,

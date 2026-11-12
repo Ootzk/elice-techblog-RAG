@@ -195,7 +195,9 @@ def main():
                         ).load_rubric(kind)["id"],
                         "source_path": f"tools/evaluation/{kind}_set/{kind}.jsonl",
                         "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                        "source_order": canonical([r["tags"]["source_id"] for r in records]),
+                        "source_order": canonical(
+                            [r["tags"]["source_id"] for r in records]
+                        ),
                     },
                 }
             )
