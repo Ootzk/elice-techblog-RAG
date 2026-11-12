@@ -529,7 +529,7 @@ def main():
             i
             for i, item in enumerate(raw)
             if item in passthrough
-            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog"})
+            and (i == 0 or raw[i - 1] not in {"--env-file", "--catalog", "report"})
         ),
         None,
     )

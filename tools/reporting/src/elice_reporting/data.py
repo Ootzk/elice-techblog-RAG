@@ -115,10 +115,18 @@ def _validate(kind, report, inputs, source, run_id=None):
             ):
                 raise ValueError("Repeatability input binding mismatch")
             grading_runs = snapshot.get("grading_runs")
-            if grading_runs is not None and [g["run_id"] for g in grading_runs] != agreement.get(
-                "grading_run_ids", []
-            ):
-                raise ValueError("Repeatability grading run metadata mismatch")
+            if grading_runs is not None:
+                excluded = snapshot.get("excluded_grading_runs", [])
+                ids = [g["run_id"] for g in grading_runs + excluded]
+                expected_ids = agreement.get("grading_run_ids", [])
+                if (
+                    len(ids) != len(expected_ids)
+                    or len(set(ids)) != len(ids)
+                    or set(ids) != set(expected_ids)
+                    or any(not g["rater"].startswith("baseline:") for g in excluded)
+                    or any(g["rater"].startswith("baseline:") for g in grading_runs)
+                ):
+                    raise ValueError("Repeatability grading run metadata mismatch")
     elif kind == "comparison":
         contract = report.get("comparison_contract")
         if contract not in {"comparison-v1", "comparison-v2"}:
