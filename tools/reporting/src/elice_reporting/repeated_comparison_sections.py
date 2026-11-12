@@ -23,7 +23,7 @@ from .agreement_sections import (
 from .agreement_visuals import agreement_subjects
 from .comparison_sections import _ab_table, _rows, _selector, _settings
 from .conditions import condition_sections
-from .presentation import metric_label, model_name
+from .presentation import metric_label
 from .stacked_efficiency import paired_answer_groups, stack_chart
 
 BOUNDARIES = {
@@ -94,9 +94,8 @@ def conditions(data, subjects):
     ap, bp = (_profiles(data)[side] for side in ("baseline", "candidate"))
     left, right = (data.inputs[side] for side in ("baseline", "candidate"))
     answers_a, answers_b = report["baseline"]["answers_runs"], report["candidate"]["answers_runs"]
-    model_a, model_b = model_name(ap["generation_model"]), model_name(bp["generation_model"])
-    changed = ap["generation_model"] != bp["generation_model"]
-    summary = _ab_table([("답변 모델", model_a, model_b, changed)])
+    settings_rows = _rows(_settings(ap), _settings(bp))
+    changed_rows = [row for row in settings_rows if row[3]]
     dataset_a = left["inputs"]["agreements"][0]["bundle"]
     dataset_b = right["inputs"]["agreements"][0]["bundle"]
     categories = [
@@ -136,7 +135,7 @@ def conditions(data, subjects):
                 ]
             ),
         ),
-        ("답변·검색 설정", _ab_table(_rows(_settings(ap), _settings(bp)))),
+        ("답변·검색 설정", _ab_table(settings_rows)),
     ]
     for (title_a, rows_a), (title_b, rows_b) in zip(
         condition_sections(ap.get("experiment_conditions")),
@@ -145,7 +144,9 @@ def conditions(data, subjects):
     ):
         if title_a != title_b:
             raise ValueError("A/B experiment condition categories differ")
-        categories.append((title_a, _ab_table(_rows(dict(rows_a), dict(rows_b)))))
+        rows = _rows(dict(rows_a), dict(rows_b))
+        changed_rows.extend(row for row in rows if row[3])
+        categories.append((title_a, _ab_table(rows)))
     raters = [r for r in subjects if r != "aggregate:models"]
     rater_rows = []
     for rater in raters:
@@ -162,7 +163,9 @@ def conditions(data, subjects):
     categories.append(("평가 주체", _ab_table(rater_rows)))
     return pn.Column(
         pn.pane.Markdown("### A/B에서 달라진 조건"),
-        summary,
+        _ab_table(changed_rows)
+        if changed_rows
+        else pn.pane.Markdown("표시할 수 있는 변경 조건이 없습니다."),
         pn.pane.Markdown("### 전체 평가 조건"),
         condition_selector(categories),
         sizing_mode="stretch_width",
