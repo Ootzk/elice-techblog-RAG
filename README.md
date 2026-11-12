@@ -40,6 +40,17 @@ Docker와 Docker Compose, Python 3.12, [uv](https://docs.astral.sh/uv/)가 필�
 
 전체 예시는 [.env.dev.example](.env.dev.example)을 참고하세요. dev는 `compose.dev.yaml`을 사용하고, prod 설정은 `.env`와 `compose.yaml`을 사용합니다. 엘리스클라우드 배포 및 외부 접속은 아직 검증하지 않았습니다.
 
+배포 환경에서는 아래 명령으로 `.env`를 생성합니다. 배포용 `KNOWLEDGE_IMAGE`, 외부 PostgreSQL의 `DATABASE_URL`, MLflow 주소와 모델 연결을 실제 환경에 맞게 설정한 후 초기화합니다. PostgreSQL은 pgvector를 사용할 수 있어야 합니다.
+
+```bash
+./tools/operations/rag init-env --kind prod
+./tools/operations/rag --env-file .env setup
+./tools/operations/rag --env-file .env serve init-db
+./tools/operations/rag --env-file .env serve start
+```
+
+운영 초기화는 `.env`의 `ADMIN_ACCESS_CODE`와 `AUTH_SESSION_SECRET`을 사용합니다. `init-db`는 관리자 코드의 해시를 DB에 등록하며 재실행해도 같은 관리자를 중복 생성하지 않습니다. 두 값이 없으면 초기화를 중단합니다. 코드를 변경해도 기존 관리자는 자동 폐기되지 않습니다. 운영 이미지와 외부 의존성은 별도로 준비해야 합니다.
+
 ### Ingest와 색인
 
 ```bash

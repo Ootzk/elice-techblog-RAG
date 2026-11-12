@@ -207,3 +207,39 @@ def test_run_listing_filters_on_kind_and_hides_unrelated_metadata(monkeypatch, c
     assert output[0]["run_id"] == "a" * 32
     assert "private" not in output[0]
     assert "'answers'" in calls[0][1]["filter_string"]
+
+
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [
+        (["init-env"], (".env.dev", "dev")),
+        (["init-env", "--kind", "prod"], (".env", "prod")),
+        (
+            ["--env-file", ".env.custom", "init-env", "--kind", "prod"],
+            (".env.custom", "prod"),
+        ),
+    ],
+)
+def test_init_env_uses_environment_specific_default(monkeypatch, arguments, expected):
+    captured = []
+    monkeypatch.setattr(rag.sys, "argv", ["rag", *arguments])
+    monkeypatch.setattr(
+        rag, "init_environment", lambda path, kind: captured.append((path, kind))
+    )
+    assert rag.main() == 0
+    assert captured == [expected]
+
+
+def test_production_service_initialization_uses_base_compose(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rag, "environment", lambda _: {"APP_ENV": "prod"})
+    monkeypatch.setattr(
+        rag, "models_module", lambda: SimpleNamespace(safe_path=lambda p: Path(p))
+    )
+    monkeypatch.setattr(
+        rag.subprocess, "run", lambda args, **kwargs: calls.append(args)
+    )
+    rag.manage_service(".env", "init-db")
+    assert len(calls) == 1
+    assert "compose.dev.yaml" not in calls[0]
+    assert calls[0][-3:] == ["-m", "elice_knowledge", "init-db"]

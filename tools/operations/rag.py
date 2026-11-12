@@ -459,7 +459,7 @@ def manage_service(env_file, action):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--env-file", default=".env.dev")
+    p.add_argument("--env-file", default=None)
     p.add_argument("--catalog", default="models.json")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor")
@@ -538,6 +538,10 @@ def main():
     else:
         args = p.parse_args(raw[: index + 1])
         args.arguments = raw[index + 1 :]
+    if args.env_file is None:
+        args.env_file = (
+            ".env" if args.command == "init-env" and args.kind == "prod" else ".env.dev"
+        )
     try:
         if args.command == "init-env":
             init_environment(args.env_file, args.kind)
